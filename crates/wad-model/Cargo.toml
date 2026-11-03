@@ -1,0 +1,13 @@
+[package]
+name = "wad-model"
+description = "The WadSpaces v2 model: wadspaces, the catalog, and the pure logic that edits them"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+indexmap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

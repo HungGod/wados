@@ -1,0 +1,13 @@
+[package]
+name = "wad-gtk"
+description = "WadSpaces' look in GTK4 (dark only): the spike's tokens as CSS custom properties, its fonts, lucide icons, springs, keyed lists"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+gtk.workspace = true
+pango = { version = "0.22", features = ["v1_56"] }
+resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
+tracing.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "wadsctl"
+description = "Tells the shell what to do: what labwc's keybinds run, and what tests drive it with"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]

@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<!--
+  The machine's labwc (/etc/xdg/labwc/rc.xml). There are no <default/>
+  keybinds: every shortcut belongs to the shell, which labwc tells with
+  wadsctl (apps/wadsctl). Shortcuts are Ctrl+Alt, except Super+Tab (the
+  running wadspaces) and Alt+Space (search), as the spike has them.
+
+  Keyboard and mouse settings are the user's ~/.config/labwc/rc.xml, which
+  Settings writes (labwc merges it over this one).
+-->
+<labwc_config>
+
+  <core>
+    <decoration>server</decoration>
+    <gap>0</gap>
+  </core>
+
+  <keyboard>
+    <repeatRate>25</repeatRate>
+    <repeatDelay>600</repeatDelay>
+
+    <!-- Super+Tab and Super+Shift+Tab: the running wadspaces (the shell's switcher). -->
+    <keybind key="W-Tab"><action name="Execute" command="wadsctl switcher next"/></keybind>
+    <keybind key="W-S-Tab"><action name="Execute" command="wadsctl switcher prev"/></keybind>
+    <!-- Alt+Space: search every app's variants. -->
+    <keybind key="A-space"><action name="Execute" command="wadsctl search"/></keybind>
+    <!-- Ctrl+Alt+Down: off a full-screen wadspace, to the desktop. -->
+    <keybind key="C-A-Down"><action name="Execute" command="wadsctl page desktop"/></keybind>
+    <!-- Ctrl+Alt+L: lock the screen. -->
+    <keybind key="C-A-l"><action name="Execute" command="wadsctl lock"/></keybind>
+
+    <!-- What the shell itself types (zwp_virtual_keyboard) to move a window
+         between displays: no foreign-toplevel request does that. -->
+    <keybind key="W-C-A-S-F13"><action name="MoveToOutput" direction="right" wrap="yes"/></keybind>
+    <keybind key="W-C-A-S-F14"><action name="MoveToOutput" direction="left" wrap="yes"/></keybind>
+  </keyboard>
+
+</labwc_config>

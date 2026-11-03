@@ -1,0 +1,109 @@
+From: WadOS <wados@wadspaces.com>
+Subject: [PATCH] foreign-toplevel: report a sandboxed client's security-context app_id
+
+A sandboxed client (wp_security_context_v1) can set any app_id and title,
+so a panel listing windows through foreign-toplevel can't tell which
+sandbox a window belongs to, and one sandbox can pose as another. Report
+the security context's app_id for such clients instead (set by the sandbox
+engine, which the client can't change), falling back to the client's own
+when the context has none.
+
+WadOS uses this to know which wadspace (container) a window is: wadd sets
+the context's app_id to io.wadspaces.<id>. A Flatpak app's windows would
+report its Flatpak id the same way.
+---
+ include/view.h                     |  6 ++++++
+ src/foreign-toplevel/ext-foreign.c |  6 +++---
+ src/foreign-toplevel/wlr-foreign.c |  2 +-
+ src/view.c                         | 17 +++++++++++++++++
+ 4 files changed, 27 insertions(+), 4 deletions(-)
+
+diff --git a/include/view.h b/include/view.h
+index 7c4a24d..2060af4 100644
+--- a/include/view.h
++++ b/include/view.h
+@@ -327,6 +327,12 @@ struct xdg_toplevel_view {
+  */
+ struct view *view_from_wlr_surface(struct wlr_surface *surface);
+ 
++/**
++ * view_get_foreign_app_id() - the app_id foreign-toplevel reports: a
++ * sandboxed client's security-context app_id, else the view's own
++ */
++const char *view_get_foreign_app_id(struct view *view);
++
+ /**
+  * view_query_create() - Create a new heap allocated view query with
+  * all members initialized to their default values (window_type = -1,
+diff --git a/src/foreign-toplevel/ext-foreign.c b/src/foreign-toplevel/ext-foreign.c
+index 748050f..92a1bea 100644
+--- a/src/foreign-toplevel/ext-foreign.c
++++ b/src/foreign-toplevel/ext-foreign.c
+@@ -33,7 +33,7 @@ handle_new_app_id(struct wl_listener *listener, void *data)
+ 
+ 	struct wlr_ext_foreign_toplevel_handle_v1_state state = {
+ 		.title = ext_toplevel->view->title,
+-		.app_id = ext_toplevel->view->app_id,
++		.app_id = view_get_foreign_app_id(ext_toplevel->view),
+ 	};
+ 	wlr_ext_foreign_toplevel_handle_v1_update_state(ext_toplevel->handle,
+ 		&state);
+@@ -48,7 +48,7 @@ handle_new_title(struct wl_listener *listener, void *data)
+ 
+ 	struct wlr_ext_foreign_toplevel_handle_v1_state state = {
+ 		.title = ext_toplevel->view->title,
+-		.app_id = ext_toplevel->view->app_id,
++		.app_id = view_get_foreign_app_id(ext_toplevel->view),
+ 	};
+ 	wlr_ext_foreign_toplevel_handle_v1_update_state(ext_toplevel->handle,
+ 		&state);
+@@ -64,7 +64,7 @@ ext_foreign_toplevel_init(struct ext_foreign_toplevel *ext_toplevel,
+ 
+ 	struct wlr_ext_foreign_toplevel_handle_v1_state state = {
+ 		.title = view->title,
+-		.app_id = view->app_id,
++		.app_id = view_get_foreign_app_id(view),
+ 	};
+ 	ext_toplevel->handle = wlr_ext_foreign_toplevel_handle_v1_create(
+ 		view->server->foreign_toplevel_list, &state);
+diff --git a/src/foreign-toplevel/wlr-foreign.c b/src/foreign-toplevel/wlr-foreign.c
+index 70ce089..329b0e3 100644
+--- a/src/foreign-toplevel/wlr-foreign.c
++++ b/src/foreign-toplevel/wlr-foreign.c
+@@ -94,7 +94,7 @@ handle_new_app_id(struct wl_listener *listener, void *data)
+ 	assert(wlr_toplevel->handle);
+ 
+ 	wlr_foreign_toplevel_handle_v1_set_app_id(wlr_toplevel->handle,
+-		wlr_toplevel->view->app_id);
++		view_get_foreign_app_id(wlr_toplevel->view));
+ }
+ 
+ static void
+diff --git a/src/view.c b/src/view.c
+index ab9c67d..61880f8 100644
+--- a/src/view.c
++++ b/src/view.c
+@@ -74,6 +74,23 @@ security_context_from_view(struct view *view)
+ 	return NULL;
+ }
+ 
++/*
++ * The app_id other clients see through foreign-toplevel. A sandboxed
++ * client's is its security context's app_id when it has one: the sandbox
++ * engine set it, and the client can't change it, so a panel can tell which
++ * sandbox a window belongs to and a sandboxed client can't pose as another.
++ */
++const char *
++view_get_foreign_app_id(struct view *view)
++{
++	const struct wlr_security_context_v1_state *ctx =
++		security_context_from_view(view);
++	if (ctx && ctx->app_id && *ctx->app_id) {
++		return ctx->app_id;
++	}
++	return view->app_id;
++}
++
+ struct view_query *
+ view_query_create(void)
+ {

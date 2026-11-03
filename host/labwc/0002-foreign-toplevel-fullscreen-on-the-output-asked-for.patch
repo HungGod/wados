@@ -1,0 +1,32 @@
+From: WadOS <wados@wadspaces.com>
+Subject: [PATCH] foreign-toplevel: full screen on the output asked for
+
+zwlr_foreign_toplevel_handle_v1.set_fullscreen takes an output, which
+labwc ignored (a TODO): the view went full screen wherever it was. Move it
+to that output first, when it's usable.
+
+WadOS's shell uses it to put a wadspace full screen on a display of the
+user's choosing ("Open on 2", "To 2").
+---
+ src/foreign-toplevel/wlr-foreign.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/foreign-toplevel/wlr-foreign.c b/src/foreign-toplevel/wlr-foreign.c
+index 329b0e3..db49c2e 100644
+--- a/src/foreign-toplevel/wlr-foreign.c
++++ b/src/foreign-toplevel/wlr-foreign.c
+@@ -36,7 +36,13 @@ handle_request_fullscreen(struct wl_listener *listener, void *data)
+ 		wl_container_of(listener, wlr_toplevel, on.request_fullscreen);
+ 	struct wlr_foreign_toplevel_handle_v1_fullscreen_event *event = data;
+ 
+-	/* TODO: This ignores event->output */
++	/* Full screen on the output asked for, when it's one we can use */
++	if (event->fullscreen && event->output && event->output->data) {
++		struct output *output = event->output->data;
++		if (output_is_usable(output)) {
++			view_move_to_output(wlr_toplevel->view, output);
++		}
++	}
+ 	view_set_fullscreen(wlr_toplevel->view, event->fullscreen);
+ }
+ 

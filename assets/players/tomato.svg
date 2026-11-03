@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Tomato">
+  <title>Tomato (player 1)</title>
+  <path d="M32 18 C20 15.5 8 22 8 36 C8 49 18.5 58 32 58 C45.5 58 56 49 56 36 C56 22 44 15.5 32 18 Z" fill="#e3342f"/>
+  <path d="M8.5 39 C10 50 19.5 58 32 58 C44.5 58 54 50 55.5 39 C51 49 42.5 54 32 54 C21.5 54 13 49 8.5 39 Z" fill="#b8231f" opacity="0.65"/>
+  <g fill="none" stroke="#c32a25" stroke-width="1.6" stroke-linecap="round" opacity="0.55">
+    <path d="M24 20 C20 26 19 34 21 42"/>
+    <path d="M40 20 C44 26 45 34 43 42"/>
+  </g>
+  <ellipse cx="19.5" cy="31" rx="4.2" ry="6.5" transform="rotate(-25 19.5 31)" fill="#ff9a8f" opacity="0.6"/>
+  <ellipse cx="18" cy="28.5" rx="1.6" ry="2.6" transform="rotate(-25 18 28.5)" fill="#fff" opacity="0.55"/>
+  <g fill="#3fae5a"><path d="M32.4 16.8 Q35.8 13.8 39.1 13.7 Q37.1 17.4 35.2 18.1 Z"/><path d="M35.4 18.6 Q39.4 18.3 43.4 21.0 Q38.9 22.3 34.4 20.6 Z"/><path d="M33.7 20.9 Q32.8 21.7 32.0 25.5 Q31.2 24.7 30.3 20.9 Z"/><path d="M29.6 20.6 Q25.1 19.3 20.6 21.0 Q24.6 21.3 28.6 18.6 Z"/><path d="M28.8 18.1 Q26.9 14.4 24.9 13.7 Q28.2 16.8 31.6 16.8 Z"/></g>
+  <circle cx="32" cy="19" r="3.2" fill="#2f8f47"/>
+  <path d="M31 19 C30.6 14.5 32 11 35 9 C36.2 9.5 36.4 10.6 35.6 11.4 C33.8 13 33.2 15.5 33.4 19 Z" fill="#2f8f47"/>
+</svg>

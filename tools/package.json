@@ -1,0 +1,8 @@
+{
+  "name": "wados-tools",
+  "private": true,
+  "description": "Pinned inputs for tools/*.mjs: lucide's SVGs (the same release as the v2 spike's @lucide/svelte).",
+  "devDependencies": {
+    "lucide-static": "1.56.0"
+  }
+}

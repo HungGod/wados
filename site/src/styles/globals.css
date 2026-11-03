@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+/* Brand tokens: the logo's neon palette on near-black violet (dark only). */
+:root {
+  /* Near-black violet base, acid green primary, maroon secondary. */
+  --bg: #0a0614;
+  --bg-2: #0e0919;
+  --surface: #140d22;
+  --surface-2: #1b132d;
+  --surface-3: #241a39;
+  --line: rgb(240 234 250 / 0.09);
+  --line-strong: rgb(240 234 250 / 0.18);
+  --fg: #f5f2fa;
+  --muted: rgb(245 242 250 / 0.62);
+  --faint: rgb(245 242 250 / 0.4);
+  --accent: #c6ff1f;
+  --accent-fg: #0a0614;
+  --accent-soft: rgb(198 255 31 / 0.2);
+  --accent-2: #ff3d81;
+  --accent-2-fg: #0a0614;
+  --accent-2-soft: rgb(255 61 129 / 0.24);
+  --danger: #ff5d7a;
+  --glow: 0 0 0 1px rgb(198 255 31 / 0.35), 0 12px 40px -8px rgb(198 255 31 / 0.25);
+  --shadow: 0 20px 60px -20px rgb(3 2 8 / 0.85);
+  color-scheme: dark;
+}
+
+/* The Builder's layers: templates ice, Extensions acid, Customization pink. */
+:root {
+  --layer-template: #7fd3ff;
+  --layer-extensions: #c6ff1f;
+  --layer-customization: #ff3d81;
+}
+
+/* Bundled with the page (@fontsource, imported in main.tsx). */
+:root {
+  --font-inter: "Inter Variable";
+  --font-grotesk: "Space Grotesk";
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-bg-2: var(--bg-2);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-2: var(--accent-2);
+  --color-accent-2-fg: var(--accent-2-fg);
+  --color-accent-2-soft: var(--accent-2-soft);
+  --color-danger: var(--danger);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-grotesk), var(--font-inter), ui-sans-serif, sans-serif;
+  --shadow-glow: var(--glow);
+  --shadow-deep: var(--shadow);
+}
+
+html,
+body {
+  height: 100%;
+  /* The page never pans sideways or rubber-bands on a phone; it scrolls
+     down. clip, not hidden: no scroll container. */
+  overflow-x: clip;
+  overscroll-behavior: none;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent);
+  color: var(--accent-fg);
+}
+
+/* Slim scrollbars everywhere */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+/* The page's backdrop */
+.ws-backdrop {
+  background:
+    radial-gradient(60rem 40rem at 110% -10%, rgb(255 61 129 / 0.12), transparent 60%),
+    radial-gradient(50rem 30rem at -10% 110%, rgb(198 255 31 / 0.06), transparent 60%),
+    radial-gradient(70rem 50rem at 50% 50%, rgb(70 36 110 / 0.12), transparent 70%),
+    var(--bg);
+}
+
+.ws-glass {
+  background: color-mix(in oklab, var(--surface) 78%, transparent);
+  backdrop-filter: blur(18px) saturate(140%);
+}

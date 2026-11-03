@@ -1,0 +1,20 @@
+# Rust
+/target/
+# Builds: staging, disk images, screenshots
+/.build/
+/output/
+# Secrets never live in this repo: host/build.sh reads them from
+# ${WADOS_SECRETS:-~/.config/wados/secrets}. These are here in case one is
+# dropped in by mistake.
+/secrets/
+/host/secrets/
+*.secret.toml
+# The site
+/site/node_modules/
+/site/dist/
+# Python
+__pycache__/
+*.pyc
+# Logs and editor leftovers
+*.log
+.DS_Store

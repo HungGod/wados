@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/*"]
+# C, built by images/builder (not a Cargo package).
+exclude = ["apps/selkies-desktop"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+[workspace.dependencies]
+wad-model = { path = "crates/wad-model" }
+wad-wayland = { path = "crates/wad-wayland" }
+wad-gtk = { path = "crates/wad-gtk" }
+
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+thiserror = "2"
+indexmap = { version = "2", features = ["serde"] }
+toml = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync", "net", "signal", "io-util", "fs"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+tempfile = "3"
+async-channel = "2"
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_20"] }
+gtk4-layer-shell = { version = "0.8", features = ["v1_3"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = "debuginfo"
+
+# Dev builds and tests: line numbers for backtraces, no other debug info
+# (dependencies get none), so test binaries stay small enough to link several
+# at once on a laptop. For a debugger, CARGO_PROFILE_DEV_DEBUG=true.
+[profile.dev]
+debug = "line-tables-only"
+[profile.dev.package."*"]
+debug = false
+
+# The binaries that go into the wadspace base image (WadBrowser, the
+# clipboard bridge, wadspaces-session): fast to start, small.
+[profile.image]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"

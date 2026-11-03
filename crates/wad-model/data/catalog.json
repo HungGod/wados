@@ -1,0 +1,519 @@
+{
+  "apps": [
+    {
+      "id": "wadbrowser",
+      "name": "WadBrowser",
+      "summary": "The browser in every wadspace, and every web app's window",
+      "description": "Tabs and an address bar, or Focus: tabs with no address bar, so pages only arrive by links. Each web app you add opens in its own WadBrowser window with its own name and icon, and web apps can share one sign-in (a cookie profile) or keep their own.",
+      "category": "Internet",
+      "icon": "/brand/wadbrowser-icon-dark.svg",
+      "screenshots": [
+        {
+          "src": "/apps/wadbrowser/home-dark.png",
+          "caption": "Home page, dark theme"
+        },
+        {
+          "src": "/apps/wadbrowser/home-light.png",
+          "caption": "Home page, light theme"
+        },
+        {
+          "src": "/apps/wadbrowser/focus-dark.png",
+          "caption": "Focus: tabs, no address bar"
+        }
+      ],
+      "install": {
+        "kind": "builtin",
+        "desktop": [
+          "wadbrowser.desktop"
+        ],
+        "source": "Comes with the base image"
+      },
+      "example": null,
+      "license": "Part of WadSpaces",
+      "homepage": null,
+      "options": "wadbrowser",
+      "opensFolders": false,
+      "secret": null
+    },
+    {
+      "id": "vscode",
+      "name": "VS Code",
+      "summary": "Code editor with extensions",
+      "description": "Microsoft's code editor. Its Extensions pick its extensions, which are installed into the image so they're there on first start. A key keeps its settings and accounts, and AI extensions like Claude Code and Codex keep keys of their own.",
+      "category": "Development",
+      "icon": "/apps/vscode/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/vscode/shot-1.png",
+          "caption": "Editing TypeScript"
+        }
+      ],
+      "install": {
+        "kind": "feature",
+        "feature": "vscode",
+        "desktop": [
+          "wadspaces-vscode.desktop"
+        ],
+        "source": "Microsoft's .deb"
+      },
+      "example": "https://github.com/linuxserver/docker-vscode",
+      "license": "Proprietary (https://code.visualstudio.com/license)",
+      "homepage": "https://code.visualstudio.com",
+      "options": "vscode",
+      "opensFolders": true,
+      "secret": {
+        "kind": "vscode",
+        "id": "VSCode"
+      }
+    },
+    {
+      "id": "obsidian",
+      "name": "Obsidian",
+      "summary": "Markdown notes and long-form writing",
+      "description": "A writing app for folders of Markdown files. Mount a project folder and open it as a vault. Obsidian Sync's login can be kept as a secret and shared with other writing wadspaces.",
+      "category": "Office",
+      "icon": "/apps/obsidian/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/obsidian/shot-1.png",
+          "caption": "Screenshot of Obsidian's main interface"
+        },
+        {
+          "src": "/apps/obsidian/shot-2.png",
+          "caption": "Examples of Obsidian's basic text formatting capabilities"
+        },
+        {
+          "src": "/apps/obsidian/shot-3.png",
+          "caption": "Screenshot of Obsidian's graph view"
+        }
+      ],
+      "install": {
+        "kind": "feature",
+        "feature": "obsidian",
+        "desktop": [
+          "md.obsidian.Obsidian.desktop"
+        ],
+        "source": "AppImage from GitHub releases"
+      },
+      "example": "https://github.com/linuxserver/docker-obsidian",
+      "license": "Proprietary (https://obsidian.md/eula)",
+      "homepage": "https://obsidian.md/",
+      "options": null,
+      "opensFolders": false,
+      "secret": {
+        "kind": "obsidian",
+        "id": "Obsidian"
+      }
+    },
+    {
+      "id": "tiled",
+      "name": "Tiled",
+      "summary": "Map editor for 2D games",
+      "description": "Lay out levels from tile sets: layers, objects and properties, saved in formats game engines read (Godot, Unity, LÖVE and more).",
+      "category": "Development",
+      "icon": "/apps/tiled/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/tiled/shot-1.png",
+          "caption": "Annotate your map with objects"
+        },
+        {
+          "src": "/apps/tiled/shot-2.png",
+          "caption": "Automate placement of terrain transitions"
+        }
+      ],
+      "install": {
+        "kind": "feature",
+        "feature": "tiled",
+        "desktop": [
+          "wadspaces-tiled.desktop"
+        ],
+        "source": "AppImage from GitHub releases"
+      },
+      "example": null,
+      "license": "GPL-2.0+ and BSD-2-Clause",
+      "homepage": "https://www.mapeditor.org/",
+      "options": null,
+      "opensFolders": false,
+      "secret": null
+    },
+    {
+      "id": "libresprite",
+      "name": "LibreSprite",
+      "summary": "Pixel art and sprite animation",
+      "description": "Draw pixel art frame by frame: layers, onion skinning, palettes and sprite-sheet export. The free fork of Aseprite.",
+      "category": "Graphics",
+      "icon": "/apps/libresprite/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/libresprite/shot-1.png",
+          "caption": "The canvas"
+        }
+      ],
+      "install": {
+        "kind": "feature",
+        "feature": "libresprite",
+        "desktop": [
+          "wadspaces-libresprite.desktop"
+        ],
+        "source": "AppImage from GitHub releases"
+      },
+      "example": null,
+      "license": "GPL-2.0",
+      "homepage": "https://libresprite.github.io",
+      "options": null,
+      "opensFolders": false,
+      "secret": null
+    },
+    {
+      "id": "audacity",
+      "name": "Audacity",
+      "summary": "Record and edit audio",
+      "description": "Multi-track audio editor and recorder: cut, mix, clean up noise and export. Sound goes through the machine's PipeWire.",
+      "category": "Multimedia",
+      "icon": "/apps/audacity/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/audacity/shot-1.png",
+          "caption": "Main Window"
+        }
+      ],
+      "install": {
+        "kind": "feature",
+        "feature": "audacity",
+        "desktop": [
+          "wadspaces-audacity.desktop"
+        ],
+        "source": "AppImage from GitHub releases"
+      },
+      "example": "https://github.com/linuxserver/docker-audacity",
+      "license": "GPL-3.0-only",
+      "homepage": "https://www.audacityteam.org/",
+      "options": null,
+      "opensFolders": false,
+      "secret": null
+    },
+    {
+      "id": "lmms",
+      "name": "LMMS",
+      "summary": "Make music: beats, synths and samples",
+      "description": "A digital audio workstation for making music from scratch: a piano roll, beat sequencer, built-in synths and effects, and MIDI keyboard support.",
+      "category": "Multimedia",
+      "icon": "/apps/lmms/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/lmms/shot-1.png",
+          "caption": "The main LMMS window"
+        }
+      ],
+      "install": {
+        "kind": "apt",
+        "id": "lmms",
+        "packages": [
+          "lmms"
+        ],
+        "desktop": [
+          "lmms.desktop"
+        ],
+        "source": "Debian's package"
+      },
+      "example": null,
+      "license": "GPL-2.0+",
+      "homepage": "https://lmms.io/",
+      "options": null,
+      "opensFolders": false,
+      "secret": null
+    },
+    {
+      "id": "krita",
+      "name": "Krita",
+      "summary": "Digital painting",
+      "description": "A painting app made by artists: brush engines, layers, animation and a canvas that keeps up with a pen tablet.",
+      "category": "Graphics",
+      "icon": "/apps/krita/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/krita/shot-1.png",
+          "caption": "Krita is a full-featured digital painting studio"
+        },
+        {
+          "src": "/apps/krita/shot-2.png",
+          "caption": "The startup window now also gives you the latest news about Krita"
+        },
+        {
+          "src": "/apps/krita/shot-3.png",
+          "caption": "There are over ten immensely powerful brush engines"
+        }
+      ],
+      "install": {
+        "kind": "feature",
+        "feature": "krita",
+        "desktop": [
+          "org.kde.krita.desktop"
+        ],
+        "source": "KDE's AppImage"
+      },
+      "example": "https://github.com/linuxserver/docker-krita",
+      "license": "GPL-3.0-only",
+      "homepage": "https://www.krita.org/",
+      "options": null,
+      "opensFolders": false,
+      "secret": null
+    },
+    {
+      "id": "openshot",
+      "name": "OpenShot",
+      "summary": "Video editor",
+      "description": "A video editor that's quick to learn: drag clips onto a timeline, trim, add titles, transitions and effects, and export.",
+      "category": "Multimedia",
+      "icon": "/apps/openshot/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/openshot/shot-1.png",
+          "caption": ""
+        },
+        {
+          "src": "/apps/openshot/shot-2.png",
+          "caption": ""
+        }
+      ],
+      "install": {
+        "kind": "feature",
+        "feature": "openshot",
+        "desktop": [
+          "org.openshot.OpenShot.desktop"
+        ],
+        "source": "Debian's package"
+      },
+      "example": "https://github.com/linuxserver/docker-openshot",
+      "license": "GPL-3.0-or-later",
+      "homepage": "https://www.openshot.org/",
+      "options": null,
+      "opensFolders": false,
+      "secret": null
+    },
+    {
+      "id": "steam",
+      "name": "Steam",
+      "summary": "Games from your Steam library",
+      "description": "Valve's game launcher, with Proton for Windows games. Its login can be kept as a secret so every gaming wadspace is signed in. Games need the machine's GPU.",
+      "category": "Games",
+      "icon": "/apps/steam/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/steam/shot-1.png",
+          "caption": "The main Steam library window"
+        },
+        {
+          "src": "/apps/steam/shot-2.png",
+          "caption": "Steam Store interface"
+        },
+        {
+          "src": "/apps/steam/shot-3.png",
+          "caption": ""
+        }
+      ],
+      "install": {
+        "kind": "feature",
+        "feature": "steam",
+        "desktop": [
+          "steam.desktop"
+        ],
+        "source": "Valve's .deb, 32-bit libraries"
+      },
+      "example": "https://github.com/linuxserver/docker-steam",
+      "license": "Proprietary",
+      "homepage": "https://store.steampowered.com/",
+      "options": null,
+      "opensFolders": false,
+      "secret": {
+        "kind": "steam",
+        "id": "Steam"
+      }
+    },
+    {
+      "id": "dolphin",
+      "name": "Dolphin",
+      "summary": "GameCube and Wii emulator",
+      "description": "Plays GameCube and Wii games in HD, with controller support and save states. Bring your own game files in a project folder.",
+      "category": "Games",
+      "icon": "/apps/dolphin/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/dolphin/shot-1.png",
+          "caption": "Dolpin's main window"
+        },
+        {
+          "src": "/apps/dolphin/shot-2.png",
+          "caption": "In-game"
+        },
+        {
+          "src": "/apps/dolphin/shot-3.png",
+          "caption": "Grapics configuration"
+        }
+      ],
+      "install": {
+        "kind": "feature",
+        "feature": "dolphin",
+        "desktop": [
+          "dolphin-emu.desktop"
+        ],
+        "source": "Built from source (linuxserver's build)"
+      },
+      "example": "https://github.com/linuxserver/docker-dolphin",
+      "license": "GPL-2.0+",
+      "homepage": "https://dolphin-emu.org",
+      "options": null,
+      "opensFolders": false,
+      "secret": null
+    },
+    {
+      "id": "obs",
+      "name": "OBS Studio",
+      "summary": "Record and stream your screen",
+      "description": "Capture the wadspace's screen, a camera and audio, mix scenes, and record or go live.",
+      "category": "Multimedia",
+      "icon": "/apps/obs/icon.png",
+      "screenshots": [
+        {
+          "src": "/apps/obs/shot-1.png",
+          "caption": "The OBS Studio window showing a card game, the project website, a video, and a purple rectangle"
+        }
+      ],
+      "install": {
+        "kind": "apt",
+        "id": "obs",
+        "packages": [
+          "obs-studio"
+        ],
+        "desktop": [
+          "com.obsproject.Studio.desktop"
+        ],
+        "source": "Debian's package"
+      },
+      "example": null,
+      "license": "GPL-2.0-or-later",
+      "homepage": "https://obsproject.com",
+      "options": null,
+      "opensFolders": false,
+      "secret": null
+    },
+    {
+      "id": "terminal",
+      "name": "Command line",
+      "summary": "A terminal, with the tools you add to it",
+      "description": "Foot, the base's terminal, on the desktop. The command-line tools you add to it (C/C++, Rust, Node.js, Python and more) are installed with it.",
+      "category": "Development",
+      "icon": "/icons/terminal.png",
+      "screenshots": [],
+      "install": {
+        "kind": "builtin",
+        "desktop": [
+          "foot.desktop"
+        ],
+        "source": "Comes with the base image"
+      },
+      "example": null,
+      "license": "Part of WadSpaces",
+      "homepage": null,
+      "options": null,
+      "opensFolders": false,
+      "secret": null
+    }
+  ],
+  "extensions": [
+    {
+      "id": "anthropic.claude-code",
+      "name": "Claude Code",
+      "description": "Anthropic's coding agent",
+      "secret": {
+        "kind": "vscode-claude-code",
+        "id": "VSCode-ClaudeCode"
+      }
+    },
+    {
+      "id": "ms-python.python",
+      "name": "Python",
+      "description": "Linting, debugging and notebooks",
+      "secret": null
+    },
+    {
+      "id": "dbaeumer.vscode-eslint",
+      "name": "ESLint",
+      "description": "JavaScript and TypeScript linting",
+      "secret": null
+    },
+    {
+      "id": "esbenp.prettier-vscode",
+      "name": "Prettier",
+      "description": "Code formatter",
+      "secret": null
+    },
+    {
+      "id": "rust-lang.rust-analyzer",
+      "name": "rust-analyzer",
+      "description": "Rust language support",
+      "secret": null
+    },
+    {
+      "id": "ms-vscode.cpptools",
+      "name": "C/C++",
+      "description": "IntelliSense and debugging for C and C++",
+      "secret": null
+    },
+    {
+      "id": "golang.go",
+      "name": "Go",
+      "description": "Go language support",
+      "secret": null
+    },
+    {
+      "id": "eamodio.gitlens",
+      "name": "GitLens",
+      "description": "Git blame and history in the editor",
+      "secret": null
+    }
+  ],
+  "tools": [
+    {
+      "id": "cpp",
+      "name": "C/C++ dev tools",
+      "description": "gcc, CMake, Ninja, gdb, clang-format"
+    },
+    {
+      "id": "python",
+      "name": "Python",
+      "description": "python3 with pip and venv"
+    },
+    {
+      "id": "nodejs",
+      "name": "Node.js",
+      "description": "Node 22 LTS and npm"
+    },
+    {
+      "id": "firebase",
+      "name": "Firebase CLI",
+      "description": "firebase-tools (adds Node.js)"
+    },
+    {
+      "id": "gcloud",
+      "name": "Google Cloud CLI",
+      "description": "gcloud, gsutil and bq from Google's apt repo"
+    },
+    {
+      "id": "rust",
+      "name": "Rust",
+      "description": "rustup, cargo and the stable toolchain"
+    },
+    {
+      "id": "go",
+      "name": "Go",
+      "description": "Debian's golang"
+    },
+    {
+      "id": "android",
+      "name": "Android",
+      "description": "The newest Java and Gradle, adb and the Android SDK's command-line tools, without Android Studio"
+    }
+  ]
+}
