@@ -1,0 +1,21 @@
+[package]
+name = "wad-wadd-client"
+description = "wadd's /v1 from a program on the machine (the shell, the apps): typed calls over its Unix socket, and its event stream, followed and reconnected"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+wad-proto.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wad-config.workspace = true
+wadd = { path = "../../apps/wadd" }

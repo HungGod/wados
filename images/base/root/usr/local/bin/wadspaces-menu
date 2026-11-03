@@ -1,0 +1,80 @@
+#!/usr/bin/python3
+"""Print a labwc/openbox root menu built from .desktop launchers.
+
+    wadspaces-menu WADspaces-github.desktop wadspaces-vscode.desktop ...
+
+Each argument is a basename in /usr/share/applications (or an absolute path).
+A terminal entry (foot) is always appended so there is a way in when every
+launcher is broken.
+"""
+import configparser
+import glob
+import os
+import re
+import sys
+from xml.sax.saxutils import quoteattr, escape
+
+APPS = "/usr/share/applications"
+ICON_ROOTS = ["/usr/share/icons/hicolor", "/usr/share/pixmaps"]
+
+
+def resolve_icon(icon: str) -> str:
+    if not icon:
+        return ""
+    if os.path.isabs(icon):
+        return icon if os.path.exists(icon) else ""
+    best, best_size = "", -1
+    for path in glob.glob(f"/usr/share/icons/hicolor/*/apps/{icon}.png"):
+        m = re.search(r"/(\d+)x\d+/", path)
+        size = int(m.group(1)) if m else 0
+        if size > best_size:
+            best, best_size = path, size
+    if best:
+        return best
+    for ext in ("png", "svg", "xpm"):
+        p = f"/usr/share/pixmaps/{icon}.{ext}"
+        if os.path.exists(p):
+            return p
+    return ""
+
+
+def read_entry(path: str):
+    cp = configparser.ConfigParser(interpolation=None, strict=False)
+    cp.optionxform = str
+    try:
+        cp.read(path, encoding="utf-8")
+        e = cp["Desktop Entry"]
+    except Exception:
+        return None
+    if e.get("NoDisplay", "").lower() == "true" or e.get("Type", "Application") != "Application":
+        return None
+    exec_ = re.sub(r"\s%[fFuUdDnNickvm]", "", e.get("Exec", "")).strip()
+    if not exec_:
+        return None
+    if e.get("Terminal", "").lower() == "true":
+        exec_ = f"/usr/local/bin/wadspaces-term {exec_}"
+    return e.get("Name", os.path.basename(path)), exec_, resolve_icon(e.get("Icon", ""))
+
+
+def main(argv):
+    items = []
+    for arg in argv:
+        path = arg if os.path.isabs(arg) else os.path.join(APPS, arg)
+        entry = read_entry(path)
+        if entry:
+            items.append(entry)
+    items.append(("Terminal", "/usr/local/bin/wadspaces-term", resolve_icon("foot")))
+
+    out = ['<?xml version="1.0" encoding="utf-8"?>',
+           '<openbox_menu xmlns="http://openbox.org/3.4/menu">',
+           '<menu id="root-menu" label="MENU">']
+    for name, exec_, icon in items:
+        icon_attr = f" icon={quoteattr(icon)}" if icon else ""
+        out.append(f'<item label={quoteattr(name)}{icon_attr}><action name="Execute">'
+                   f"<command>{escape(exec_)}</command></action></item>")
+    out += ["</menu>", "</openbox_menu>"]
+    print("\n".join(out))
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

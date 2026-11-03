@@ -1,0 +1,19 @@
+#!/bin/bash
+# VS Code's terminals (its "tmux" profile: features/vscode.sh): the first
+# detached <group>-* tmux session (a tab VS Code brought back after the
+# wadspace moved between the screen and a stream), else a new one. One at a
+# time, so tabs coming back together each get a session of their own.
+#
+#   wadspaces-term-attach [group]     (vscode)
+group="${1:-vscode}"
+exec 9> "${XDG_RUNTIME_DIR:-/tmp}/wadspaces-term-attach.lock"
+flock 9
+s="$(tmux list-sessions -F '#{session_attached}:#{@claimed}:#{session_name}' 2> /dev/null |
+  awk -F: -v g="${group}-" '$1 == 0 && $2 != "1" && index($3, g) == 1 { print $3; exit }')"
+if [[ -n "${s}" ]]; then
+  tmux set-option -t "${s}" @claimed 1
+  exec 9>&-
+  exec tmux attach-session -t "${s}" ';' set-option destroy-unattached on ';' set-option -u @claimed
+fi
+exec 9>&-
+exec tmux new-session -s "${group}-$(date +%s%N)" ';' set-option destroy-unattached on

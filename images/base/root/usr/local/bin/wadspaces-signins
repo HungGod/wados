@@ -1,0 +1,204 @@
+#!/usr/bin/python3
+"""Link apps' sign-in files to the saved sign-ins wadd mounted.
+
+    wadspaces-signins [home] [state-dir]
+
+Runs at every start (init-wadspaces-workspace), as root. A saved sign-in is a
+folder on the host that wadd mounts into each wadspace that uses it, at
+/run/wadspaces-signins/<id>, so signing in once covers all of them. wadd lists
+them in /run/wadspaces-extra/signins.json:
+
+    {"version": 1, "signins": [{"id": "vscode-k3x9q2", "name": "VS Code", "web": false,
+                                "apps": ["vscode"], "dir": "/run/wadspaces-signins/vscode-k3x9q2",
+                                "paths": [".config/Code/User/globalStorage/", ".claude.json"]}, ...]}
+
+A web sign-in is the browser's (it reads the list itself; HOOK(browser): a
+later phase), and is skipped here. For an app's, each
+path (under the home folder; a folder's ends in /) becomes a link into the
+sign-in, kept there at the same path:
+  - if this wadspace already has the path and the sign-in doesn't, it moves
+    into the sign-in (being signed in here already counts);
+  - if both have it, this wadspace's goes aside to <path>.wadspaces-local;
+  - an app that replaced the link with a file of its own (a write by
+    rename) had it move into the sign-in when it's the newer;
+  - a link no longer wanted goes, and what was set aside comes back.
+The links it made are listed in <state-dir>/signin-links.json.
+"""
+import json
+import os
+import pwd
+import shutil
+import sys
+import time
+
+# (Elsewhere only in its test: try-signins.sh.)
+MANIFEST = os.environ.get("WADSPACES_SIGNINS_MANIFEST", "/run/wadspaces-extra/signins.json")
+MOUNT_ROOT = os.environ.get("WADSPACES_SIGNINS_ROOT", "/run/wadspaces-signins")
+USER = os.environ.get("WADSPACES_SIGNINS_USER", "abc")
+ASIDE = ".wadspaces-local"
+
+
+def log(msg):
+    print(f"[wadspaces-signins] {msg}", flush=True)
+
+
+def load(path, default):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def safe(rel):
+    """A path under the home folder, as wadd allows them."""
+    parts = rel.rstrip("/").split("/")
+    return rel and not rel.startswith("/") and all(p not in ("", ".", "..") for p in parts)
+
+
+def owned_dirs(path, stop, uid, gid):
+    """mkdir -p, the folders it makes abc's (up to `stop`, which exists)."""
+    missing = []
+    p = path
+    while p != stop and not os.path.lexists(p):
+        missing.append(p)
+        p = os.path.dirname(p)
+    for d in reversed(missing):
+        os.mkdir(d, 0o755)
+        os.chown(d, uid, gid)
+
+
+def mtime(p):
+    try:
+        return os.lstat(p).st_mtime
+    except OSError:
+        return 0.0
+
+
+def newest(p):
+    """When anything under p last changed."""
+    if not os.path.isdir(p) or os.path.islink(p):
+        return mtime(p)
+    t = mtime(p)
+    for root, dirs, files in os.walk(p):
+        for n in dirs + files:
+            t = max(t, mtime(os.path.join(root, n)))
+    return t
+
+
+def empty(p):
+    if os.path.islink(p) or not os.path.lexists(p):
+        return not os.path.lexists(p)
+    return os.path.isdir(p) and not os.listdir(p)
+
+
+def remove(p):
+    if os.path.isdir(p) and not os.path.islink(p):
+        shutil.rmtree(p)
+    elif os.path.lexists(p):
+        os.unlink(p)
+
+
+def put_aside(local):
+    aside = local.rstrip("/") + ASIDE
+    if os.path.lexists(aside):
+        aside += time.strftime("-%Y%m%d-%H%M%S")
+    os.rename(local, aside)
+    log(f"kept this wadspace's own {local} as {aside}")
+
+
+def unlink(home, rec, relinked):
+    """Takes a link away; what was set aside comes back, unless another
+    sign-in takes the path over."""
+    local = os.path.join(home, rec["path"].rstrip("/"))
+    if os.path.islink(local) and os.readlink(local) == rec["target"]:
+        os.unlink(local)
+    aside = local + ASIDE
+    if not relinked and os.path.lexists(aside) and not os.path.lexists(local):
+        os.rename(aside, local)
+        log(f"{local}: this wadspace's own again")
+
+
+def link(home, sid, mount, rel, before, uid, gid):
+    folder = rel.endswith("/")
+    rel = rel.rstrip("/")
+    local = os.path.join(home, rel)
+    target = os.path.join(mount, rel)
+    owned_dirs(os.path.dirname(local), home, uid, gid)
+    owned_dirs(os.path.dirname(target), mount, uid, gid)
+    if os.path.islink(local) and os.readlink(local) == target:
+        pass
+    elif os.path.lexists(local):
+        if before:
+            # The app wrote over the link (a write by rename): the newer wins.
+            if not os.path.lexists(target) or newest(local) >= newest(target):
+                remove(target)
+                shutil.move(local, target)
+                log(f"{local}: the newer copy, into the sign-in")
+            else:
+                remove(local)
+        elif empty(target):
+            remove(target)
+            shutil.move(local, target)
+            log(f"{local}: into sign-in {sid}")
+        else:
+            put_aside(local)
+    if not os.path.lexists(target) and folder:
+        owned_dirs(target, mount, uid, gid)
+    if not os.path.lexists(local):
+        os.symlink(target, local)
+        os.lchown(local, uid, gid)
+    return target
+
+
+def main():
+    home = sys.argv[1] if len(sys.argv) > 1 else "/config"
+    state_dir = sys.argv[2] if len(sys.argv) > 2 else os.path.join(home, ".wadspaces")
+    pw = pwd.getpwnam(USER)
+    uid, gid = pw.pw_uid, pw.pw_gid
+    links_file = os.path.join(state_dir, "signin-links.json")
+    made = load(links_file, [])
+    signins = load(MANIFEST, {}).get("signins", [])
+
+    wanted = []
+    for s in signins:
+        if s.get("web"):
+            continue
+        mount = s.get("dir", "")
+        if not mount.startswith(MOUNT_ROOT + "/") or not os.path.isdir(mount):
+            log(f"sign-in {s.get('name')}: not mounted, left out")
+            continue
+        for rel in s.get("paths", []):
+            if safe(rel):
+                wanted.append((s["id"], mount, rel))
+
+    keys = {(sid, rel.rstrip("/")) for sid, _, rel in wanted}
+    paths = {rel.rstrip("/") for _, _, rel in wanted}
+    keep = []
+    for rec in made:
+        if (rec.get("signin"), rec.get("path", "").rstrip("/")) in keys:
+            keep.append(rec)
+            continue
+        try:
+            unlink(home, rec, rec.get("path", "").rstrip("/") in paths)
+        except OSError as e:
+            log(f"{rec.get('path')}: {e}")
+    before = {(r["signin"], r["path"].rstrip("/")) for r in keep}
+
+    out = []
+    for sid, mount, rel in wanted:
+        try:
+            target = link(home, sid, mount, rel, (sid, rel.rstrip("/")) in before, uid, gid)
+            out.append({"signin": sid, "path": rel, "target": target})
+        except OSError as e:
+            log(f"{rel}: {e}")
+    os.makedirs(state_dir, exist_ok=True)
+    with open(links_file + ".tmp", "w") as f:
+        json.dump(out, f, indent=2)
+    os.replace(links_file + ".tmp", links_file)
+    if out:
+        log(f"{len(out)} sign-in path(s) linked")
+
+
+if __name__ == "__main__":
+    main()

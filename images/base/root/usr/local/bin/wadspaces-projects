@@ -1,0 +1,362 @@
+#!/usr/bin/python3
+"""This wadspace's projects: cloned or copied in, or mounted by wadd.
+
+    wadspaces-projects --init <desktop-dir> <state-dir>   at every start, as root
+    wadspaces-projects --sync <desktop-dir> <state-dir>   then, as abc, in the background
+    wadspaces-projects --mounts                           the projects' folder names
+
+wadd lists them in /run/wadspaces-extra/projects.json (version 2):
+
+    {"version": 2, "projects": [
+        {"id": "<id>", "kind": "github", "mount": "Writing", "name": "Writing",
+         "repo": "owner/name", "ref": "main", "setup": "npm install", "setupHash": "<hash>"},
+        {"id": "<id>", "kind": "copy", "mount": "Notes", "name": "Notes"},
+        {"id": "<id>", "kind": "mount", "mount": "Thesis", "name": "Thesis"}]}
+
+Each lives at <desktop-dir>/<mount>, inside the wadspace's own /config, so it
+outlasts the container like the rest of its home. A mount is the exception:
+the machine's own folder or file, which wadd mounts there read-write (listed
+only when it's on this machine); nothing here makes, owns or fills it.
+
+--init (init-wadspaces-workspace, before the desktop): makes each project's
+folder (empty until it's cloned or copied in; a mount is there already) and
+places an NN-project-<id>
+launcher that opens it, at the project's place in layout.json or after the
+rest, when something here opens a folder in a window (VS Code, or a file
+manager). Launchers for projects that are gone are retired; their folders
+stay, with whatever is in them (a mount's leaves an empty folder where it was
+mounted, which goes).
+
+--sync (svc-wadspaces-projects, after it; it never holds the desktop up):
+  - a GitHub project with no files yet is cloned (with the github_token
+    secret's credential helper), or, when wadd had cloned it on the machine,
+    started from that clone (/run/wadspaces-copies/<id>, uncommitted work
+    and all). One it has is fetched and fast-forwarded, only when that's
+    safe: no uncommitted changes and no commits of its own. Its one-time
+    setup command runs once per setupHash.
+  - a copy is copied in once from /run/wadspaces-copies/<id> (wadd's copy of
+    the files, read-only), when wadd has it here. A folder that has files
+    already is never copied over.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+
+MANIFEST = "/run/wadspaces-extra/projects.json"
+COPIES = "/run/wadspaces-copies"
+LAYOUT = "/etc/wadspaces/layout.json"
+APPS = "/usr/share/applications"
+ICON = "/usr/share/wadspaces/icons/folder.svg"
+MOUNT_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
+REF_RE = re.compile(r"^[\w./-]{1,200}$")
+# git never asks for anything: no terminal here.
+GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/bin/false"}
+
+
+def log(msg: str) -> None:
+    print(f"[wadspaces-projects] {msg}", file=sys.stderr, flush=True)
+
+
+def projects() -> list[dict]:
+    try:
+        with open(MANIFEST) as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return []
+    except (OSError, ValueError) as e:
+        log(f"unreadable {MANIFEST}: {e}")
+        return []
+    if data.get("version") != 2:
+        log(f"{MANIFEST} is from an older wadd (version {data.get('version')}); no projects")
+        return []
+    out = []
+    for p in data.get("projects", []):
+        ok = ID_RE.match(str(p.get("id", ""))) and MOUNT_RE.match(str(p.get("mount", ""))) and p["mount"] not in (".", "..")
+        if p.get("kind") == "github":
+            ok = ok and REPO_RE.match(str(p.get("repo", ""))) and (not p.get("ref") or REF_RE.match(str(p["ref"])))
+        elif p.get("kind") not in ("copy", "mount"):
+            ok = False
+        if ok:
+            out.append(p)
+        else:
+            log(f"skipped a malformed entry: {p!r}")
+    return out
+
+
+def positions() -> dict[str, int]:
+    """project id -> place on the designed desktop (1-based), from layout.json."""
+    try:
+        with open(LAYOUT) as f:
+            icons = json.load(f).get("icons", [])
+    except (OSError, ValueError):
+        return {}
+    return {i["project"]: n + 1 for n, i in enumerate(icons) if i.get("project")}
+
+
+def read_set(path: str) -> set[str]:
+    try:
+        with open(path) as f:
+            return {l.strip() for l in f if l.strip()}
+    except OSError:
+        return set()
+
+
+def opens_folders() -> bool:
+    """Whether a project's launcher would open in a window: wadspaces-open
+    hands a folder to VS Code when it's here, else to whatever handles
+    inode/directory (a file manager), else to a terminal."""
+    if shutil.which("code"):
+        return True
+    try:
+        names = os.listdir(APPS)
+    except OSError:
+        return False
+    for name in names:
+        if not name.endswith(".desktop"):
+            continue
+        try:
+            with open(os.path.join(APPS, name), errors="replace") as f:
+                text = f.read()
+        except OSError:
+            continue
+        if re.search(r"^(NoDisplay|Hidden)=true", text, re.M | re.I):
+            continue
+        mime = re.search(r"^MimeType=(.*)$", text, re.M)
+        if mime and "inode/directory" in mime.group(1).split(";"):
+            return True
+    return False
+
+
+def launcher(project: dict, path: str) -> str:
+    return (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        f"Name={project.get('name') or project['mount']}\n"
+        f'Exec=/usr/local/bin/wadspaces-open "{path}"\n'
+        f"Icon={ICON}\n"
+        "Terminal=false\n"
+    )
+
+
+def empty(path: str) -> bool:
+    try:
+        return not os.listdir(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        return False
+
+
+# ------------------------------------------------------------------ --init
+def init(desktop: str, state: str) -> int:
+    os.makedirs(state, exist_ok=True)
+    seeded_path = os.path.join(state, "seeded-projects")
+    mounted_path = os.path.join(state, "mounted-projects")
+    before = read_set(seeded_path)
+    mounted_before = read_set(mounted_path)
+    pos = positions()
+    icons = opens_folders()
+    if not icons:
+        log("nothing here opens a folder in a window; projects get no desktop icon")
+    placed: list[str] = []
+    extra = 80
+    listed = projects()
+    for p in listed:
+        path = os.path.join(desktop, p["mount"])
+        if p["kind"] == "mount":
+            if not os.path.exists(path):
+                log(f"{p['mount']} isn't mounted; no launcher")
+                continue
+        elif not os.path.exists(path):
+            os.makedirs(path)
+            shutil.chown(path, "abc", "abc")
+        if not icons:
+            continue
+        n = pos.get(p["id"])
+        if n is None:
+            n, extra = extra, extra + 1
+        name = f"{n:02d}-project-{p['id']}.desktop"
+        with open(os.path.join(desktop, name), "w") as f:
+            f.write(launcher(p, path))
+        os.chmod(os.path.join(desktop, name), 0o755)
+        placed.append(name)
+    # A project that's gone loses its launcher; its folder stays, files and all.
+    for old in before - set(placed):
+        if "/" not in old:
+            try:
+                os.remove(os.path.join(desktop, old))
+                log(f"retired {old}")
+            except FileNotFoundError:
+                pass
+    with open(seeded_path, "w") as f:
+        f.write("".join(f"{n}\n" for n in placed))
+    # Where a mount was: the empty folder its mount point left behind goes.
+    mounted = {p["mount"] for p in listed if p["kind"] == "mount"}
+    for name in mounted_before - mounted - {p["mount"] for p in listed}:
+        if MOUNT_RE.match(name) and name not in (".", ".."):
+            try:
+                os.rmdir(os.path.join(desktop, name))
+            except OSError:
+                pass
+    with open(mounted_path, "w") as f:
+        f.write("".join(f"{n}\n" for n in sorted(mounted)))
+    return 0
+
+
+# ------------------------------------------------------------------ --sync
+def git(*args: str, cwd: str | None = None, timeout: int = 120) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(["git", *args], cwd=cwd, env=GIT_ENV, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(args, 124, "", f"git {args[0]} took longer than {timeout} s")
+
+
+def last_line(r: subprocess.CompletedProcess) -> str:
+    lines = (r.stderr or r.stdout).strip().splitlines()
+    return lines[-1] if lines else f"exit {r.returncode}"
+
+
+def copy_in(src: str, dest: str) -> None:
+    """src's files into dest (missing or empty): made beside it, then put in place."""
+    tmp = os.path.join(os.path.dirname(dest), f".{os.path.basename(dest)}.copying")
+    shutil.rmtree(tmp, ignore_errors=True)
+    r = subprocess.run(["cp", "-a", "--no-preserve=ownership", "--", f"{src}/.", tmp], capture_output=True, text=True)
+    if r.returncode != 0:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise OSError(r.stderr.strip() or "cp failed")
+    if os.path.isdir(dest):
+        os.rmdir(dest)
+    os.rename(tmp, dest)
+
+
+def ready_copy(pid: str) -> str | None:
+    """wadd's copy of a project's files, when it's here whole."""
+    src = os.path.join(COPIES, pid)
+    return os.path.join(src, "files") if os.path.isfile(os.path.join(src, "done")) else None
+
+
+def clone(p: dict, path: str) -> bool:
+    url = f"https://github.com/{p['repo']}.git"
+    tmp = os.path.join(os.path.dirname(path), f".{p['mount']}.cloning")
+    for attempt in range(3):
+        shutil.rmtree(tmp, ignore_errors=True)
+        args = ["clone", "--quiet", *(["--branch", p["ref"]] if p.get("ref") else []), "--", url, tmp]
+        r = git(*args, timeout=1800)
+        if r.returncode == 0:
+            if os.path.isdir(path):
+                os.rmdir(path)
+            os.rename(tmp, path)
+            log(f"{p['mount']}: cloned {p['repo']}{' (' + p['ref'] + ')' if p.get('ref') else ''}")
+            return True
+        log(f"{p['mount']}: cloning {p['repo']} failed: {last_line(r)}")
+        time.sleep(5 * (attempt + 1))
+    shutil.rmtree(tmp, ignore_errors=True)
+    log(f"{p['mount']}: not cloned; it's tried again at the next start")
+    return False
+
+
+def update(p: dict, path: str) -> None:
+    """Fetch, then fast-forward only when nothing here would be lost or tangled."""
+    m = p["mount"]
+    if git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", cwd=path).returncode != 0:
+        log(f"{m} has no upstream branch; not updated")
+        return
+    r = git("fetch", "--quiet", cwd=path, timeout=60)
+    if r.returncode != 0:
+        log(f"{m}: couldn't fetch ({last_line(r)}); not updated")
+        return
+    if git("status", "--porcelain", cwd=path).stdout.strip():
+        log(f"{m} has uncommitted changes; not updated")
+        return
+    ahead = git("rev-list", "--count", "@{u}..HEAD", cwd=path).stdout.strip()
+    if ahead not in ("", "0"):
+        log(f"{m} has {ahead} unpushed commit(s); not updated")
+        return
+    behind = git("rev-list", "--count", "HEAD..@{u}", cwd=path).stdout.strip()
+    if behind in ("", "0"):
+        log(f"{m} is up to date")
+        return
+    r = git("merge", "--ff-only", "--quiet", "@{u}", cwd=path)
+    log(f"{m}: updated ({behind} new commit(s))" if r.returncode == 0 else f"{m}: couldn't fast-forward ({last_line(r)})")
+
+
+def setup(p: dict, path: str, state: str) -> None:
+    """The project's one-time setup (e.g. npm install), detached. The marker
+    is only written on success, so a failed run retries on the next start."""
+    cmd = (p.get("setup") or "").strip()
+    if not cmd:
+        return
+    mark = os.path.join(state, f"setup-{p['id']}-{p.get('setupHash') or 'x'}.done")
+    if os.path.exists(mark):
+        return
+    logf = os.path.join(state, f"setup-{p['id']}.log")
+    log(f"running setup for {p['mount']} (log: {logf})")
+    script = 'cd "$1" && { eval "$2"; } > "$3" 2>&1 && touch "$4"'
+    subprocess.Popen(["setsid", "bash", "-lc", script, "_", path, cmd, logf, mark],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     start_new_session=True)
+
+
+def sync(desktop: str, state: str) -> int:
+    copied_dir = os.path.join(state, "copied")
+    os.makedirs(copied_dir, exist_ok=True)
+    for p in projects():
+        path = os.path.join(desktop, p["mount"])
+        mark = os.path.join(copied_dir, p["id"])
+        try:
+            if p["kind"] == "github":
+                if os.path.isdir(os.path.join(path, ".git")):
+                    update(p, path)
+                elif empty(path):
+                    seed = None if os.path.exists(mark) else ready_copy(p["id"])
+                    if seed:
+                        copy_in(seed, path)
+                        open(mark, "w").close()
+                        log(f"{p['mount']}: started from the clone this machine kept")
+                        update(p, path)
+                    elif not clone(p, path):
+                        continue
+                else:
+                    log(f"{p['mount']} has files but isn't a git repository; left as it is")
+                    continue
+                setup(p, path, state)
+            elif p["kind"] == "mount":
+                continue
+            else:
+                if os.path.exists(mark):
+                    continue
+                src = ready_copy(p["id"])
+                if not src:
+                    log(f"{p['mount']}: its files aren't on this machine yet")
+                    continue
+                if empty(path):
+                    copy_in(src, path)
+                    log(f"{p['mount']}: copied in")
+                else:
+                    log(f"{p['mount']} has files already; not copied over")
+                open(mark, "w").close()
+        except OSError as e:
+            log(f"{p['mount']}: {e}")
+    return 0
+
+
+def main() -> int:
+    if len(sys.argv) == 2 and sys.argv[1] == "--mounts":
+        for p in projects():
+            print(p["mount"])
+        return 0
+    if len(sys.argv) != 4 or sys.argv[1] not in ("--init", "--sync"):
+        print(__doc__, file=sys.stderr)
+        return 2
+    mode, desktop, state = sys.argv[1:]
+    return init(desktop, state) if mode == "--init" else sync(desktop, state)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

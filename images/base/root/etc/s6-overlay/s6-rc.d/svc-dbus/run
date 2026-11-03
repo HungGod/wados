@@ -1,0 +1,6 @@
+#!/usr/bin/with-contenv bash
+# A system bus: some apps (and xdg-utils) complain loudly without one.
+mkdir -p /run/dbus
+chown abc:abc /run/dbus
+rm -f /run/dbus/pid
+exec s6-setuidgid abc dbus-daemon --system --nofork --nosyslog > /dev/null 2>&1

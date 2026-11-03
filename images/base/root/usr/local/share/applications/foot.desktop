@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Foot
+GenericName=Terminal
+Comment=A terminal whose jobs carry on while the wadspace moves between the screen and a stream
+Exec=/usr/local/bin/wadspaces-term
+Icon=foot
+Terminal=false
+Categories=System;TerminalEmulator;
+StartupWMClass=foot

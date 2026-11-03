@@ -1,0 +1,150 @@
+#!/usr/bin/python3
+"""Lay out a wadspace's desktop as it was designed in the Builder.
+
+    wadspaces-layout <desktop-dir> <state-dir> [layout.json]
+
+Runs at every start (init-wadspaces-workspace), as root. /etc/wadspaces/layout.json
+lists the desktop's icons in order:
+
+    {"version": 1, "icons": [{"app": "vscode", "desktop": "wadspaces-vscode.desktop",
+                              "label": "VS Code", "autostart": true},
+                             {"project": "<project id>", "label": "Writing"}, ...]}
+
+For each app icon it finds the launcher, copies it to <desktop-dir>/NN-<launcher>
+(NN = its position) with the icon's label as its name, and removes launchers it placed on an earlier
+start that are no longer wanted (anything else on the Desktop is left alone).
+The NN prefixes once kept a designed order through a sorting shim; selkies-desktop
+now fills its grid in its own order and the Builder no longer orders icons, so
+they're only harmless. Apps marked autostart open from /etc/wadspaces/autostart.d/50-layout.sh.
+
+Prints the placed launchers' basenames, one per line, for wadspaces-menu.
+"""
+import json
+import os
+import sys
+
+APPS = "/usr/share/applications"
+CONF = "/etc/wadspaces"
+AUTOSTART = f"{CONF}/autostart.d/50-layout.sh"
+
+
+def log(msg: str) -> None:
+    print(f"[wadspaces-layout] {msg}", file=sys.stderr)
+
+
+def first_line(path: str) -> str | None:
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.split("#", 1)[0].strip()
+                if line:
+                    return line
+    except OSError:
+        pass
+    return None
+
+
+def find_launcher(icon: dict) -> str | None:
+    """The icon's own launcher name, else what its install recorded for the app."""
+    named = icon.get("desktop")
+    if named and os.path.isfile(f"{APPS}/{named}"):
+        return named
+    app = icon.get("app", "")
+    for listing in (f"{CONF}/apps.d/{app}.list", f"{CONF}/desktop-entries.d/{app}.list"):
+        found = first_line(listing)
+        if found and os.path.isfile(f"{APPS}/{found}"):
+            return found
+    return None
+
+
+def relabel(text: str, label: str) -> str:
+    """Set Name= in [Desktop Entry] to label and drop its translations."""
+    out, section = [], ""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            section = stripped
+        elif section == "[Desktop Entry]" and label:
+            if stripped.startswith("Name["):
+                continue
+            if stripped.startswith("Name="):
+                line = f"Name={label}"
+        out.append(line)
+    return "\n".join(out) + "\n"
+
+
+def main() -> int:
+    if len(sys.argv) < 3:
+        print(__doc__, file=sys.stderr)
+        return 2
+    desktop_dir, state_dir = sys.argv[1], sys.argv[2]
+    layout_path = sys.argv[3] if len(sys.argv) > 3 else f"{CONF}/layout.json"
+    try:
+        with open(layout_path) as f:
+            icons = json.load(f).get("icons", [])
+    except (OSError, ValueError) as e:
+        log(f"no usable layout at {layout_path}: {e}")
+        return 1
+
+    os.makedirs(desktop_dir, exist_ok=True)
+    os.makedirs(state_dir, exist_ok=True)
+    seeded_file = os.path.join(state_dir, "seeded-layout")
+
+    placed: list[str] = []  # files written to the Desktop
+    launchers: list[str] = []  # their sources, for the menu
+    autostart: list[str] = []
+    for index, icon in enumerate(icons):
+        if icon.get("project"):
+            continue  # a project's launcher: wadspaces-projects places it when it's mounted
+        launcher = find_launcher(icon)
+        if not launcher:
+            log(f"WARN: no launcher for {icon.get('app')!r} ({icon.get('label')!r}); skipped")
+            continue
+        if launcher in launchers:
+            continue
+        # Numbered by position in the layout, so the desktop keeps its order.
+        name = f"{index + 1:02d}-{launcher}"
+        with open(f"{APPS}/{launcher}") as f:
+            text = relabel(f.read(), icon.get("label", ""))
+        path = os.path.join(desktop_dir, name)
+        with open(path, "w") as f:
+            f.write(text)
+        os.chmod(path, 0o755)
+        placed.append(name)
+        launchers.append(launcher)
+        if icon.get("autostart"):
+            autostart.append(launcher)
+
+    # Retire what an earlier start placed and this one didn't.
+    try:
+        with open(seeded_file) as f:
+            before = [l.strip() for l in f if l.strip()]
+    except OSError:
+        before = []
+    for old in before:
+        if old not in placed and "/" not in old:
+            try:
+                os.remove(os.path.join(desktop_dir, old))
+                log(f"retired {old}")
+            except FileNotFoundError:
+                pass
+    with open(seeded_file, "w") as f:
+        f.write("".join(f"{p}\n" for p in placed))
+
+    # Autostart hook, sourced by labwc-autostart (POSIX sh, as the desktop user).
+    os.makedirs(os.path.dirname(AUTOSTART), exist_ok=True)
+    if autostart:
+        with open(AUTOSTART, "w") as f:
+            f.write("# Written by wadspaces-layout: apps that open when the wadspace starts.\n")
+            for l in autostart:
+                f.write(f"gio launch {APPS}/{l} > /dev/null 2>&1 &\n")
+    elif os.path.exists(AUTOSTART):
+        os.remove(AUTOSTART)
+
+    log(f"placed {len(placed)} launchers" + (f", {len(autostart)} open at start" if autostart else ""))
+    print("\n".join(launchers))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

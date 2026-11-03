@@ -1,0 +1,10 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# This wadspace's projects, in the background so the desktop never waits on
+# them: GitHub projects cloned (or fast-forwarded when that's safe), copies
+# copied in once (wadspaces-projects --sync, as abc). Then it idles: a
+# longrun that ended would be started again.
+
+s6-setuidgid abc /usr/local/bin/wadspaces-projects --sync "${DESKTOP_DIR:-/config/Desktop}" /config/.wadspaces
+exec sleep infinity

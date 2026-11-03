@@ -1,0 +1,18 @@
+#!/bin/sh
+# Open a file or folder with whatever app this desktop has for it. A folder (a
+# project's launcher) opens in VS Code when the image has it, else in a file
+# manager, else a terminal there (wadspaces-term: its jobs carry on when the
+# wadspace moves between the screen and a stream). Text shows in a terminal
+# when nothing else takes it; anything else says what's missing.
+f="$1"
+if [ -d "$f" ]; then
+  command -v code > /dev/null && exec code "$f"
+  xdg-open "$f" 2> /dev/null && exit 0
+  exec wadspaces-term --working-directory="$f"
+fi
+xdg-open "$f" 2> /dev/null && exit 0
+case "${f##*.}" in
+  txt|md|json|csv|log|yaml|yml|toml|ini|xml|html|css|js|ts|py|sh)
+    exec foot --hold -e cat "$f" ;;
+esac
+exec foot --hold -e sh -c 'echo "Nothing on this desktop opens $(basename "$1")."; echo "Add an app that can in the WadSpaces Builder."' _ "$f"

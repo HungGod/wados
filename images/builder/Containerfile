@@ -1,0 +1,39 @@
+# Builds WadOS's programs that run inside wadspaces against Fedora 44, the
+# wadspaces' own system:
+#
+#   wadspaces-clipboard  crates/wad-clip     the wadspace's clipboard bridged to the machine's
+#   wadspaces-session    crates/wad-session  its desktop moving between the screen and a stream
+#   selkies-desktop      apps/selkies-desktop (C, make)  the desktop's icons, Start menu and taskbar
+#
+# images/build.sh builds this as localhost/wados-builder:44 and runs cargo and
+# make in it (build_bins there), with the checkout mounted read-only; the
+# base image copies what it made from .build/images/bin.
+FROM registry.fedoraproject.org/fedora:44@sha256:cb3bd21415bd82a2fae1a9379f3f972fa8e78d460c9f86101274d13230dd6fd6
+
+# selkies-desktop links libwayland-client/-cursor, libX11, libXext and cairo;
+# wayland-protocols has the xdg-shell XML its Makefile reads. The Rust crates
+# need only a C linker (wayland-client is pure Rust).
+RUN dnf -y --setopt=install_weak_deps=False install \
+      cairo-devel \
+      gcc \
+      libX11-devel \
+      libXext-devel \
+      make \
+      pkgconf-pkg-config \
+      rustup \
+      wayland-devel \
+      wayland-protocols-devel && \
+    dnf clean all && rm -rf /var/cache/libdnf5 /var/log/dnf5.log*
+
+# Rust 1.99 exactly, from rustup (Fedora's own rust moves on with updates),
+# where the official rust images keep it. The repo's rust-toolchain.toml also
+# asks for rustfmt and clippy; none of that is needed here, so
+# RUSTUP_TOOLCHAIN uses this toolchain as it is.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin \
+    RUSTUP_TOOLCHAIN=1.99 \
+    CARGO_TERM_COLOR=never
+RUN rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.99 && \
+    chmod -R a+rX /usr/local/rustup /usr/local/cargo && \
+    rustc --version && cargo --version

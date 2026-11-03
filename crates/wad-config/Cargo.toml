@@ -1,0 +1,15 @@
+[package]
+name = "wad-config"
+description = "wadd's configuration: the image's file, then the machine's (/etc/wados), merged key by key"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

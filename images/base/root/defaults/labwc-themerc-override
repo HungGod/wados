@@ -1,0 +1,23 @@
+# WadOS is dark only: labwc's title bars and menus in the shell's colours
+# (crates/wad-gtk's tokens: --bg #0a0614, --surface #140d22, --fg #f5f2fa,
+# --accent #c6ff1f). Copied to ~/.config/labwc/themerc-override at every
+# start by init-desktop-config.
+border.width: 1
+window.active.border.color: #241a39
+window.inactive.border.color: #140d22
+window.active.title.bg.color: #140d22
+window.inactive.title.bg.color: #0e0919
+window.active.label.text.color: #f5f2fa
+window.inactive.label.text.color: #8a8299
+window.active.button.unpressed.image.color: #f5f2fa
+window.inactive.button.unpressed.image.color: #8a8299
+window.active.button.hover.image.color: #c6ff1f
+menu.items.bg.color: #140d22
+menu.items.text.color: #f5f2fa
+menu.items.active.bg.color: #c6ff1f
+menu.items.active.text.color: #0a0614
+menu.border.color: #241a39
+menu.separator.color: #241a39
+osd.bg.color: #140d22
+osd.border.color: #241a39
+osd.label.text.color: #f5f2fa

@@ -1,0 +1,29 @@
+# Run by labwc with /bin/sh, so keep this POSIX — no bashisms.
+# labwc has set WAYLAND_DISPLAY/DISPLAY to its own nested display by now.
+
+# Wallpaper, then the per-wadspace hooks (/etc/wadspaces/autostart.d).
+. /defaults/autostart_wayland
+
+# Desktop icons and panel (apps/selkies-desktop).
+selkies-desktop > /dev/null 2>&1 &
+
+# Just moved between the screen and a stream: what was open opens again,
+# and terminals come back to their jobs (wadspaces-session).
+wadspaces-session restore > /dev/null 2>&1 &
+
+# One clipboard for the machine: copies here paste in every other wadspace,
+# and theirs here (crates/wad-clip). On the screen that bridge runs on the
+# machine (wadd: the machine's labwc hides data-control from a wadspace's
+# socket, docs/decisions/0001-labwc.md); here only for a stream.
+if [ "$(cat /run/wadspaces-extra/display 2> /dev/null)" = stream ] && [ -n "${WADSPACES_HOST_WAYLAND:-}" ] &&
+  command -v wadspaces-clipboard > /dev/null; then
+  wadspaces-clipboard --host "${WADSPACES_HOST_WAYLAND}" > /dev/null &
+fi
+
+# labwc is one window on the display; if that window is closed it would carry
+# on with no screen at all. Exit instead, and let svc-de decide what next.
+(
+  while sleep 2; do
+    [ -n "$(wlr-randr 2> /dev/null)" ] || { labwc --exit; break; }
+  done
+) > /dev/null 2>&1 &

@@ -1,0 +1,18 @@
+[package]
+name = "wad-clip"
+description = "One clipboard for the whole machine: wadspaces' clipboards bridged to sway's (wlr-data-control), and the HUD's history"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Runs inside every wadspace (its labwc <-> the machine's sway); built for
+# Debian trixie by images/build.sh, like WadBrowser.
+[[bin]]
+name = "wadspaces-clipboard"
+path = "src/bin/wadspaces-clipboard.rs"
+
+[dependencies]
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
+nix.workspace = true

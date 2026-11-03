@@ -1,0 +1,11 @@
+#!/bin/sh
+# The GitHub CLI with the same token git uses (the github_token podman secret,
+# see git-credential-github-token), so `gh pr create`, `gh repo list` and the
+# rest work without `gh auth login`. The token goes only into gh's own
+# environment, read fresh each time.
+TOKEN_FILE="${GITHUB_TOKEN_FILE:-/run/secrets/github_token}"
+if [ -z "${GH_TOKEN:-}" ] && [ -r "${TOKEN_FILE}" ]; then
+  GH_TOKEN="$(tr -d '\r\n' < "${TOKEN_FILE}")"
+  export GH_TOKEN
+fi
+exec /usr/bin/gh "$@"

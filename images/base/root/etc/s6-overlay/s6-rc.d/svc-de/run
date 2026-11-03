@@ -1,0 +1,108 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# The desktop: labwc as one window on a Wayland compositor, the machine's
+# labwc, through the folder wadd mounts at /run/wadspaces-display (a socket
+# the machine's labwc serves this wadspace alone, through
+# wp_security_context_v1, so its window reports app_id io.wadspaces.<id>).
+#
+# Which display, wadd says in /run/wadspaces-extra/display, and may change
+# while the wadspace runs (wadspaces-session ends labwc, and this starts it
+# on the other):
+#   screen (or no file)  /run/wadspaces-display, the machine's labwc
+#   stream               its stream sidecar's, at /run/wadspaces-stream
+#                        (the sidecar is a later phase; the move is kept)
+# /run/wadspaces-current points at the one in use: PULSE_SERVER may go
+# through it, so a terminal's sound follows a move.
+# WADSPACES_WAYLAND names the socket, else the first wayland-* that answers
+# is used (one left over from before the machine's labwc restarted doesn't).
+
+TARGET_FILE="/run/wadspaces-extra/display"
+SCREENS_FILE="/run/wadspaces-extra/screens"
+CURRENT="/run/wadspaces-current"
+PID_FILE="/run/wadspaces-labwc.pid"
+
+target() {
+    cat "${TARGET_FILE}" 2> /dev/null || true
+}
+
+dir_of() {
+    case "$1" in
+        stream) echo /run/wadspaces-stream ;;
+        *) echo /run/wadspaces-display ;;
+    esac
+}
+
+# Something is listening on the socket, for abc: the socket is made for the
+# wadspace's user (connecting takes write access to it), not for root here.
+answers() {
+    [[ -S "$1" ]] && s6-setuidgid abc python3 -c 'import socket, sys; socket.socket(socket.AF_UNIX).connect(sys.argv[1])' "$1" 2> /dev/null
+}
+
+find_socket() {
+    if [[ -n "${WADSPACES_WAYLAND:-}" ]]; then
+        answers "$1/${WADSPACES_WAYLAND}" && echo "$1/${WADSPACES_WAYLAND}"
+        return
+    fi
+    local s
+    for s in "$1"/wayland-*; do
+        answers "${s}" && { echo "${s}"; return; }
+    done
+}
+
+TARGET="$(target)"
+DISPLAY_DIR="$(dir_of "${TARGET}")"
+ln -sfn "${DISPLAY_DIR}" "${CURRENT}"
+echo "[svc-de] waiting for a Wayland socket in ${DISPLAY_DIR}"
+until SOCKET="$(find_socket "${DISPLAY_DIR}")" && [[ -n "${SOCKET}" ]]; do
+    sleep 0.5
+    # Moved while it waited: wait there instead.
+    [[ "$(target)" == "${TARGET}" ]] || exit 0
+done
+echo "[svc-de] drawing on ${SOCKET}"
+
+# A window per screen on the machine's (wadd's count, as of now); one on a stream.
+unset WLR_WL_OUTPUTS
+if [[ "${TARGET}" != stream ]] && n="$(cat "${SCREENS_FILE}" 2> /dev/null)" && [[ "${n}" =~ ^[0-9]+$ && "${n}" -gt 1 ]]; then
+    export WLR_WL_OUTPUTS="${n}"
+fi
+
+# The session bus is a service of its own (svc-session-bus), which outlives
+# this labwc: wait for it, else give labwc one of its own.
+BUS="${XDG_RUNTIME_DIR:-/config/.XDG}/bus"
+for _ in $(seq 20); do [[ -S "${BUS}" ]] && break; sleep 0.25; done
+RUN=(dbus-run-session --)
+if [[ -S "${BUS}" ]]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=${BUS}"
+    RUN=()
+fi
+
+cd "${HOME}" || exit 1
+# Apps (Electron especially) abort when the display goes away under them,
+# which is how a closed window ends the session. No core dumps from that: on
+# a laptop the host would pop a crash report for each.
+ulimit -c 0
+# WADSPACES_HOST_WAYLAND: the display under labwc, for the clipboard bridge
+# (labwc-autostart), since labwc points WAYLAND_DISPLAY at itself.
+WADSPACES_HOST_WAYLAND="${SOCKET}" WAYLAND_DISPLAY="${SOCKET}" s6-setuidgid abc "${RUN[@]}" labwc &
+LABWC=$!
+echo "${LABWC}" > "${PID_FILE}"
+trap 'kill -TERM "${LABWC}" 2> /dev/null' TERM
+# (wait returns early for a signal: until labwc has really gone.)
+while kill -0 "${LABWC}" 2> /dev/null; do wait "${LABWC}"; done
+rm -f "${PID_FILE}"
+
+# labwc ended. The wadspace moved (wadd changed the file, then had it end):
+# start again, there. Else its window was closed (the display is still
+# there): the wadspace is done, so stop the container. Or the display went
+# away (the machine's labwc or the stream restarted): exit, and s6 runs this
+# again, which waits for the display to come back.
+if [[ "$(target)" != "${TARGET}" ]]; then
+    echo "[svc-de] the wadspace moved to its $(target); its desktop starts there"
+    exit 0
+fi
+if answers "${SOCKET}"; then
+    echo "[svc-de] the desktop window was closed; stopping the wadspace"
+    exec /run/s6/basedir/bin/halt
+fi
+echo "[svc-de] the display went away; waiting for it again"

@@ -1,0 +1,177 @@
+# The wadspace base: localhost/wados-base:44, what every wadspace runs on.
+#
+# Its desktop is labwc (+ Xwayland, + selkies-desktop's icons and panel) as
+# one window on whatever Wayland compositor is mounted at
+# /run/wadspaces-display: the machine's labwc, through a socket it serves
+# this wadspace alone (svc-de). Dark only.
+#
+# A wadspace is described by data files instead of an init script of its own:
+#
+#   /etc/wadspaces/layout.json           the desktop's icons, in order
+#   /etc/wadspaces/desktop-entries.list  .desktop files to seed into ~/Desktop
+#                                        (hand-written images without a layout)
+#   /etc/wadspaces/chown.list            paths handed to abc at boot
+#   /run/wadspaces-extra/                what wadd hands it at each start
+#                                        (layout, projects, sign-ins, display)
+#
+# and build-time helpers install what goes in it:
+#
+#   wadspaces-feature <name>...                 tools and apps (/usr/local/lib/wadspaces/features)
+#   wadspaces-dnf <id> [--desktop f] <pkg>...   a desktop app from Fedora
+#   wadspaces-vscode-extensions <id>...         VS Code extensions (after the vscode feature)
+#   wadspaces-pkg capture|assemble              packages: one install's files on their own
+#
+# Build it with images/build.sh, which first builds wadspaces-clipboard,
+# wadspaces-session and selkies-desktop in images/builder and passes them in
+# as the `bin` build context.
+FROM ghcr.io/linuxserver/baseimage-fedora:44@sha256:f262a934dd87c6d1e959f32a9af75207c4c67f6f7a9893f28077c0f1aba34fc4
+
+ARG BUILD_DATE
+ARG VERSION
+LABEL build_version="WadOS base version:- ${VERSION} Build-date:- ${BUILD_DATE}"
+LABEL maintainer="dwadsworth"
+LABEL org.opencontainers.image.source="https://github.com/HungGod/wados"
+
+# The start-up log's banner is ours (root/etc/s6-overlay/s6-rc.d/
+# init-adduser/branding); LSIO_FIRST_PARTY=false keeps linuxserver's start-up
+# code from writing theirs over it. linuxserver's PATH starts with a Python
+# venv this image doesn't have (/lsiopy): neither it nor VIRTUAL_ENV apply.
+ENV LSIO_FIRST_PARTY=false \
+    HOME="/config" \
+    LANG="en_US.UTF-8" \
+    PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" \
+    VIRTUAL_ENV="" \
+    DESKTOP_DIR="/config/Desktop" \
+    GITHUB_TOKEN_FILE="/run/secrets/github_token" \
+    REFRESH_MENU=true \
+    WALLPAPER="/usr/share/backgrounds/wallpaper.png" \
+    WALLPAPER_MODE=center \
+    WALLPAPER_COLOR="#0a0614" \
+    ADW_DEBUG_COLOR_SCHEME=prefer-dark \
+    XCURSOR_THEME=breeze_cursors \
+    XCURSOR_SIZE=24 \
+    XKB_DEFAULT_LAYOUT=us \
+    XKB_DEFAULT_RULES=evdev
+
+# The desktop, its fonts and cursors; the GPU's drivers (Mesa: GL, Vulkan
+# and VA-API, Intel's media driver); GStreamer to play media; sound through
+# the machine's PipeWire (wadd sets PULSE_SERVER: the PulseAudio client, and
+# ALSA's default device pointed at it, root/etc/asound.conf); and what the
+# helpers need (python3, git, the cache tools wadspaces-pkg assemble runs).
+# Weak dependencies stay out, as the helpers install everything.
+RUN \
+  echo "**** install packages ****" && \
+  dnf -y --setopt=install_weak_deps=False install \
+    alsa-plugins-pulseaudio \
+    breeze-cursor-theme \
+    cairo \
+    dbus-daemon \
+    desktop-file-utils \
+    fontconfig \
+    foot \
+    gh \
+    git-core \
+    glibc-langpack-en \
+    google-noto-color-emoji-fonts \
+    google-noto-sans-mono-vf-fonts \
+    google-noto-sans-vf-fonts \
+    google-noto-serif-vf-fonts \
+    gstreamer1 \
+    gstreamer1-plugin-libav \
+    gstreamer1-plugins-bad-free \
+    gstreamer1-plugins-base \
+    gstreamer1-plugins-good \
+    gtk-update-icon-cache \
+    labwc \
+    libX11 \
+    libXext \
+    libva-intel-media-driver \
+    libwayland-client \
+    libwayland-cursor \
+    mesa-dri-drivers \
+    mesa-libEGL \
+    mesa-libGL \
+    mesa-vulkan-drivers \
+    openssh-clients \
+    pulseaudio-libs \
+    python3 \
+    shared-mime-info \
+    swaybg \
+    tmux \
+    unzip \
+    vulkan-loader \
+    wlr-randr \
+    xdg-utils \
+    xorg-x11-server-Xwayland && \
+  echo "**** abc can sudo (wheel), and its shell is bash (the base's /bin/false ends a terminal at once) ****" && \
+  usermod -aG wheel abc && \
+  usermod -s /bin/bash abc && \
+  echo "abc ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abc && \
+  chmod 440 /etc/sudoers.d/abc && \
+  echo "**** cleanup ****" && \
+  dnf clean all && \
+  rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*
+
+COPY root/ /
+
+RUN \
+  chmod +x \
+    /usr/local/bin/* \
+    /usr/local/lib/wadspaces/features/*.sh \
+    /etc/s6-overlay/s6-rc.d/*/run && \
+  echo "**** selkies-desktop's Start button: root/ brought the WadSpaces logo ****" && \
+  test -s /usr/share/selkies/www/icon.png && \
+  labwc --version
+
+# WadOS's own programs, built for Fedora 44 in images/builder: the
+# clipboard bridge (crates/wad-clip), the desktop's moves between the screen
+# and a stream (crates/wad-session), and the desktop shell (apps/selkies-desktop:
+# a plain Wayland client, cairo + libwayland; it starts apps through gio).
+COPY --from=bin / /usr/local/bin/
+RUN \
+  echo "**** check they run here ****" && \
+  ! ldd /usr/local/bin/selkies-desktop /usr/local/bin/wadspaces-clipboard /usr/local/bin/wadspaces-session | grep 'not found' && \
+  wadspaces-clipboard --version && \
+  wadspaces-session --version && \
+  tmux -f /etc/tmux.conf -L check start-server ';' kill-server
+
+# HOOK(browser): the browser goes here, a later phase (a Cactus fork; v1's
+# WadBrowser is gone). It brings: its binary in /usr/local/bin, BROWSER and
+# xdg-open's http(s)/text/html handlers (/etc/xdg/mimeapps.list) pointed at
+# it, and /usr/local/bin/wadspaces-webapp, the web apps' launchers, which
+# init-wadspaces-workspace calls for /run/wadspaces-extra/webapps.json (see
+# HOOK(browser) there). Until then links open in whatever app claims them.
+
+# Fedora's updates, as of the build day (VERSION, from images/build.sh): the
+# installs above take what they install new, not updates to what the base
+# image already had. A package may only add files, so a base behind Fedora
+# fails a capture whenever an app's install would upgrade a library.
+RUN \
+  echo "**** Fedora's updates as of ${VERSION} ****" && \
+  dnf -y upgrade && \
+  dnf clean all && \
+  rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*
+
+# Packages (wadspaces-pkg: an app's, tool's or extension's files on their
+# own, captured on this base and copied onto it) fit any base with the same
+# ABI. Bump it only when packages built on the old base stop fitting (a new
+# Fedora release, a library dropped): then every package is built again.
+ARG WADSPACES_ABI=fedora44.1
+LABEL io.wadspaces.abi="${WADSPACES_ABI}"
+RUN mkdir -p /usr/share/wadspaces && echo "${WADSPACES_ABI}" > /usr/share/wadspaces/abi
+
+# What wadd reads off a base. io.wados.base: this is one.
+# io.wadspaces.projects: it clones its GitHub projects and copies in the rest
+# itself (wadspaces-projects), "3": takes mounts too. io.wadspaces.extras: a
+# wadspace's layout and the rest arrive when it starts (/run/wadspaces-extra,
+# init-wadspaces-workspace), not in its image. io.wadspaces.display: its
+# desktop can move between the screen and a stream while it runs (svc-de
+# reads /run/wadspaces-extra/display; wadspaces-session closes and reopens
+# apps; terminals in tmux).
+LABEL io.wados.base="1" \
+      io.wados.fedora="44" \
+      io.wadspaces.projects="3" \
+      io.wadspaces.extras="1" \
+      io.wadspaces.display="2"
+
+VOLUME /config

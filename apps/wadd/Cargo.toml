@@ -1,0 +1,35 @@
+[package]
+name = "wadd"
+description = "The WadSpaces machine daemon: the machine's wadspaces (their documents, images and runs), over /run/wadd/wadd.sock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+axum.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+indexmap.workspace = true
+libc.workspace = true
+nix.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+wad-config.workspace = true
+wad-gen.workspace = true
+wad-model.workspace = true
+wad-podman.workspace = true
+wad-proto.workspace = true
+wad-systemd.workspace = true
+wad-wayland.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+wad-wadd-client.workspace = true

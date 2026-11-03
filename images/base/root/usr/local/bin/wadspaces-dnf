@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# Build-time: install a desktop app from Fedora and note its launcher.
+#
+#   wadspaces-dnf gimp --desktop org.gimp.GIMP.desktop gimp
+#   wadspaces-dnf freecad freecad            (launcher found automatically)
+#   wadspaces-dnf --clean                    (last, in the same RUN)
+#
+# Writes the launcher's basename to /etc/wadspaces/apps.d/<app-id>.list, where
+# wadspaces-layout looks it up when it puts the app on the desktop. Without
+# --desktop it takes the first new visible launcher the packages added.
+# Weak dependencies stay out (v1's apt --no-install-recommends). A generated
+# RUN installs every app and ends in --clean, so dnf's metadata is fetched
+# once and doesn't stay in the image.
+set -euo pipefail
+export CURL_HOME=/usr/local/lib/wadspaces  # .curlrc: retries
+APPS=/usr/share/applications
+
+log() { echo "**** [wadspaces-dnf] $* ****"; }
+
+if [[ "${1:-}" == "--clean" ]]; then
+    dnf clean all > /dev/null
+    rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*
+    exit 0
+fi
+
+usage() { echo "usage: wadspaces-dnf <app-id> [--desktop <file.desktop>] <package>... | --clean" >&2; exit 2; }
+[[ $# -ge 2 ]] || usage
+APP="$1"; shift
+[[ "${APP}" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "bad app id: ${APP}" >&2; exit 2; }
+DESKTOP=""
+if [[ "${1:-}" == "--desktop" ]]; then
+    DESKTOP="$2"; shift 2
+fi
+[[ $# -ge 1 ]] || usage
+for p in "$@"; do
+    # Fedora's names have capitals, underscores and pluses (ImageMagick,
+    # libsigc++30); never an option, a path or a glob.
+    [[ "${p}" =~ ^[A-Za-z0-9][A-Za-z0-9_+.-]*$ ]] || { echo "bad package name: ${p}" >&2; exit 2; }
+done
+
+visible() {
+    # Launchers a desktop would show: not NoDisplay/Hidden, and an application.
+    local f
+    for f in "${APPS}"/*.desktop; do
+        [[ -f "$f" ]] || continue
+        grep -qiE '^(NoDisplay|Hidden)=true' "$f" && continue
+        grep -q '^Type=Application' "$f" || continue
+        basename "$f"
+    done | sort
+}
+
+BEFORE="$(visible)"
+log "installing ${APP}: $*"
+dnf -y --setopt=install_weak_deps=False install "$@"
+
+if [[ -n "${DESKTOP}" ]] && [[ ! -f "${APPS}/${DESKTOP}" ]]; then
+    log "WARN: ${DESKTOP} isn't in ${APPS}; looking for the launcher ${APP} added instead"
+    DESKTOP=""
+fi
+if [[ -z "${DESKTOP}" ]]; then
+    DESKTOP="$(comm -13 <(printf '%s\n' "${BEFORE}") <(visible) | head -n1)"
+fi
+mkdir -p /etc/wadspaces/apps.d
+if [[ -n "${DESKTOP}" ]]; then
+    echo "${DESKTOP}" > "/etc/wadspaces/apps.d/${APP}.list"
+    log "${APP} -> ${DESKTOP}"
+else
+    log "WARN: ${APP} added no launcher; it won't get a desktop icon"
+fi

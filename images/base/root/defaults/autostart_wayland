@@ -1,0 +1,19 @@
+# Run by labwc with /bin/sh, so keep this POSIX — no bashisms.
+
+# Desktop background. selkies-desktop clears its own background surface to
+# fully transparent (CAIRO_OPERATOR_CLEAR) and only paints the icons onto it,
+# so what's drawn underneath shows through: the wallpaper, else the dark
+# colour on its own.
+if [ -n "${WALLPAPER}" ] && [ -f "${WALLPAPER}" ]; then
+  swaybg \
+    -m "${WALLPAPER_MODE:-center}" \
+    -c "${WALLPAPER_COLOR:-#0a0614}" \
+    -i "${WALLPAPER}" > /dev/null 2>&1 &
+else
+  swaybg -c "${WALLPAPER_COLOR:-#0a0614}" > /dev/null 2>&1 &
+fi
+
+# Per-wadspace and per-feature hooks (e.g. 40-vscode-terminal.sh, 50-layout.sh).
+for hook in /etc/wadspaces/autostart.d/*.sh; do
+  [ -f "${hook}" ] && . "${hook}"
+done

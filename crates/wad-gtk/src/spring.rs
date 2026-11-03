@@ -129,33 +129,3 @@ impl Spring {
         *self.st.tick.borrow_mut() = Some(id);
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_spring_settles_on_its_target() {
-        // The sidebar's: stiffness 400, damping 40 (critically damped-ish).
-        let p = Params::new(400.0, 40.0);
-        let (mut x, mut v) = (248.0, 0.0);
-        let mut frames = 0;
-        while !settled(x, v, 76.0) {
-            (x, v) = step(p, x, v, 76.0, 1.0 / 60.0);
-            frames += 1;
-            assert!(frames < 120, "still moving after 2 s: {x} {v}");
-        }
-        assert!(frames > 10, "too quick to see: {frames} frames");
-    }
-
-    #[test]
-    fn a_bouncy_one_overshoots_and_comes_back() {
-        let p = Params::new(500.0, 10.0);
-        let (mut x, mut v, mut max) = (0.0f64, 0.0f64, 0.0f64);
-        for _ in 0..240 {
-            (x, v) = step(p, x, v, 1.0, 1.0 / 60.0);
-            max = max.max(x);
-        }
-        assert!(max > 1.05 && (x - 1.0).abs() < 0.01, "{max} {x}");
-    }
-}

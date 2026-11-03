@@ -1,0 +1,690 @@
+#!/usr/bin/python3
+"""Packages: what one install adds to the base, on its own.
+
+    wadspaces-pkg capture <id> --out <dir> [--needs a,b] [--probe <cmd>]
+                          [--allow <glob>]... [--lax] -- <command>...
+    wadspaces-pkg assemble
+
+capture (a package's build) notes every path on this filesystem, runs the
+command, and copies what it added into <dir>, with the folders above as they
+are, so a FROM scratch stage takes just that:
+
+    RUN wadspaces-pkg capture vscode --out /out -- wadspaces-feature vscode
+    FROM scratch
+    COPY --from=build /out/ /
+
+What several installs share isn't copied: what this install added to it is
+kept as fragments under /usr/share/wadspaces/pkg/<id>/, with the package's
+files and meta.json:
+
+    rpmdb            the RPM headers the install added to rpm's database (one
+                     SQLite file, /usr/lib/sysimage/rpm), as `rpmdb
+                     --exportdb` writes them; `rpms` lists them by NEVRA
+    passwd group shadow gshadow subuid subgid shells
+                     the lines it added to those files
+    alternatives/<name>   the alternatives(8) it registered or added to
+                     (/var/lib/alternatives/<name>, as it left it)
+
+dnf5's own state (/usr/lib/sysimage/libdnf5: why each package is there,
+which repository it came from, its history) is left out: an assembled
+image's dnf sees a package's RPMs as installed outside it, which it never
+removes as unneeded. Generated caches aren't copied either; assemble makes
+them again. Any other base file the command changed or deleted stops the
+build (a package never replaces the base's own files) unless an --allow
+glob names it; --lax only reports them.
+
+assemble (on a base once packages are copied onto it, and in a package's
+build after the packages it needs) merges every package's fragments into the
+live files and imports its RPM headers into rpm's database (`rpmdb
+--importdb`), then runs the triggers the packages asked for (ldconfig, the
+icon, desktop, mime, schema, font and module caches). Running it again
+changes nothing.
+"""
+import fnmatch
+import hashlib
+import json
+import os
+import re
+import stat
+import struct
+import subprocess
+import sys
+
+PKG_DIR = "/usr/share/wadspaces/pkg"
+ABI_FILE = "/usr/share/wadspaces/abi"
+
+# Never walked: other filesystems, scratch, homes and logs; rpm's database
+# (its headers are the rpmdb fragment) and dnf5's state (left out).
+SKIP = {
+    "/proc", "/sys", "/dev", "/run", "/tmp", "/var/tmp", "/config", "/root", "/home",
+    "/var/log", "/var/cache", "/var/lib/dnf", "/var/lib/rpm-state",
+    "/usr/lib/sysimage/rpm", "/usr/lib/sysimage/libdnf5",
+}
+
+# Neither copied nor reported: locks, backups, the build's own mounts, and
+# caches assemble makes again.
+IGNORE = [
+    "/etc/ld.so.cache", "/etc/.pwd.lock", "/etc/hosts", "/etc/hostname", "/etc/resolv.conf",
+    "/etc/passwd-", "/etc/group-", "/etc/shadow-", "/etc/gshadow-", "/etc/subuid-", "/etc/subgid-",
+    "/etc/.updated", "/var/.updated",
+    "/usr/share/icons/*/icon-theme.cache", "/usr/share/applications/mimeinfo.cache",
+    "/usr/local/share/applications/mimeinfo.cache",
+    "/usr/share/glib-2.0/schemas/gschemas.compiled", "/usr/lib*/gdk-pixbuf-2.0/*/loaders.cache",
+    "/usr/lib*/gio/modules/giomodule.cache", "/usr/lib*/gtk-3.0/*/immodules.cache",
+    "/usr/lib*/gconv/gconv-modules.cache", "/usr/lib/fontconfig/cache/*",
+    "/usr/share/info/dir", "/usr/share/info/dir.old",
+    "/usr/share/wadspaces/vscode-extensions/extensions.json",
+]
+# update-mime-database writes everything under /usr/share/mime but packages/.
+MIME = "/usr/share/mime/"
+
+# Shared text files kept as fragments: the lines this install added.
+LINES = {
+    "/etc/passwd": ("passwd", ":"), "/etc/group": ("group", ":"),
+    "/etc/shadow": ("shadow", ":"), "/etc/gshadow": ("gshadow", ":"),
+    "/etc/subuid": ("subuid", ":"), "/etc/subgid": ("subgid", ":"),
+    "/etc/shells": ("shells", None),
+}
+# alternatives(8)' records, one file per name: merged, not copied.
+ALTERNATIVES = "/var/lib/alternatives"
+
+# Base files any package may change (the last one copied wins; assemble
+# points each alternative's links at its best again).
+ALLOW = ["/etc/alternatives/*"]
+
+TRIGGERS = [
+    ("ldconfig", re.compile(r"^/(usr/)?(local/)?lib(32|64|x32)?/.*\.so(\.[0-9.]+)?$|^/etc/ld\.so\.conf\.d/")),
+    ("fonts", re.compile(r"^/usr/(local/)?share/fonts/|^/etc/fonts/")),
+    ("icons", re.compile(r"^/usr/share/icons/")),
+    ("desktop", re.compile(r"^/usr/(local/)?share/applications/.*\.desktop$")),
+    ("mime", re.compile(r"^/usr/share/mime/packages/")),
+    ("schemas", re.compile(r"^/usr/share/glib-2\.0/schemas/")),
+    ("pixbuf", re.compile(r"^/usr/lib(64)?/gdk-pixbuf-2\.0/[^/]+/loaders/")),
+    ("gio", re.compile(r"^/usr/lib(64)?/gio/modules/")),
+    ("gtk3-immodules", re.compile(r"^/usr/lib(64)?/gtk-3\.0/[^/]+/immodules/")),
+    ("gconv", re.compile(r"^/usr/lib(64)?/gconv/")),
+]
+
+
+def log(msg):
+    print(f"[wadspaces-pkg] {msg}", flush=True)
+
+
+def matches(path, globs):
+    return any(fnmatch.fnmatchcase(path, g) for g in globs)
+
+
+def ignored(path):
+    return matches(path, IGNORE) or (path.startswith(MIME) and not path.startswith(MIME + "packages/"))
+
+
+def shared(path):
+    return path in LINES or os.path.dirname(path) == ALTERNATIVES
+
+
+def snapshot(skip):
+    """Every path on /'s filesystem: what lstat says about it, links not
+    followed, mount points and `skip` left out."""
+    root_dev = os.lstat("/").st_dev
+    seen = {}
+    todo = ["/"]
+    while todo:
+        top = todo.pop()
+        try:
+            entries = list(os.scandir(top))
+        except OSError:
+            continue
+        for e in entries:
+            p = e.path if top != "/" else "/" + e.name
+            if p in skip:
+                continue
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            kind = stat.S_IFMT(st.st_mode)
+            link = os.readlink(p) if kind == stat.S_IFLNK else ""
+            size = st.st_size if kind == stat.S_IFREG else 0
+            mtime = st.st_mtime_ns if kind != stat.S_IFDIR else 0
+            seen[p] = (kind, stat.S_IMODE(st.st_mode), st.st_uid, st.st_gid, size, mtime, link)
+            if kind == stat.S_IFDIR and st.st_dev == root_dev:
+                todo.append(p)
+    return seen
+
+
+def read(path):
+    try:
+        with open(path, encoding="utf-8", errors="surrogateescape") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def read_bytes(path):
+    try:
+        with open(path, "rb") as f:
+            return f.read()
+    except OSError:
+        return b""
+
+
+def lines_by(text, sep):
+    out = {}
+    for line in text.splitlines():
+        if line.strip():
+            out[line.split(sep, 1)[0] if sep else line] = line
+    return out
+
+
+# ------------------------------------------------------------ RPM headers
+# `rpmdb --exportdb` writes each installed package's header as rpm keeps it
+# (headerWrite with its magic): 8 magic bytes, the index's length and the
+# data's (big-endian), then the index (tag, type, offset, count) and the data.
+# `rpmdb --importdb` reads the same back into the database, as it was
+# installed (its files' states, install time and all).
+HEADER_MAGIC = b"\x8e\xad\xe8\x01\x00\x00\x00\x00"
+NAME, VERSION, RELEASE, EPOCH, ARCH = 1000, 1001, 1002, 1003, 1022
+
+
+def split_headers(data):
+    out, i = [], 0
+    while i + 16 <= len(data):
+        if data[i:i + 8] != HEADER_MAGIC:
+            sys.exit(f"wadspaces-pkg: not an rpm header list (at byte {i})")
+        il, dl = struct.unpack(">ii", data[i + 8:i + 16])
+        n = 16 + il * 16 + dl
+        out.append(data[i:i + n])
+        i += n
+    return out
+
+
+def header_tags(blob):
+    """The header's NAME, VERSION, RELEASE, EPOCH and ARCH."""
+    il, _ = struct.unpack(">ii", blob[8:16])
+    store = blob[16 + il * 16:]
+    tags = {}
+    for k in range(il):
+        tag, kind, off, count = struct.unpack(">iiii", blob[16 + k * 16:32 + k * 16])
+        if tag in (NAME, VERSION, RELEASE, ARCH) and kind == 6:  # a string
+            tags[tag] = store[off:store.index(b"\0", off)].decode("utf-8", "surrogateescape")
+        elif tag == EPOCH and kind == 4 and count == 1:  # an int32
+            tags[tag] = struct.unpack(">i", store[off:off + 4])[0]
+    return tags
+
+
+class Rpm:
+    """One header: its NEVRA as rpm prints %{NEVRA}, and its NVRA, which
+    rpm -e takes."""
+
+    def __init__(self, blob):
+        t = header_tags(blob)
+        self.blob = blob
+        self.name, self.arch = t.get(NAME, ""), t.get(ARCH)
+        epoch = f"{t[EPOCH]}:" if EPOCH in t else ""
+        self.evr = f"{epoch}{t.get(VERSION, '')}-{t.get(RELEASE, '')}"
+        arch = f".{self.arch}" if self.arch else ""
+        self.nevra = f"{self.name}-{self.evr}{arch}"
+        self.nvra = f"{self.name}-{t.get(VERSION, '')}-{t.get(RELEASE, '')}{arch}"
+
+
+def installed():
+    """The live database's headers, by NEVRA."""
+    run = subprocess.run(["rpmdb", "--exportdb"], capture_output=True)
+    if run.returncode:
+        sys.exit(f"wadspaces-pkg: rpmdb --exportdb failed: {run.stderr.decode(errors='replace').strip()}")
+    return {r.nevra: r for r in map(Rpm, split_headers(run.stdout))}
+
+
+def rpm_fragment(before, frag_dir):
+    """The headers the install added, written as frag_dir/rpmdb (and their
+    NEVRAs as frag_dir/rpms); base packages it upgraded, removed or changed,
+    as problems."""
+    after = installed()
+    problems = []
+    added = [r for k, r in after.items() if k not in before]
+    for k, r in before.items():
+        if k not in after:
+            newer = [a.nevra for a in added if (a.name, a.arch) == (r.name, r.arch)]
+            if newer:
+                problems.append(f"rpm: {k} was upgraded to {newer[0]} (a base package was upgraded)")
+            else:
+                problems.append(f"rpm: {k} was removed")
+        elif after[k].blob != r.blob:
+            problems.append(f"rpm: {k}'s record changed (another package took over its files)")
+    upgraded = {(r.name, r.arch) for k, r in before.items() if k not in after}
+    added = sorted((a for a in added if (a.name, a.arch) not in upgraded), key=lambda a: a.nevra)
+    if added:
+        with open(os.path.join(frag_dir, "rpmdb"), "wb") as f:
+            for a in added:
+                f.write(a.blob)
+        with open(os.path.join(frag_dir, "rpms"), "w") as f:
+            f.write("".join(a.nevra + "\n" for a in added))
+    return [a.nevra for a in added], problems
+
+
+def newer(a, b):
+    """rpm's own say on whether EVR a is newer than EVR b."""
+    run = subprocess.run(
+        ["rpm", "--define", f"_wpa {a}", "--define", f"_wpb {b}",
+         "--eval", "%{lua: print(rpm.vercmp(macros._wpa, macros._wpb))}"],
+        capture_output=True, text=True,
+    )
+    return run.stdout.strip() == "1"
+
+
+def assemble_rpms(pkgs):
+    """Every package's headers into rpm's database, each once: one another
+    package brought already is skipped, and of two versions of one the newer
+    is kept (the files are whichever package was copied on last)."""
+    live = installed()
+    by_na = {}
+    for r in live.values():
+        by_na.setdefault((r.name, r.arch), []).append(r)
+    queued, erase = {}, []
+    for pkg in pkgs:
+        for r in map(Rpm, split_headers(read_bytes(os.path.join(PKG_DIR, pkg, "rpmdb")))):
+            if r.nevra in live or r.nevra in queued:
+                continue
+            others = [o for o in by_na.get((r.name, r.arch), []) if r.name != "gpg-pubkey"]
+            if others:
+                old = others[0]
+                if not newer(r.evr, old.evr):
+                    log(f"WARN: {pkg} has {r.nevra}, older than {old.nevra}; the newer is kept")
+                    continue
+                log(f"WARN: {pkg} has {r.nevra} over {old.nevra}")
+                if old.nevra in queued:
+                    del queued[old.nevra]
+                else:
+                    erase.append(old.nvra)
+                by_na[(r.name, r.arch)].remove(old)
+            queued[r.nevra] = r
+            by_na.setdefault((r.name, r.arch), []).append(r)
+    if erase:
+        subprocess.run(["rpm", "-e", "--justdb", "--nodeps", "--noscripts", "--notriggers", *erase], check=True)
+    if queued:
+        run = subprocess.run(["rpmdb", "--importdb"], input=b"".join(r.blob for r in queued.values()))
+        if run.returncode:
+            sys.exit("wadspaces-pkg: rpmdb --importdb failed")
+    return len(queued)
+
+
+# ------------------------------------------------------------ alternatives
+def alt_parse(text):
+    """An alternatives record: its mode, its links (the leader's, then each
+    follower's name and link), and its choices (path[@family], priority, a
+    path per follower)."""
+    rows = text.split("\n")
+    if "" not in rows:
+        return None
+    cut = rows.index("")
+    head, rest = rows[:cut], rows[cut + 1:]
+    if len(head) < 2 or (len(head) - 2) % 2:
+        return None
+    width = 2 + (len(head) - 2) // 2
+    while rest and rest[-1] == "":
+        rest.pop()
+    choices = [rest[i:i + width] for i in range(0, len(rest), width)]
+    if any(len(c) != width for c in choices):
+        return None
+    return head, choices
+
+
+def alt_text(head, choices):
+    return "\n".join(head) + "\n\n" + "".join("\n".join(c) + "\n" for c in choices)
+
+
+def alt_fragments(before, frag_dir):
+    """The alternatives records the install made or changed, as it left them."""
+    problems = []
+    try:
+        names = sorted(os.listdir(ALTERNATIVES))
+    except OSError:
+        names = []
+    for name in names:
+        now = read(os.path.join(ALTERNATIVES, name))
+        if before.get(name) != now:
+            os.makedirs(os.path.join(frag_dir, "alternatives"), exist_ok=True)
+            with open(os.path.join(frag_dir, "alternatives", name), "w") as f:
+                f.write(now)
+    problems += [f"deleted: {ALTERNATIVES}/{n}" for n in sorted(set(before) - set(names))]
+    return problems
+
+
+def alt_before():
+    try:
+        return {n: read(os.path.join(ALTERNATIVES, n)) for n in os.listdir(ALTERNATIVES)}
+    except OSError:
+        return {}
+
+
+def assemble_alternatives(pkgs):
+    """Each package's records merged into the live ones (every choice any of
+    them has), then each merged one in auto mode pointed at its best."""
+    redo = set()
+    for pkg in pkgs:
+        frag = os.path.join(PKG_DIR, pkg, "alternatives")
+        try:
+            names = sorted(os.listdir(frag))
+        except OSError:
+            continue
+        for name in names:
+            text = read(os.path.join(frag, name))
+            live_path = os.path.join(ALTERNATIVES, name)
+            live = read(live_path)
+            if live == text:
+                continue
+            if not live:
+                os.makedirs(ALTERNATIVES, exist_ok=True)
+                write_live(live_path, text)
+                redo.add(name)
+                continue
+            mine, theirs = alt_parse(text), alt_parse(live)
+            if not mine or not theirs or mine[0][1:] != theirs[0][1:]:
+                log(f"WARN: {pkg}'s alternative {name} doesn't fit the one here; this one is kept")
+                continue
+            have = {c[0] for c in theirs[1]}
+            more = [c for c in mine[1] if c[0] not in have]
+            if more:
+                write_live(live_path, alt_text(theirs[0], theirs[1] + more))
+                redo.add(name)
+    for name in sorted(redo):
+        if read(os.path.join(ALTERNATIVES, name)).startswith("auto\n"):
+            subprocess.run(["alternatives", "--auto", name], stdout=subprocess.DEVNULL)
+
+
+# ------------------------------------------------------------ capture
+def shared_before():
+    return {p: read(p) for p in LINES}
+
+
+def fragments(before, frag_dir):
+    """What the install added to each shared text file, written under
+    frag_dir; base records it changed, as problems."""
+    problems = []
+    os.makedirs(frag_dir, exist_ok=True)
+
+    def write(name, text):
+        if text:
+            with open(os.path.join(frag_dir, name), "w", encoding="utf-8", errors="surrogateescape") as f:
+                f.write(text)
+
+    for path, (name, sep) in LINES.items():
+        old, new = lines_by(before[path], sep), lines_by(read(path), sep)
+        added = [line for key, line in new.items() if key not in old]
+        changed = [key for key, line in new.items() if key in old and old[key] != line]
+        problems += [f"{path}: {key} changed" for key in changed if name not in ("shadow", "gshadow")]
+        write(name, "\n".join(added) + "\n" if added else "")
+    return problems
+
+
+def content_sha(out, frag_dir):
+    """The package's files, owners and modes, without times: the same
+    install twice gives the same sha. (rpm's headers carry their install
+    time: the rpms list stands for them.)"""
+    skip = {os.path.join(frag_dir, "meta.json"), os.path.join(frag_dir, "rpmdb")}
+    h = hashlib.sha256()
+    for top, dirs, files in os.walk(out):
+        dirs.sort()
+        for name in sorted(dirs + files):
+            p = os.path.join(top, name)
+            if p in skip:
+                continue
+            rel = "/" + os.path.relpath(p, out)
+            st = os.lstat(p)
+            h.update(f"{rel}\0{st.st_mode:o}\0{st.st_uid}\0{st.st_gid}\0".encode("utf-8", "surrogateescape"))
+            if stat.S_ISLNK(st.st_mode):
+                h.update(os.readlink(p).encode("utf-8", "surrogateescape"))
+            elif stat.S_ISREG(st.st_mode):
+                with open(p, "rb") as f:
+                    for chunk in iter(lambda: f.read(1 << 20), b""):
+                        h.update(chunk)
+            h.update(b"\n")
+    return h.hexdigest()
+
+
+def copy(paths, out):
+    """paths (absolute, parents before children) from / into out, as they
+    are: owners, modes, setuid bits, capabilities and hardlinks kept."""
+    os.makedirs(out, exist_ok=True)
+    listing = "\0".join(p.lstrip("/") for p in paths).encode("utf-8", "surrogateescape")
+    # SELinux labels are the host's business, not the package's.
+    flags = ["--xattrs", "--xattrs-include=*", "--xattrs-exclude=security.selinux", "--acls", "--numeric-owner"]
+    pack = subprocess.Popen(
+        ["tar", "--create", "--file=-", "--directory=/", "--no-recursion", "--null", "--files-from=-", *flags],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+    )
+    unpack = subprocess.Popen(
+        ["tar", "--extract", "--file=-", f"--directory={out}", "--preserve-permissions", "--same-owner", *flags],
+        stdin=pack.stdout,
+    )
+    pack.stdout.close()
+    pack.stdin.write(listing)
+    pack.stdin.close()
+    if pack.wait() or unpack.wait():
+        sys.exit("wadspaces-pkg: copying the package's files failed")
+
+
+def capture(pkg, out, command, needs, probe, allow, lax):
+    if not re.match(r"^[a-z0-9][a-z0-9.+-]*$", pkg):
+        sys.exit(f"wadspaces-pkg: bad package id: {pkg}")
+    out = os.path.abspath(out)
+    skip = SKIP | {out}
+    log(f"{pkg}: noting the base")
+    before = snapshot(skip)
+    before_shared = shared_before()
+    before_alts = alt_before()
+    before_rpms = installed()
+    log(f"{pkg}: running {' '.join(command)}")
+    status = subprocess.run(command).returncode
+    if status:
+        sys.exit(f"wadspaces-pkg: {' '.join(command)} failed ({status})")
+    after = snapshot(skip)
+
+    added, changed, deleted, dirs = [], [], [], []
+    for p, now in after.items():
+        if ignored(p) or shared(p):
+            continue
+        was = before.get(p)
+        if was is None:
+            added.append(p)
+        elif was != now:
+            if now[0] == stat.S_IFDIR and was[0] == stat.S_IFDIR:
+                dirs.append(p)
+            elif matches(p, ALLOW + allow):
+                added.append(p)
+            else:
+                changed.append(p)
+    for p in before:
+        if p not in after and not ignored(p) and not shared(p) and not matches(p, ALLOW + allow):
+            deleted.append(p)
+    frag_dir = os.path.join(out, PKG_DIR.lstrip("/"), pkg)
+    problems = fragments(before_shared, frag_dir)
+    problems += alt_fragments(before_alts, frag_dir)
+    rpms, rpm_problems = rpm_fragment(before_rpms, frag_dir)
+    problems += rpm_problems
+    problems += [f"changed: {p}" for p in sorted(changed)] + [f"deleted: {p}" for p in sorted(deleted)]
+    for p in sorted(dirs):
+        log(f"WARN: {pkg} changed the base folder {p}'s owner or mode (the base's is kept)")
+    if problems:
+        for line in problems[:200]:
+            log(("WARN: " if lax else "") + line)
+        if len(problems) > 200:
+            log(f"... and {len(problems) - 200} more")
+        if not lax:
+            # Fedora released an update the base hasn't got: installing the app
+            # takes it. The fix is a newer base, not the package.
+            upgraded = sorted({p.split(": ", 1)[1].split(" ")[0] for p in problems if p.endswith("(a base package was upgraded)")})
+            hint = f"; the base is behind Fedora's updates ({', '.join(upgraded)}): build it again (images/build.sh --only base)" if upgraded else ""
+            sys.exit(f"wadspaces-pkg: {pkg} changed {len(problems)} of the base's files; a package only adds files{hint}")
+
+    # The folders above what's copied, as the base has them; never / or the
+    # merged-usr links (they aren't walked into: paths are real paths).
+    wanted = set(added)
+    for p in added:
+        parent = os.path.dirname(p)
+        while parent != "/" and parent not in wanted:
+            wanted.add(parent)
+            parent = os.path.dirname(parent)
+    paths = sorted(wanted)
+    copy(paths, out)
+
+    files = [p for p in paths if p in added and after[p][0] != stat.S_IFDIR]
+    version = ""
+    if probe:
+        run = subprocess.run(["sh", "-c", probe], capture_output=True, text=True)
+        said = (run.stdout or run.stderr).strip()
+        version = said.splitlines()[0][:80] if said else ""
+    triggers = sorted({name for name, rx in TRIGGERS for p in files if rx.search(p)})
+    if os.path.isdir(os.path.join(frag_dir, "alternatives")):
+        triggers.append("alternatives")
+    with open(os.path.join(frag_dir, "files"), "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write("".join(p + "\n" for p in files))
+    meta = {
+        "id": pkg,
+        "version": version,
+        "needs": needs,
+        "abi": read(ABI_FILE).strip(),
+        "triggers": triggers,
+        "files": len(files),
+        "bytes": sum(after[p][4] for p in files),
+        "rpms": rpms,
+    }
+    meta["content"] = content_sha(out, frag_dir)
+    with open(os.path.join(frag_dir, "meta.json"), "w") as f:
+        json.dump(meta, f, indent=1)
+    log(f"{pkg}: {len(files)} files, {len(rpms)} rpms, {meta['bytes'] / 1e6:.1f} MB, content {meta['content'][:12]}"
+        + (f", version {version}" if version else ""))
+
+
+# ------------------------------------------------------------ assemble
+def write_live(path, text):
+    tmp = path + ".wadspaces-pkg"
+    with open(tmp, "w", encoding="utf-8", errors="surrogateescape") as f:
+        f.write(text)
+    if os.path.exists(path):
+        st = os.stat(path)
+        os.chown(tmp, st.st_uid, st.st_gid)
+        os.chmod(tmp, stat.S_IMODE(st.st_mode))
+    os.replace(tmp, path)
+
+
+def assemble():
+    try:
+        pkgs = sorted(d for d in os.listdir(PKG_DIR) if os.path.isfile(os.path.join(PKG_DIR, d, "meta.json")))
+    except OSError:
+        pkgs = []
+    if not pkgs:
+        log("no packages")
+        return
+    for path, (name, sep) in LINES.items():
+        text = read(path)
+        live = lines_by(text, sep)
+        # passwd's and group's ids: two packages captured apart may have
+        # given different users the same one.
+        numbered = name in ("passwd", "group")
+        ids = {line.split(":")[2]: key for key, line in live.items() if numbered and line.count(":") >= 2}
+        add = []
+        for pkg in pkgs:
+            for key, line in lines_by(read(os.path.join(PKG_DIR, pkg, name)), sep).items():
+                if key not in live:
+                    if numbered and line.count(":") >= 2:
+                        uid = line.split(":")[2]
+                        if uid in ids:
+                            log(f"WARN: {pkg}'s {name} entry {key} has id {uid}, which {ids[uid]} has too")
+                        ids[uid] = key
+                    live[key] = line
+                    add.append(line)
+                elif sep and live[key] != line and name not in ("shadow", "gshadow"):
+                    log(f"WARN: {pkg} wants {path}'s {key} as it had it; the base's is kept")
+        if add:
+            write_live(path, text.rstrip("\n") + ("\n" if text.strip() else "") + "\n".join(add) + "\n")
+    assemble_alternatives(pkgs)
+    imported = assemble_rpms(pkgs)
+    triggers = set()
+    for pkg in pkgs:
+        try:
+            with open(os.path.join(PKG_DIR, pkg, "meta.json")) as f:
+                triggers |= set(json.load(f).get("triggers", []))
+        except (OSError, ValueError):
+            log(f"WARN: {pkg}'s meta.json can't be read")
+    run_triggers(triggers)
+    log(f"assembled {len(pkgs)} packages ({imported} rpms imported): {', '.join(pkgs)}")
+
+
+def run_triggers(triggers):
+    def have(tool):
+        if os.path.isabs(tool):
+            return os.access(tool, os.X_OK)
+        return any(os.access(os.path.join(d, tool), os.X_OK) for d in os.environ.get("PATH", "/usr/bin").split(":"))
+
+    def run(*cmd):
+        if have(cmd[0]):
+            subprocess.run(list(cmd), stdout=subprocess.DEVNULL)
+
+    def first(*tools):
+        return next((t for t in tools if have(t)), None)
+
+    run("ldconfig")
+    if "fonts" in triggers:
+        run("fc-cache", "-s")
+    if "icons" in triggers:
+        for theme in sorted(os.listdir("/usr/share/icons")):
+            if os.path.isfile(os.path.join("/usr/share/icons", theme, "index.theme")):
+                run("gtk-update-icon-cache", "-q", "-f", "-t", os.path.join("/usr/share/icons", theme))
+    if "desktop" in triggers:
+        for apps in ("/usr/share/applications", "/usr/local/share/applications"):
+            if os.path.isdir(apps):
+                run("update-desktop-database", "-q", apps)
+    if "mime" in triggers:
+        run("update-mime-database", "/usr/share/mime")
+    if "schemas" in triggers:
+        run("glib-compile-schemas", "/usr/share/glib-2.0/schemas")
+    if "pixbuf" in triggers and (tool := first("gdk-pixbuf-query-loaders-64", "gdk-pixbuf-query-loaders")):
+        run(tool, "--update-cache")
+    if "gio" in triggers and (tool := first("gio-querymodules-64", "gio-querymodules")):
+        run(tool, "/usr/lib64/gio/modules")
+    if "gtk3-immodules" in triggers and (tool := first("gtk-query-immodules-3.0-64", "gtk-query-immodules-3.0")):
+        run(tool, "--update-cache")
+    if "gconv" in triggers:
+        run("iconvconfig")
+
+
+def main():
+    args = sys.argv[1:]
+    if args == ["assemble"]:
+        assemble()
+        return 0
+    if len(args) >= 2 and args[0] == "capture" and "--" in args:
+        cut = args.index("--")
+        opts, command = args[2:cut], args[cut + 1:]
+        out, needs, probe, allow, lax = None, [], "", [], False
+        i = 0
+        while i < len(opts):
+            o = opts[i]
+            if o == "--lax":
+                lax = True
+                i += 1
+                continue
+            if i + 1 >= len(opts):
+                break
+            v = opts[i + 1]
+            if o == "--out":
+                out = v
+            elif o == "--needs":
+                needs = [n for n in v.split(",") if n]
+            elif o == "--probe":
+                probe = v
+            elif o == "--allow":
+                allow.append(v)
+            else:
+                break
+            i += 2
+        if i == len(opts) and out and command:
+            capture(args[1], out, command, needs, probe, allow, lax)
+            return 0
+    print(__doc__, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,13 @@
+[package]
+name = "wad-proto"
+description = "wadd's API (/v1) as types: what the shell, the apps and the phone send and get back"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+wad-model.workspace = true

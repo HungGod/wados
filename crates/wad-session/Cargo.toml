@@ -1,0 +1,19 @@
+[package]
+name = "wad-session"
+description = "A wadspace's desktop moving between the screen and its stream: what's open noted and closed, then opened again on the other display"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# Runs inside every wadspace (wadd's podman exec, labwc's autostart); built
+# for Debian trixie by images/build.sh, like wad-clip.
+[[bin]]
+name = "wadspaces-session"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde_json.workspace = true
+wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }

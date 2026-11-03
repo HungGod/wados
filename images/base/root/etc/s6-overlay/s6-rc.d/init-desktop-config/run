@@ -1,0 +1,57 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# What the desktop needs before it starts: a private runtime dir, GPU access
+# for abc, and our labwc config (dark: themerc-override). rc.xml, autostart
+# and the theme are rewritten every start so they can't drift from the image.
+
+log() { echo "[desktop-init] $*"; }
+
+# labwc and its clients need a runtime dir of their own. The display socket
+# (/run/wadspaces-display) is reached by absolute path, so this never touches it.
+XDG="/config/.XDG"
+rm -rf "${XDG}"
+mkdir -p "${XDG}"
+chown abc:abc "${XDG}"
+chmod 700 "${XDG}"
+printf '%s' "${XDG}" > /run/s6/container_environment/XDG_RUNTIME_DIR
+
+# GPU: put abc in whatever group owns each /dev/dri node. Under a machine's
+# user namespace the node's group isn't one of ours (65534, nobody's): the
+# render node is everyone's anyway.
+for dev in $(find /dev/dri -type c 2>/dev/null); do
+    gid=$(stat -c '%g' "${dev}")
+    [[ "${gid}" == 65534 ]] && continue
+    id -G abc | grep -qw "${gid}" && continue
+    name=$(getent group "${gid}" | cut -d: -f1)
+    if [[ -z "${name}" ]]; then
+        name="video${gid}"
+        groupadd -g "${gid}" "${name}"
+    fi
+    usermod -aG "${name}" abc
+    log "abc added to ${name} for ${dev}"
+done
+# No GPU node (or a VM without 3D): software rendering instead of a crash.
+if ! ls /dev/dri/renderD* > /dev/null 2>&1; then
+    log "no /dev/dri render node, labwc will render in software"
+    printf 'pixman' > /run/s6/container_environment/WLR_RENDERER
+fi
+
+# Devices wadd hands over while it runs (wadd's devices) come with
+# udev's events, and libudev listens for those only where udevd seems to run:
+# its control socket must be there before any app (Chrome) starts watching.
+mkdir -p /run/udev/data
+[[ -e /run/udev/control ]] || : > /run/udev/control
+
+CONF="/config/.config/labwc"
+mkdir -p "${CONF}"
+cp /defaults/labwc-rc.xml "${CONF}/rc.xml"
+# Title bars on windows (minimize, maximize, close): the wadspace's Look says.
+if [[ "${WADSPACES_TITLEBARS:-}" == "1" ]]; then
+    sed -i '/serverDecoration="no"/d' "${CONF}/rc.xml"
+    log "windows have title bars"
+fi
+cp /defaults/labwc-autostart "${CONF}/autostart"
+cp /defaults/labwc-themerc-override "${CONF}/themerc-override"
+[[ -f "${CONF}/menu.xml" ]] || cp /defaults/menu_wayland.xml "${CONF}/menu.xml"
+lsiown -R abc:abc /config/.config

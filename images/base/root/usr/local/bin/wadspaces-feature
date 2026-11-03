@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# Build-time installer for wadspace tools and apps.
+#
+#   RUN wadspaces-feature python nodejs vscode
+#
+# Each name maps to /usr/local/lib/wadspaces/features/<name>.sh. Scripts are
+# sourced in order in one shell so they share helpers (below); a feature that
+# another depends on calls `need <name>`. Every feature runs at most once per
+# image, and dnf's caches are cleaned at the end.
+set -euo pipefail
+export CURL_HOME=/usr/local/lib/wadspaces  # .curlrc: retries
+
+FEATURES_DIR=/usr/local/lib/wadspaces/features
+DONE_DIR=/var/lib/wadspaces/features
+mkdir -p "${DONE_DIR}" /etc/wadspaces/desktop-entries.d /etc/wadspaces/chown.d /etc/wadspaces/autostart.d
+
+log() { echo "**** [wadspaces-feature] $* ****"; }
+
+# Fedora packages, without weak dependencies (v1's --no-install-recommends).
+dnf_install() {
+    dnf -y --setopt=install_weak_deps=False install "$@"
+}
+
+# add_desktop_entry <feature> <basename.desktop>
+add_desktop_entry() {
+    echo "$2" >> "/etc/wadspaces/desktop-entries.d/$1.list"
+}
+
+# add_chown <feature> <path>
+add_chown() {
+    echo "$2" >> "/etc/wadspaces/chown.d/$1.list"
+}
+
+# github_latest_asset <owner/repo> <regex> -> prints the first matching asset URL.
+# With a token (a build secret: RUN --mount=type=secret,id=github_token) it
+# isn't held to GitHub's 60 requests an hour for everyone on one address.
+github_latest_asset() {
+    local auth=()
+    [[ -s /run/secrets/github_token ]] && auth=(-H "Authorization: Bearer $(cat /run/secrets/github_token)")
+    curl -fsSL "${auth[@]}" "https://api.github.com/repos/$1/releases?per_page=20" \
+        | grep -oE "\"browser_download_url\": *\"[^\"]+\"" \
+        | sed -E 's/.*"(https[^"]+)"$/\1/' \
+        | grep -E "$2" | head -n1
+}
+
+need() {
+    local name="$1"
+    [[ -e "${DONE_DIR}/${name}" ]] && return 0
+    local script="${FEATURES_DIR}/${name}.sh"
+    if [[ ! -f "${script}" ]]; then
+        echo "unknown feature: ${name} (have: $(ls "${FEATURES_DIR}" | sed 's/\.sh$//' | tr '\n' ' '))" >&2
+        exit 1
+    fi
+    log "installing ${name}"
+    # shellcheck disable=SC1090
+    source "${script}"
+    touch "${DONE_DIR}/${name}"
+}
+
+[[ $# -gt 0 ]] || { echo "usage: wadspaces-feature <feature>..." >&2; exit 2; }
+for f in "$@"; do need "$f"; done
+
+log "cleanup"
+dnf clean all > /dev/null
+rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/* /root/.npm /root/.cache

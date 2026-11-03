@@ -1,0 +1,44 @@
+<labwc_config>
+  <!--
+    WadSpaces desktop. Written by init-desktop-config every start.
+    Like the streamed images with HARDEN_KEYBINDS: no Alt+F4, Alt+Esc,
+    Alt+Space or Super+E. Windows open maximized, with no title bar unless
+    the wadspace's Look turns them on (WADSPACES_TITLEBARS=1: then
+    init-desktop-config drops the serverDecoration rule, and windows get a
+    title bar to minimize, restore or close them). Dark: the colours are in
+    themerc-override (labwc-themerc-override), over labwc's built-in theme.
+  -->
+  <core>
+    <decoration>server</decoration>
+    <gap>0</gap>
+  </core>
+
+  <theme>
+    <titlebar>
+      <layout>icon:iconify,max,close</layout>
+    </titlebar>
+    <cornerRadius>0</cornerRadius>
+  </theme>
+
+  <keyboard>
+    <default />
+    <keybind key="A-F4"><action name="None" /></keybind>
+    <keybind key="A-Escape"><action name="None" /></keybind>
+    <keybind key="A-space"><action name="None" /></keybind>
+    <keybind key="W-e"><action name="None" /></keybind>
+  </keyboard>
+
+  <mouse>
+    <default />
+    <context name="Root">
+      <mousebind button="Left" action="Press" />
+      <mousebind button="Right" action="Press"><action name="ShowMenu" menu="root-menu" /></mousebind>
+      <mousebind button="Middle" action="Press"><action name="ShowMenu" menu="client-list-combined-menu" /></mousebind>
+    </context>
+  </mouse>
+
+  <windowRules>
+    <windowRule identifier="*" serverDecoration="no" />
+    <windowRule identifier="*"><action name="Maximize" /></windowRule>
+  </windowRules>
+</labwc_config>

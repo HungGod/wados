@@ -12,12 +12,19 @@ publish = false
 
 [workspace.dependencies]
 wad-model = { path = "crates/wad-model" }
+wad-gen = { path = "crates/wad-gen" }
 wad-wayland = { path = "crates/wad-wayland" }
 wad-gtk = { path = "crates/wad-gtk" }
+wad-config = { path = "crates/wad-config" }
+wad-proto = { path = "crates/wad-proto" }
+wad-wadd-client = { path = "crates/wad-wadd-client" }
+wad-podman = { path = "crates/wad-podman" }
+wad-systemd = { path = "crates/wad-systemd" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
+async-trait = "0.1"
 indexmap = { version = "2", features = ["serde"] }
 toml = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
@@ -28,6 +35,17 @@ clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 tempfile = "3"
 async-channel = "2"
+reqwest = { version = "0.13", default-features = false, features = ["json", "form", "query", "rustls"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+base64 = "0.22"
+bytes = "1"
+futures-util = "0.3"
+http-body-util = "0.1"
+hyper = { version = "1", features = ["client", "server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+nix = { version = "0.31", features = ["user", "fs", "ioctl", "poll", "hostname"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
 wayland-client = "0.31"
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }

@@ -1,0 +1,9 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# The wadspace's session bus, a service of its own rather than labwc's
+# (dbus-run-session): it outlives a desktop moving between the screen and
+# its stream (svc-de), so terminals carried over in tmux keep a working bus.
+BUS="${XDG_RUNTIME_DIR:-/config/.XDG}/bus"
+rm -f "${BUS}"
+exec s6-setuidgid abc dbus-daemon --session --nofork --nopidfile --address="unix:path=${BUS}" > /dev/null 2>&1

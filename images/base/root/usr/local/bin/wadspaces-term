@@ -1,0 +1,16 @@
+#!/bin/bash
+# A terminal whose jobs outlive its window: foot running tmux (/etc/tmux.conf
+# keeps tmux out of sight), so they carry on while the wadspace moves
+# between the screen and a stream (wadspaces-session reopens the window).
+# Closing the window ends them, as with plain foot.
+#
+#   wadspaces-term [foot's --option=value options] [-e] [command [args...]]
+opts=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -e) shift; break ;;
+    --*=*) opts+=("$1"); shift ;;
+    *) break ;;
+  esac
+done
+exec foot "${opts[@]}" tmux new-session -s "term-$(date +%s%N)" "$@" ';' set-option destroy-unattached on
