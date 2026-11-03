@@ -1,28 +1,39 @@
 //! wados-shell: the WadSpaces shell on labwc. The launcher and the desktop
 //! (a scroll apart), the bar, the overlays (Super+Tab, Alt+Space, toasts),
-//! the lock screen and the Builder, as layer-shell surfaces and windows.
+//! the lock screen and the Builder, as layer-shell surfaces and windows,
+//! on wadd (wadd.rs follows it into the store; surfaces read the store).
 //!
 //!     wados-shell [--builder]
 //!
 //! It answers `wadsctl` on `$XDG_RUNTIME_DIR/wados/shell.sock`.
 
+// Phase 2: the surfaces are being built on the shell's verbs; this goes when they all use them.
+#![allow(dead_code)]
+
 mod assets;
+mod bar;
 mod builder;
 mod ctl;
-mod dock;
+mod desktop;
+mod home;
 mod lock;
 mod machine;
+mod overlays;
 mod pam;
+mod placer;
+mod shell;
+mod store;
 mod surface;
+mod wadd;
 mod wallpaper;
 mod wm;
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use gtk::{gdk, gio, glib, prelude::*};
 
 use machine::{Machine, Page};
+use shell::Shell;
 
 const CSS: &str = include_str!("shell.css");
 
@@ -55,33 +66,51 @@ fn activate(app: &gtk::Application, with_builder: bool) {
         tracing::error!("no monitors");
         return;
     };
-    let machine = Machine::new(app, &primary, &others);
+
+    // The lock comes first: every start lands on it.
     let lock = lock::Lock::new();
     if std::env::var_os("WADOS_NO_LOCK").is_none()
         && let Err(e) = lock.lock(app)
     {
         tracing::error!("{e}");
     }
-    if with_builder {
-        builder::open(app);
-    }
 
-    let windows: Rc<RefCell<Vec<wm::Top>>> = Rc::default();
+    // wadd: followed into the store; told where the screen is.
+    let store = store::Store::new();
+    let link = wadd::Link::start(store.clone());
+    link.register_screen();
+
+    // The windows, and where wadspaces' go.
     let wm = match wm::start() {
-        Ok((wm, updates)) => {
-            let windows = windows.clone();
-            glib::spawn_future_local(async move {
-                while let Ok(list) = updates.recv().await {
-                    *windows.borrow_mut() = list;
-                }
-            });
-            Some(Rc::new(wm))
-        }
+        Ok((wm, updates)) => Some((Rc::new(wm), updates)),
         Err(e) => {
             tracing::error!("{e}");
             None
         }
     };
+    let connector = primary.connector().map(|c| c.to_string()).unwrap_or_default();
+    let placer = placer::Placer::new(wm.as_ref().map(|(w, _)| w.clone()), store.clone(), &connector);
+    if let Some((_, updates)) = wm {
+        let p = placer.clone();
+        glib::spawn_future_local(async move {
+            while let Ok(list) = updates.recv().await {
+                p.windows_changed(list);
+            }
+        });
+    }
+    let p = placer.clone();
+    store.watch(move |c| {
+        if let store::Change::Run(id) = c {
+            p.run_changed(id);
+        }
+    });
+
+    let shell = Shell::new(app, store, link, placer, primary, others);
+    let machine = Machine::new(&shell);
+    let _overlays = overlays::Overlays::new(&shell);
+    if with_builder {
+        builder::open(app);
+    }
 
     let (tx, rx) = async_channel::unbounded::<ctl::Request>();
     match ctl::serve(tx) {
@@ -90,16 +119,16 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     }
     let app = app.clone();
     glib::spawn_future_local(async move {
+        let _keep = _overlays;
         while let Ok(req) = rx.recv().await {
-            let answer = if req.line == "lock" {
-                match lock.lock(&app) {
+            let words: Vec<&str> = req.line.split_whitespace().collect();
+            let answer = match words.as_slice() {
+                ["lock"] => match lock.lock(&app) {
                     Ok(()) => "ok".into(),
                     Err(e) => format!("error {e}"),
-                }
-            } else if req.line == "locked" {
-                format!("ok {}", lock.is_locked())
-            } else {
-                handle(&app, &machine, wm.as_deref(), &windows.borrow(), &req.line)
+                },
+                ["locked"] => format!("ok {}", lock.is_locked()),
+                _ => handle(&app, &machine, &shell, &words),
             };
             let _ = req.reply.send(answer);
         }
@@ -115,65 +144,68 @@ fn pick_primary(all: &[gdk::Monitor]) -> Option<(gdk::Monitor, Vec<gdk::Monitor>
     Some((primary, others))
 }
 
-/// One line from wadsctl.
-fn handle(app: &gtk::Application, m: &Rc<Machine>, wm: Option<&wm::Wm>, windows: &[wm::Top], line: &str) -> String {
-    let words: Vec<&str> = line.split_whitespace().collect();
-    if let ["wm", rest @ ..] = words.as_slice() {
-        return handle_wm(wm, windows, rest);
-    }
-    match words.as_slice() {
-        ["ping"] => "ok pong".into(),
-        ["page"] => format!("ok {:?} {:.2}", m.page(), m.progress()),
+/// One line from wadsctl: the shell's own commands, then each module's.
+fn handle(app: &gtk::Application, m: &Rc<Machine>, shell: &Rc<Shell>, words: &[&str]) -> String {
+    match words {
+        ["ping"] => return "ok pong".into(),
+        ["page"] => return format!("ok {:?} {:.2}", m.page(), m.progress()),
         ["page", "desktop"] => {
             m.go(Page::Desktop);
-            "ok".into()
+            return "ok".into();
         }
         ["page", "home" | "launcher"] => {
             m.go(Page::Launcher);
-            "ok".into()
+            return "ok".into();
         }
         ["page", "toggle"] => {
             m.toggle();
-            "ok".into()
+            return "ok".into();
         }
-        ["switcher", dir @ ("next" | "prev")] => {
-            m.flash(&format!("Super+Tab: switcher {dir}"));
-            "ok".into()
+        ["wadd"] => {
+            return format!(
+                "ok connected={} machine={} wadspaces={} running={}",
+                shell.store.connected(),
+                shell.store.machine_id(),
+                shell.store.live().len(),
+                shell.store.running().len()
+            );
         }
-        ["search"] => {
-            m.flash("Alt+Space: search");
-            "ok".into()
-        }
-        ["log"] => format!("ok {}", m.log.borrow().join(" | ")),
+        ["wm", rest @ ..] => return handle_wm(shell, rest),
         ["quit"] => {
             app.quit();
-            "ok".into()
+            return "ok".into();
         }
-        ["help"] => "ok ping | page [desktop|home|toggle] | switcher next|prev | search | log | wm list|activate|fullscreen|unfullscreen|minimize|unminimize|close <#id|app-id> [output] | quit".into(),
-        _ => format!("error unknown: {line}"),
+        _ => {}
+    }
+    if let Some(answer) = shell.ctl(words) {
+        return answer;
+    }
+    match words {
+        ["help"] => "ok ping | page [desktop|home|toggle] | wadd | wm list|activate|fullscreen|unfullscreen|minimize|unminimize|close <#id|app-id> [output] | lock | locked | quit (and each module's own)".into(),
+        _ => format!("error unknown: {}", words.join(" ")),
     }
 }
 
 /// `wadsctl wm …`: the windows, and moving them.
-fn handle_wm(wm: Option<&wm::Wm>, windows: &[wm::Top], words: &[&str]) -> String {
-    let Some(wm) = wm else { return "error no window management (foreign-toplevel)".into() };
+fn handle_wm(shell: &Rc<Shell>, words: &[&str]) -> String {
+    let Some(wm) = shell.placer.wm() else { return "error no window management (foreign-toplevel)".into() };
     let which = |w: &str| wm::Which(w.to_string());
     let cmd = match words {
         ["list"] => {
-            let rows: Vec<String> = windows
+            let rows: Vec<String> = shell
+                .placer
+                .windows()
                 .iter()
                 .map(|t| {
-                    let mut flags = Vec::new();
-                    for (on, f) in [
+                    let flags: Vec<&str> = [
                         (t.activated, "activated"),
                         (t.maximized, "maximized"),
                         (t.minimized, "minimized"),
                         (t.fullscreen, "fullscreen"),
-                    ] {
-                        if on {
-                            flags.push(f);
-                        }
-                    }
+                    ]
+                    .into_iter()
+                    .filter_map(|(on, f)| on.then_some(f))
+                    .collect();
                     match t.wadspace() {
                         Some(ws) => format!("#{} wadspace {ws} on [{}] {}", t.id, t.outputs.join(","), flags.join(",")),
                         None => format!(

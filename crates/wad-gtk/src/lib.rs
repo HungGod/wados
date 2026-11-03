@@ -3,12 +3,18 @@
 //! Grotesk), lucide icons drawn in the text's colour, springs, and lists kept
 //! by key.
 
+pub mod app_icon;
+pub mod assets;
 pub mod fonts;
 pub mod icon;
 pub mod keyed;
+pub mod picture;
 pub mod session_lock;
 pub mod spring;
 pub mod theme;
+pub mod tile;
 
 pub use icon::{Icon, Svg};
+pub use picture::Picture;
 pub use spring::{Params, Spring};
+pub use tile::{TileState, WadspaceTile};

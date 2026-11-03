@@ -14,7 +14,8 @@
 # and run GTK clients with GSK_RENDERER=cairo (there's no GPU).
 
 hl_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-hl_rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/wados-headless
+# HL_NAME: a session of its own (several at once, each its own folder).
+hl_rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/wados-headless${HL_NAME:+-$HL_NAME}
 # The patched labwc (tools/build-labwc.sh) when it's built, else the system's
 # (which can't tell wadspaces' windows apart: docs/decisions/0001-labwc.md).
 hl_labwc=labwc

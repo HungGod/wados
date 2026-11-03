@@ -73,6 +73,7 @@ pub fn install(display: &gdk::Display) {
     gtk::Settings::for_display(display).set_gtk_interface_color_scheme(gtk::InterfaceColorScheme::Dark);
     add_css(display, TOKENS);
     add_css(display, BASE);
+    add_css(display, crate::tile::CSS);
 }
 
 /// A stylesheet of an app's own, above the theme's.

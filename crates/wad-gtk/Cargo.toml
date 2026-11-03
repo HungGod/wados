@@ -11,3 +11,4 @@ gtk.workspace = true
 pango = { version = "0.22", features = ["v1_56"] }
 resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts", "memmap-fonts"] }
 tracing.workspace = true
+wad-model.workspace = true
