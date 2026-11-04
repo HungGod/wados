@@ -350,4 +350,9 @@ impl Middle {
     fn click(&self, what: &str) -> bool {
         self.running.click(what) || self.apps.click(what)
     }
+
+    /// Where a wadspace's, an app's or a window's item is, on the screen.
+    fn where_(&self, what: &str) -> Option<(f64, f64)> {
+        self.running.where_(what).or_else(|| self.apps.where_(what))
+    }
 }

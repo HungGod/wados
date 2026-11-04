@@ -49,7 +49,7 @@ home=$nested_cfg/home
 mkdir -p "$home/Desktop" "$home/.config" "$home/.local/share" "$home/.cache"
 in_labwc env WADOS_NO_LOCK=1 GSK_RENDERER=cairo WADOS_PRIMARY=HEADLESS-1 WADOS_PAM_SERVICE=login \
   HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache" \
-  wados-shell >"$shell_log" 2>&1 &
+  GDK_DEBUG=no-portals GTK_USE_PORTAL=0 GTK_A11Y=none dbus-run-session -- wados-shell >"$shell_log" 2>&1 &
 pids+=($!)
 for _ in $(seq 50); do in_labwc wadsctl ping >/dev/null 2>&1 && break; sleep 0.2; done
 # The desktop: on the launcher, its chrome holds the keyboard and covers the windows.

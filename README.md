@@ -2,7 +2,7 @@
 
 The software that runs a WadSpaces machine: a Fedora 44 bootc computer that boots into desktops you design. Each wadspace is a container with its own apps, files and sign-ins, and you run it full screen, in a window, or streamed to another device. v2 rebuilds the `wadspaces-v2-spike` design for real: the launcher and the desktop, the Builder, streams and the phone remote.
 
-**Status: phase 2.** wadd builds and runs wadspaces. The shell runs on it: the launcher, the desktop, the bar and its tray, Super+Tab, Alt+Space, toasts with Undo, the reveal bar over a full-screen wadspace, and the other displays' bars. Next is the Builder (phase 3).
+**Status: phase 3.** wadd builds and runs wadspaces. The shell runs on it: the launcher, the desktop, the bar and its tray, Super+Tab, Alt+Space, toasts with Undo, the reveal bar over a full-screen wadspace, and the other displays' bars. The Builder edits wadspaces: stacks, the sidebar's Apps, Add-ons, Secrets and Customize, and drags between it, the desktop and the bar. Next is the host image (phase 4).
 
 ## Layout
 
@@ -18,7 +18,7 @@ The software that runs a WadSpaces machine: a Fedora 44 bootc computer that boot
 | `crates/wad-gtk` | WadSpaces' look in GTK4, dark only: the spike's tokens as CSS custom properties, Inter and Space Grotesk, lucide icons (`assets/lucide`), springs, and the session lock (gtk4-layer-shell's, through our FFI). |
 | `crates/wad-wayland` | A Wayland socket the compositor serves to one sandboxed wadspace (`wp_security_context_v1`), plus probes (`examples/`). |
 | `apps/wadd` | The machine's daemon. It keeps the library (edits, Undo, events), builds wadspaces (packages, chains, sets, jobs) and runs them on the screen through their own sockets. It serves `/v1` on `/run/wadd/wadd.sock`; `dev/try.sh` shows all of it. |
-| `apps/wados-shell` | The shell on labwc. The launcher and the desktop are a scroll apart. The bar, the overlays and the lock screen are layer-shell surfaces, and the Builder is a window. It handles window management with foreign-toplevel and answers `wadsctl`. |
+| `apps/wados-shell` | The shell on labwc. The launcher and the desktop are a scroll apart. The bar, the overlays and the lock screen are layer-shell surfaces, and the Builder is a window (`src/builder/`: its board of stacks and its sidebar). Drags between them go through `src/dnd.rs`. It handles window management with foreign-toplevel and answers `wadsctl`. |
 | `apps/wadsctl` | Tells the shell what to do: what labwc's keybinds run, and what tests drive it with. |
 | `apps/selkies-desktop` | The panel and Start menu inside each wadspace (C, v1's). |
 | `images/` | The wadspace images on Fedora 44: the base, the builder, `wadspaces-pkg` (packages captured and assembled on rpm), the feature scripts; `build.sh` and `check.sh`. |
@@ -46,7 +46,7 @@ cargo build -p wados-shell -p wadsctl
 PATH=$PWD/target/debug:$PATH .build/labwc/labwc -C host/etc/xdg/labwc -s 'wados-shell --builder'
 ```
 
-That shell is the real thing: it uses your home (its desktop is your `~/Desktop`, its layout `~/.config/wados/desk.json`). To try it safely, on a wadd of its own seeded with the spike's sample library and a home of its own with the spike's sample Desktop, with screenshots:
+That shell is the real thing: it uses your home (its desktop is your `~/Desktop`, its layout `~/.config/wados/desk.json`). To try it safely, with screenshots, use `try.sh`. It gives the shell a wadd of its own seeded with the spike's sample library, a home of its own with the spike's sample Desktop, and a session bus of its own with no desktop portals, so a file dialog or an app it opens stays in its headless session:
 
 ```bash
 apps/wados-shell/dev/try.sh                       # .build/shell/{launcher,desktop}.png

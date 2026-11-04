@@ -223,7 +223,11 @@ impl Shared {
                     Some(true) => "ok".into(),
                     _ => format!("error {what} isn't in the bar"),
                 },
-                _ => "error bar [flyout <name>|flyout none|menu <wadspace|#window>|peek <app>|click <wadspace|app|#window>|sizes]".into(),
+                ["where", what] => match middle.and_then(|m| m.where_(what)) {
+                    Some((x, y)) => format!("ok {x:.0} {y:.0}"),
+                    None => format!("error {what} isn't in the bar"),
+                },
+                _ => "error bar [flyout <name>|flyout none|menu <wadspace|#window>|peek <app>|click <wadspace|app|#window>|where <wadspace|app|#window>|sizes]".into(),
             }
         });
     }

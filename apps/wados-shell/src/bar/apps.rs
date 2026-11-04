@@ -1,12 +1,13 @@
 //! The machine's own apps in the desktop's top bar (`MachineApps.svelte`):
-//! Settings, Files and WadBrowser, each a launcher that is its own task once
-//! open (KDE's icons-only task manager), so their windows never get a second
-//! button. Open, a line under it (a dot per window when there's more than
-//! one), lit in front. Click: open it; bring its window up; in front
-//! already, put it down; with more than one, go round them. Hover for its
-//! windows, to pick one or close it. Then the machine's other windows (the
-//! terminal, the Builder…), sideways when there's more than fits. Short of
-//! room, the apps are their icons alone.
+//! Settings, Files, WadBrowser and the Builder (as the spike's bar shows
+//! it), each a launcher that is its own task once open (KDE's icons-only
+//! task manager), so their windows never get a second button. Open, a line
+//! under it (a dot per window when there's more than one), lit in front.
+//! Click: open it; bring its window up; in front already, put it down; with
+//! more than one, go round them. Hover for its windows, to pick one or
+//! close it. Then the machine's other windows (the terminal, a picture…),
+//! sideways when there's more than fits. Short of room, the apps are their
+//! icons alone.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -435,6 +436,17 @@ impl Apps {
         }
     }
 
+    /// Where a machine app's item (or a window's) is, in the bar's surface.
+    pub fn where_(&self, what: &str) -> Option<(f64, f64)> {
+        if let Some(a) = self.apps.iter().find(|a| a.app.key() == what) {
+            return ui::middle_of(&a.item.button);
+        }
+        let id = what.trim_start_matches('#').parse::<u32>().ok()?;
+        let items = self.other_items.borrow();
+        let (_, i) = items.iter().find(|(x, _)| *x == id)?;
+        ui::middle_of(&i.button)
+    }
+
     pub fn describe(&self) -> String {
         let t = self.grouped();
         let apps: Vec<String> = t
@@ -451,9 +463,14 @@ impl Apps {
     }
 }
 
-/// Starts a machine app, or says when it comes.
+/// Starts a machine app (the Builder: its window opened), or says when it comes.
 pub fn launch(shell: &Shell, app: MachineApp) {
-    let (argv, phase) = app.launch();
+    let Some((argv, phase)) = app.launch() else {
+        if let Some(b) = shell.builder() {
+            b.present();
+        }
+        return;
+    };
     if !ui::spawn(argv) {
         shell.toast(wad_proto::Level::Info, &format!("{} comes in phase {phase}", app.name()), None);
     }

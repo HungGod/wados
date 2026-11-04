@@ -1,11 +1,12 @@
 //! WadSpaces' colours, dark only (v2 has no light theme): the spike's
 //! `src/styles/tokens.css` as GTK CSS custom properties on every window, so
-//! a stylesheet says `var(--accent)`. Layer-shell surfaces are windows too.
+//! a stylesheet says `var(--accent)`. Layer-shell surfaces are windows too;
+//! a drag's icon (`dnd`) is a root of its own, so it has them as well.
 
 use gtk::gdk;
 
 /// The tokens, as the spike defines them.
-pub const TOKENS: &str = "window, window.background {
+pub const TOKENS: &str = "window, window.background, dnd {
   --bg: #0a0614;
   --bg-2: #0e0919;
   --surface: #140d22;
@@ -43,7 +44,7 @@ pub const TOKENS: &str = "window, window.background {
 
 /// What every window of ours starts from: the faces, the text colour, no
 /// stock window background (each surface paints its own).
-pub const BASE: &str = "window, window.background {
+pub const BASE: &str = "window, window.background, dnd {
   color: var(--fg);
   font-family: Inter, system-ui, sans-serif;
   font-size: 14px;

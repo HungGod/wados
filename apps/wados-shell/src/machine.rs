@@ -86,6 +86,14 @@ impl Machine {
             },
         );
         surface::click_through(&reserve);
+        // Something to paint: GTK draws no frame for a window with nothing in
+        // it, and a layer surface with no frame isn't mapped, so its room for
+        // the bar wouldn't count (the desktop, and the Builder snapped into
+        // its region, would start under the bar). This strip is the bar's
+        // height and 1/255 opaque: never seen, but drawn on the first frame.
+        let fill = gtk::Box::builder().css_classes(["reserve-fill"]).hexpand(true).build();
+        fill.set_size_request(-1, BAR);
+        reserve.set_child(Some(&fill));
 
         let desktop_win = surface::make(
             app,

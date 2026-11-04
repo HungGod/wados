@@ -60,6 +60,11 @@ button.wb-item { min-width: 68px; min-height: 54px; padding: 2px 3px 0; border-r
 button.wb-item:hover { background-color: rgb(255 255 255 / 0.06); color: var(--fg); }
 button.wb-item.wb-active { background-color: rgb(255 255 255 / 0.1); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.1); color: var(--fg); }
 button.wb-item.wb-dim { opacity: 0.55; }
+/* Something held over it that it would take. */
+button.wb-item.wb-hot {
+  background-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent);
+}
 button.wb-item.wb-compact { min-width: 40px; min-height: 38px; padding: 0; border-radius: 10px; }
 .wb-item-name { font-size: 11px; font-weight: 500; }
 .wb-glyph { min-width: 32px; min-height: 32px; border-radius: 9px; background-color: var(--surface-3); color: var(--fg); }

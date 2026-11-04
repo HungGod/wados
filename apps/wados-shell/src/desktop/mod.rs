@@ -19,6 +19,13 @@
 //!   Trash is the freedesktop.org one.
 //! - **Menus** ([`menu`]): a wadspace's, a folder's, a file's, the Trash's,
 //!   Machines', the background's.
+//! - **The Builder's drags** ([`crate::dnd`], `shell/spaces/targets.ts`): a
+//!   piece of a stack (or a key's group) let go on a wadspace's icon (or one
+//!   in the open folder) is copied into it; a whole stack on a folder is
+//!   tagged that; anywhere else, it's open desktop (`drops::offer_fresh`: a
+//!   new wadspace of just that, or a copy). The hint's under the pointer. A
+//!   wadspace carried from here (one, from the desktop or out of a folder)
+//!   is held there too, so the Builder's board takes it.
 //!
 //! The interface machine.rs uses: `new`, `widget` (sized by machine.rs to
 //! the screen below the bar), `key` (the desktop surface's keys, before
@@ -44,6 +51,8 @@ use wad_model::tags::{GENERAL_ID, tag_of};
 use wad_model::{Category, SessionDisplay};
 use wad_proto::Level;
 
+use crate::builder::drops;
+use crate::dnd::{self, Held, SpaceFrom, Verdict};
 use crate::machine::BAR;
 use crate::shell::Shell;
 use crate::store::Change;
@@ -65,6 +74,8 @@ struct Drag {
     keys: Vec<String>,
     /// From an open folder (a wadspace, to untag or tag again).
     from_folder: bool,
+    /// One wadspace, as the other surfaces know it (held there too).
+    held: Option<Held>,
 }
 
 /// The box being dragged across the background.
@@ -101,8 +112,34 @@ enum Target {
     },
     /// Kept in a wadspace (the Builder's, phase 3).
     Keep(String),
+    /// Something held (a piece of a Builder stack) on a wadspace's icon:
+    /// `ws:<id>`, or `in:<id>` in the open folder.
+    Put(String),
     /// A spot of the grid.
     Spot(Spot),
+}
+
+/// Where something held (`dnd::Held`: a piece of a Builder stack, a whole
+/// stack) goes when it's let go.
+#[derive(Clone, Debug, PartialEq)]
+enum Lands {
+    /// Onto a wadspace (`key`: its icon's), copied in.
+    On { ws: String, key: String },
+    /// Into a tag (a folder's icon, or it open): a whole stack is tagged that.
+    Tag { tag: String, panel: bool },
+    /// Open desktop: a new wadspace of just that, or a copy.
+    Fresh,
+}
+
+impl Lands {
+    /// What's lit while it's over it.
+    fn lit(&self) -> Option<Target> {
+        match self {
+            Lands::On { key, .. } => Some(Target::Put(key.clone())),
+            Lands::Tag { tag, panel } => Some(Target::Tag { tag: tag.clone(), panel: *panel }),
+            Lands::Fresh => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -123,6 +160,8 @@ struct State {
     menu_for: Option<String>,
     drag: Option<Drag>,
     hot: Option<Target>,
+    /// What something held from elsewhere would light, where it was last offered.
+    held_hot: Option<Target>,
     band: Option<Band>,
     /// The icon pressed (for a click without Ctrl or Shift).
     pressed: Option<String>,
@@ -150,6 +189,8 @@ pub struct Desktop {
     panel: RefCell<Option<Panel>>,
     rename: RefCell<Option<(String, gtk::Entry)>>,
     menu: RefCell<Option<menu::Open>>,
+    /// A wadspace's picture, made as its drag's prepared, for its drag's icon (with the hint).
+    held_ghost: RefCell<Option<(gdk::Paintable, i32, i32)>>,
     desk_dir: PathBuf,
     desk_json: PathBuf,
     seen_library: Flag<bool>,
@@ -177,6 +218,7 @@ impl Desktop {
             panel: RefCell::default(),
             rename: RefCell::default(),
             menu: RefCell::default(),
+            held_ghost: RefCell::default(),
             desk_dir: files::desktop_dir(),
             desk_json,
             seen_library: Flag::new(false),
@@ -374,7 +416,7 @@ impl Desktop {
             Some(Target::Tag { tag, panel: false }) => Some(format!("folder:{tag}")),
             Some(Target::Trash) => Some("trash".into()),
             Some(Target::Into { key, .. }) => Some(key.clone()),
-            Some(Target::Keep(k)) => Some(k.clone()),
+            Some(Target::Keep(k) | Target::Put(k)) => Some(k.clone()),
             _ => None,
         };
         let open = s.open_tag.as_ref().map(|t| format!("folder:{t}"));
@@ -391,6 +433,14 @@ impl Desktop {
             } else {
                 p.root.remove_css_class("hot");
             }
+            // A wadspace in it with something held over it.
+            each_inside(p.root.upcast_ref(), &mut |w| {
+                if hot.as_deref() == Some(w.widget_name().as_str()) {
+                    w.add_css_class("hot");
+                } else {
+                    w.remove_css_class("hot");
+                }
+            });
         }
     }
 
@@ -685,17 +735,31 @@ impl Desktop {
                 Hit::Inside(id) => (vec![format!("ws:{id}")], true),
                 _ => return None,
             };
-            let content = m.content(&keys);
-            if let Some((icon, hx, hy)) = m.ghost(&keys, from_folder, x, y) {
-                src.set_icon(Some(&icon), hx, hy);
+            let held = held_of(&keys, from_folder);
+            let content = m.content(&keys, held.as_ref());
+            let ghost = m.ghost(&keys, from_folder, x, y);
+            *m.held_ghost.borrow_mut() = None;
+            match ghost {
+                // Its drag's icon is made as it begins, with the hint under it.
+                Some(g) if held.is_some() => *m.held_ghost.borrow_mut() = Some(g),
+                Some((icon, hx, hy)) => src.set_icon(Some(&icon), hx, hy),
+                None => {}
             }
-            m.s.borrow_mut().drag = Some(Drag { keys, from_folder });
+            m.s.borrow_mut().drag = Some(Drag { keys, from_folder, held });
             Some(content)
         });
         let w = self.weak();
-        src.connect_drag_begin(move |_, _| {
+        src.connect_drag_begin(move |_, drag| {
             if let Some(m) = w.upgrade() {
                 m.s.borrow_mut().pressed = None;
+                let held = m.s.borrow().drag.as_ref().and_then(|d| d.held.clone());
+                if let Some(h) = held {
+                    if let Some((picture, hx, hy)) = m.held_ghost.borrow_mut().take() {
+                        gtk::DragIcon::for_drag(drag).set_child(Some(&held_ghost(&picture)));
+                        drag.set_hotspot(hx, hy);
+                    }
+                    dnd::begin(h);
+                }
                 m.restyle();
             }
         });
@@ -703,9 +767,12 @@ impl Desktop {
         src.connect_drag_end(move |_, _, _| {
             if let Some(m) = w.upgrade() {
                 let mut s = m.s.borrow_mut();
-                s.drag = None;
+                let held = s.drag.take().is_some_and(|d| d.held.is_some());
                 s.hot = None;
                 drop(s);
+                if held {
+                    dnd::end();
+                }
                 m.restyle();
             }
         });
@@ -735,16 +802,124 @@ impl Desktop {
         let w = self.weak();
         target.connect_drop(move |_, drop, x, y| w.upgrade().is_some_and(|m| m.dropped(drop, x, y)));
         self.board.add_controller(target);
+
+        self.held_target();
     }
 
-    /// What a drag carries: its files (for other apps too) and its keys.
-    fn content(&self, keys: &[String]) -> gdk::ContentProvider {
+    /// What's held from elsewhere (a piece of a Builder stack, a whole
+    /// stack, a key's group), let go here: onto a wadspace, into a tag, or
+    /// open desktop. The desktop's own drags are its own target's (above).
+    fn held_target(&self) {
+        let w = self.weak();
+        let offer = move |held: &Held, x: f64, y: f64| -> Option<Verdict> {
+            let m = w.upgrade()?;
+            let at = m.held_at(held, x, y);
+            m.s.borrow_mut().held_hot = at.as_ref().filter(|(_, v)| v.ok).and_then(|(l, _)| l.lit());
+            at.map(|(_, v)| v)
+        };
+        let w = self.weak();
+        let land = move |held: &Held, x: f64, y: f64| {
+            if let Some(m) = w.upgrade() {
+                m.land_held(held, x, y);
+            }
+        };
+        let w = self.weak();
+        let hover = move |on: bool| {
+            let Some(m) = w.upgrade() else { return };
+            let hot = if on { m.s.borrow().held_hot.clone() } else { None };
+            if m.s.borrow().hot != hot {
+                m.s.borrow_mut().hot = hot;
+                m.restyle();
+            }
+        };
+        let t = dnd::target(&self.board, offer, land, hover);
+        // Not while one of the desktop's own is carried (it's held too, for the other surfaces).
+        let w = self.weak();
+        t.connect_accept(move |_, drop| {
+            let ours = w.upgrade().is_some_and(|m| m.s.borrow().drag.is_some());
+            !ours && drop.formats().contain_mime_type(dnd::MIME)
+        });
+    }
+
+    /// Where `held` let go at (x, y) goes, and what it'd do (as the spike's
+    /// targets: the deepest that has something to say about it).
+    fn held_at(&self, held: &Held, x: f64, y: f64) -> Option<(Lands, Verdict)> {
+        if matches!(held, Held::Space { from: Some(SpaceFrom::Desktop | SpaceFrom::Folder), .. }) {
+            return None;
+        }
+        let hit = self.hit(x, y);
+        // A wadspace (its icon, or it in the open folder) takes another's piece.
+        let on = match &hit {
+            Hit::Icon(k) => k.strip_prefix("ws:").map(|id| (id.to_string(), k.clone())),
+            Hit::Inside(id) => Some((id.clone(), format!("in:{id}"))),
+            _ => None,
+        };
+        if let Some((ws, key)) = on
+            && let Some(v) = drops::offer_on(&self.shell, &ws, held)
+        {
+            return Some((Lands::On { ws, key }, v));
+        }
+        // A tag's folder (its icon, or it open) takes a whole stack.
+        let tag = match &hit {
+            Hit::Icon(k) => k.strip_prefix("folder:").map(|t| (t.to_string(), false)),
+            Hit::Inside(_) | Hit::Panel => self.s.borrow().open_tag.clone().map(|t| (t, true)),
+            Hit::Background => None,
+        };
+        if let (Some((tag, panel)), Held::Space { ws, .. }) = (tag, held)
+            && let Some(v) = self.offer_tag(ws, &tag)
+        {
+            return Some((Lands::Tag { tag, panel }, v));
+        }
+        // Anywhere else, it's open desktop.
+        drops::offer_fresh(&self.shell, held).map(|v| (Lands::Fresh, v))
+    }
+
+    /// A whole stack let go on `tag`'s folder: what tagging it would do.
+    fn offer_tag(&self, ws: &str, tag: &str) -> Option<Verdict> {
+        let store = &self.shell.store;
+        let x = store.wadspace(ws).filter(|x| !x.is_trashed())?;
+        let tags = store.library().tags.clone();
+        let name = tags.iter().find(|t| t.id == tag)?.name.clone();
+        if x.machine != store.machine_id() {
+            return Verdict::no("It lives on another machine");
+        }
+        if tag_of(&tags, &x) == tag {
+            Verdict::yes(format!("In {name}"))
+        } else {
+            Verdict::yes(format!("{} into {name}", x.name))
+        }
+    }
+
+    fn land_held(&self, held: &Held, x: f64, y: f64) {
+        let Some((to, v)) = self.held_at(held, x, y) else { return };
+        if !v.ok {
+            return;
+        }
+        match to {
+            Lands::On { ws, .. } => drops::land_on(&self.shell, &ws, held),
+            Lands::Tag { tag, .. } => {
+                if let Held::Space { ws, .. } = held
+                    && self.shell.store.wadspace(ws).is_some_and(|x| x.tag.as_deref() != Some(tag.as_str()))
+                {
+                    self.shell.op(Op::SetTag { ws: ws.clone(), tag: Some(tag) }, |_| {});
+                }
+            }
+            Lands::Fresh => drops::land_fresh(&self.shell, held),
+        }
+    }
+
+    /// What a drag carries: its files (for other apps too), its keys, and
+    /// (one wadspace) it as it's held, for the other surfaces.
+    fn content(&self, keys: &[String], held: Option<&Held>) -> gdk::ContentProvider {
         let bytes = glib::Bytes::from_owned(keys.join("\n").into_bytes());
         let mut providers = vec![gdk::ContentProvider::for_bytes(DESK_MIME, &bytes)];
         let paths = self.file_paths(keys);
         if !paths.is_empty() {
             let list: Vec<gio::File> = paths.iter().map(gio::File::for_path).collect();
             providers.push(gdk::ContentProvider::for_value(&gdk::FileList::from_array(&list).to_value()));
+        }
+        if let Some(h) = held {
+            providers.push(dnd::content(h));
         }
         gdk::ContentProvider::new_union(&providers)
     }
@@ -879,7 +1054,9 @@ impl Desktop {
                     },
                 );
             }
-            Target::Keep(_) => self.toast(Level::Info, "Keeping files in a wadspace comes with the Builder"),
+            Target::Keep(_) => self.toast(Level::Info, "Keeping files in a wadspace comes with projects, in phase 6"),
+            // Only what's held from elsewhere (held_target's).
+            Target::Put(_) => {}
             Target::Spot(to) if d.from_folder => {
                 let Some(id) = spaces.first() else { return };
                 let key = format!("ws:{id}");
@@ -909,7 +1086,7 @@ impl Desktop {
         if matches!(target, Target::Keep(_)) {
             self.toast(
                 Level::Info,
-                "Keeping files in a wadspace comes with the Builder: they're on the desktop for now",
+                "Keeping files in a wadspace comes with projects, in phase 6: they're on the desktop for now",
             );
         }
         let (w, drop) = (self.weak(), drop.clone());
@@ -1885,11 +2062,45 @@ impl Desktop {
     }
 }
 
+/// One wadspace carried (from the desktop, or out of a folder), as it's held.
+fn held_of(keys: &[String], from_folder: bool) -> Option<Held> {
+    let [k] = keys else { return None };
+    let id = k.strip_prefix("ws:")?;
+    Some(Held::Space {
+        ws: id.to_string(),
+        from: Some(if from_folder { SpaceFrom::Folder } else { SpaceFrom::Desktop }),
+    })
+}
+
+/// A wadspace's drag's icon: its picture, and the hint under it (what a target elsewhere would do).
+fn held_ghost(picture: &gdk::Paintable) -> gtk::Widget {
+    let col = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).build();
+    let pic = gtk::Picture::for_paintable(picture);
+    pic.set_can_shrink(false);
+    pic.set_halign(gtk::Align::Start);
+    col.append(&pic);
+    col.append(&dnd::hint_label());
+    col.upcast()
+}
+
 fn mods(state: gdk::ModifierType) -> Mods {
     Mods {
         ctrl: state
             .intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK | gdk::ModifierType::SUPER_MASK),
         shift: state.contains(gdk::ModifierType::SHIFT_MASK),
+    }
+}
+
+/// Each wadspace in the open folder (`in:<id>`) under `w`.
+fn each_inside(w: &gtk::Widget, f: &mut impl FnMut(&gtk::Widget)) {
+    let mut c = w.first_child();
+    while let Some(ch) = c {
+        if ch.widget_name().starts_with("in:") {
+            f(&ch);
+        } else {
+            each_inside(&ch, f);
+        }
+        c = ch.next_sibling();
     }
 }
 

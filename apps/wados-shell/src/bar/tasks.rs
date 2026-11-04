@@ -1,7 +1,8 @@
 //! The machine's windows as the bar's tasks (`MachineApps.svelte`,
-//! `RunningItems.svelte`): Settings, Files and WadBrowser each its own task
-//! once open, as KDE's icons-only task manager does (their windows group
-//! under them, never a second button), then the machine's other windows.
+//! `RunningItems.svelte`): Settings, Files, WadBrowser and the Builder each
+//! its own task once open, as KDE's icons-only task manager does (their
+//! windows group under them, never a second button), then the machine's
+//! other windows.
 //! A wadspace's windows aren't tasks: the running wadspaces stand for them.
 //! Pure: the bar draws it.
 
@@ -13,16 +14,20 @@ pub enum MachineApp {
     Settings,
     Files,
     Browser,
+    /// The shell's own window (crate::builder).
+    Builder,
 }
 
 impl MachineApp {
-    pub const ALL: [MachineApp; 3] = [MachineApp::Settings, MachineApp::Files, MachineApp::Browser];
+    pub const ALL: [MachineApp; 4] =
+        [MachineApp::Settings, MachineApp::Files, MachineApp::Browser, MachineApp::Builder];
 
     pub fn name(self) -> &'static str {
         match self {
             MachineApp::Settings => "Settings",
             MachineApp::Files => "Files",
             MachineApp::Browser => "WadBrowser",
+            MachineApp::Builder => "Builder",
         }
     }
 
@@ -31,6 +36,7 @@ impl MachineApp {
             MachineApp::Settings => "settings",
             MachineApp::Files => "files",
             MachineApp::Browser => "browser",
+            MachineApp::Builder => "builder",
         }
     }
 
@@ -40,6 +46,7 @@ impl MachineApp {
             MachineApp::Settings => "settings",
             MachineApp::Files => "folder",
             MachineApp::Browser => "globe",
+            MachineApp::Builder => "blocks",
         }
     }
 
@@ -49,15 +56,18 @@ impl MachineApp {
             MachineApp::Settings => &["io.wados.Settings"],
             MachineApp::Files => &["io.wados.Files"],
             MachineApp::Browser => &["io.wados.Browser", "io.wados.WadBrowser", "org.cactus.Browser"],
+            MachineApp::Builder => &[crate::builder::APP_ID],
         }
     }
 
-    /// What starts it, and the phase it comes in while it isn't on the machine.
-    pub fn launch(self) -> (&'static [&'static str], u8) {
+    /// What starts it, and the phase it comes in while it isn't on the
+    /// machine (none: the Builder, the shell's own window).
+    pub fn launch(self) -> Option<(&'static [&'static str], u8)> {
         match self {
-            MachineApp::Settings => (&["wados-settings"], 8),
-            MachineApp::Files => (&["wados-files"], 8),
-            MachineApp::Browser => (&["wadbrowser"], 5),
+            MachineApp::Settings => Some((&["wados-settings"], 8)),
+            MachineApp::Files => Some((&["wados-files"], 8)),
+            MachineApp::Browser => Some((&["wadbrowser"], 5)),
+            MachineApp::Builder => None,
         }
     }
 }
@@ -193,6 +203,7 @@ mod tests {
             top(4, "org.cactus.Browser", false),
             top(5, "io.wados.Files", false),
             top(6, "io.wados.Shell", false),
+            top(7, "io.wados.Builder", false),
         ];
         let mut r = Recency::default();
         r.update(&windows);
@@ -203,7 +214,8 @@ mod tests {
         assert_eq!(ids(MachineApp::Settings), Vec::<u32>::new());
         assert_eq!(ids(MachineApp::Files), [1, 5]);
         assert_eq!(ids(MachineApp::Browser), [4]);
-        // The wadspace's window isn't a task; the terminal and the Builder are the others.
+        assert_eq!(ids(MachineApp::Builder), [7]);
+        // The wadspace's window isn't a task; the terminal and the shell's other window are the others.
         assert_eq!(t.others.iter().map(|w| w.id).collect::<Vec<_>>(), [3, 6]);
     }
 
@@ -270,6 +282,7 @@ mod tests {
         assert_eq!(glyph("io.wados.Terminal"), "square-terminal");
         assert_eq!(glyph("io.wados.Shell"), "blocks");
         assert_eq!(glyph("org.cactus.Browser"), "globe");
+        assert_eq!(glyph("io.wados.Builder"), "blocks");
         assert_eq!(glyph("com.example.Thing"), "app-window");
         let mut t = top(1, "io.wados.Terminal", false);
         t.title = " ".into();

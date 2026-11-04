@@ -74,6 +74,14 @@ an exclusive surface has them. Only the host's clients have layer-shell, so a wa
 - **Layering:** a full-screen window covers the TOP layer (the bar), and OVERLAY shows above it. So the
   reveal bar, Super+Tab, Alt+Space, toasts and focus covers are OVERLAY surfaces; the bar and the launcher's
   chrome are TOP.
+- **The bar's room (found in phase 3):** the reserve keeps 78 px from windows and the desktop, but only once
+  it's mapped, and a layer surface is mapped by its first frame. GTK draws no frame for a window with nothing
+  to paint, so an empty, transparent reserve could stay unmapped; then the desktop and the Builder started
+  under the bar. It now holds a strip the bar's height at 1/255 opacity: never seen, drawn on the first frame.
+- **The Builder (phase 3):** an ordinary window of the shell's with its own app id (`io.wados.Builder`, set
+  as it's realized and mapped, after GtkApplication's). `rc.xml` has a `builder` region (the right 74% of
+  the usable area) and a window rule that snaps it there with no server-side title bar (GTK draws its own),
+  and `<gap>10</gap>` so it floats as the spike's does.
 - **foreign-toplevel** `activate`, `set_minimized`/`unset_minimized`, `unset_fullscreen` and `close` all work
   on wadspace windows and host windows alike. `output_enter`/`output_leave` say which display a window is on.
 - **Keybinds:** labwc's `rc.xml` (`host/etc/xdg/labwc/rc.xml`) runs `wadsctl` for Super+Tab, Super+Shift+Tab,

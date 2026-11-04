@@ -8,7 +8,8 @@
 //! shaded). Select it (a click, or Enter) to open it. Under it, its round
 //! buttons: Launch (or Show), Focus, the two streams, an update check (or a
 //! build), the Trash (Undo's in the toast). A right-click on a card is its
-//! menu: Open (Show), Open in window, Stream, Duplicate, Move to Trash.
+//! menu: Open (Show), Open in window, Stream, Edit in the Builder (on the
+//! desktop, with its group), Duplicate, Move to Trash.
 //!
 //! The keys (nav.rs): ←/→ the cards; ↑ the bar (←/→ along it, a tab shows
 //! at once; ← past the first is the machine); ↓ the buttons, ↓ again the
@@ -704,6 +705,14 @@ impl Launcher {
             let (shell, id) = (shell.clone(), id.to_string());
             move || shell.open(&id, SessionDisplay::Window)
         };
+        // The Builder's a window on the desktop (the spike's showSpace): there, with its group.
+        let edit = {
+            let (shell, id) = (shell.clone(), id.to_string());
+            move || {
+                shell.go(Page::Desktop);
+                shell.edit(&id);
+            }
+        };
         let duplicate = {
             let (shell, id) = (shell.clone(), id.to_string());
             move || shell.op(Op::Duplicate { ws: id.clone(), machine: None }, |_| {})
@@ -713,15 +722,22 @@ impl Launcher {
             move || shell.op(Op::Trash { ws: id.clone() }, |_| {})
         };
         let streams = format!("Publicly or privately: {}", model::STREAMS_LATER);
-        let items = vec![
+        let here = ws.machine == shell.store.machine_id();
+        let mut items = vec![
             Item::Heading(ws.name.clone()),
             Item::Row(Row::new("monitor-play", if running { "Show" } else { "Open" }, open)),
             Item::Row(Row::new("app-window", "Open in window", window)),
             Item::Row(Row::new("radio", "Stream", || {}).later(streams)),
+        ];
+        // Another machine's shows in the Builder but doesn't change there: as the spike's, it's only this machine's.
+        if here {
+            items.push(Item::Row(Row::new("blocks", "Edit in the Builder", edit).hint("What's in it, to change")));
+        }
+        items.extend([
             Item::Row(Row::new("copy-plus", "Duplicate", duplicate).hint("A copy beside it, to change")),
             Item::Line,
             Item::Row(Row::new("trash", "Move to Trash", trash).danger()),
-        ];
+        ]);
         let p = card
             .root
             .compute_point(&self.stage, &gtk::graphene::Point::new(x as f32, y as f32))

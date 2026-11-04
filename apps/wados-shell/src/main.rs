@@ -9,13 +9,11 @@
 
 mod assets;
 mod bar;
-// Phase 3: the Builder's parts are being built on these; this goes when they all use them.
-#[allow(dead_code)]
 mod builder;
 mod ctl;
 mod desktop;
-#[allow(dead_code)]
 mod dnd;
+mod dnd_probe;
 mod home;
 mod lock;
 mod machine;
@@ -111,6 +109,7 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     shell.set_builder(&builder);
     let machine = Machine::new(&shell);
     let _overlays = overlays::Overlays::new(&shell);
+    dnd_probe::install(&shell);
     if with_builder {
         builder.present();
     }

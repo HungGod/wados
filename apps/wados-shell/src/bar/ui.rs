@@ -54,6 +54,13 @@ pub fn set_class(w: &impl IsA<gtk::Widget>, class: &str, on: bool) {
     }
 }
 
+/// `w`'s middle in its surface (for `wadsctl bar where`).
+pub fn middle_of(w: &impl IsA<gtk::Widget>) -> Option<(f64, f64)> {
+    let root = w.as_ref().root()?;
+    let b = w.as_ref().compute_bounds(&root)?;
+    Some(((b.x() + b.width() / 2.0) as f64, (b.y() + b.height() / 2.0) as f64))
+}
+
 /// Right-clicks on `w` call `f` (with where, in `w`).
 pub fn on_right_click(w: &impl IsA<gtk::Widget>, f: impl Fn(f64, f64) + 'static) {
     let g = gtk::GestureClick::builder().button(gdk::BUTTON_SECONDARY).build();

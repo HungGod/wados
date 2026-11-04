@@ -13,7 +13,7 @@ use std::rc::Rc;
 use wad_model::edit::{Op, Payload};
 use wad_model::{Section, Wadspace};
 
-use crate::dnd::{Held, SpaceFrom, Verdict};
+use crate::dnd::{Held, Verdict};
 use crate::shell::Shell;
 
 /// What letting `held` go on `ws` would do (none: it doesn't take it).
@@ -42,6 +42,13 @@ pub fn offer_on(shell: &Shell, ws: &str, held: &Held) -> Option<Verdict> {
         },
         Held::Pieces { from, .. } if *from == x.id => None,
         Held::Pieces { items, .. } => Verdict::yes(format!("Add {} to {}", count(items.len()), x.name)),
+        Held::WebApp { id } => {
+            let a = web_app(shell, id)?;
+            if x.exts.iter().any(|e| e.url.as_deref() == Some(a.url.as_str())) {
+                return Verdict::no(format!("{} has {} already", x.name, a.name));
+            }
+            Verdict::yes(format!("Add {} to {}", a.name, x.name))
+        }
     }
 }
 
@@ -50,15 +57,28 @@ pub fn land_on(shell: &Rc<Shell>, ws: &str, held: &Held) {
     if !offer_on(shell, ws, held).is_some_and(|v| v.ok) {
         return;
     }
-    for op in ops_on(ws, held) {
+    let ops = match held {
+        Held::WebApp { id } => match web_app(shell, id) {
+            Some(a) => vec![Op::AddWebApp { ws: ws.to_string(), name: a.name, url: a.url }],
+            None => vec![],
+        },
+        _ => ops_on(ws, held),
+    };
+    for op in ops {
         shell.op(op, |_| {});
     }
+}
+
+/// One of the machine's browser's web apps, by id.
+fn web_app(shell: &Shell, id: &str) -> Option<wad_model::BrowserApp> {
+    shell.store.library().web_apps.iter().find(|a| a.id == id).cloned()
 }
 
 /// The edits letting `held` go on `ws` makes.
 fn ops_on(ws: &str, held: &Held) -> Vec<Op> {
     match held {
-        Held::Space { .. } => vec![],
+        // A web app's name and address are the library's (`land_on`).
+        Held::Space { .. } | Held::WebApp { .. } => vec![],
         Held::Part { payload: Payload::Folder { ws: from, app, key } } => {
             vec![Op::CopyFolder { from: from.clone(), to: ws.to_string(), app: *app, key: key.clone() }]
         }
@@ -81,7 +101,7 @@ pub fn offer_fresh(shell: &Shell, held: &Held) -> Option<Verdict> {
             let name = shell.store.wadspace(ws).map(|x| x.name).unwrap_or_else(|| "it".into());
             Verdict::yes(format!("A copy of {name}"))
         }
-        Held::Part { .. } | Held::Pieces { .. } => Verdict::yes("A new wadspace, of just this"),
+        Held::Part { .. } | Held::Pieces { .. } | Held::WebApp { .. } => Verdict::yes("A new wadspace, of just this"),
     }
 }
 
@@ -94,6 +114,16 @@ pub fn land_fresh(shell: &Rc<Shell>, held: &Held) {
         Held::Space { ws, from: None } => b.copy(ws),
         Held::Part { payload } => b.fresh(payload.clone()),
         // Several picked together: a new one of the first, then the rest into it.
+        // A new one with just the web app, its stack in the Builder.
+        Held::WebApp { id } => {
+            let Some(a) = web_app(shell, id) else { return };
+            let s = shell.clone();
+            shell.op(Op::Create { name: None, category: None, machine: None }, move |r| {
+                let Some(ws) = r.created else { return };
+                s.op(Op::AddWebApp { ws: ws.clone(), name: a.name, url: a.url }, |_| {});
+                b.open(&ws, None);
+            });
+        }
         Held::Pieces { section, items, from } => {
             let Some((first, rest)) = items.split_first() else { return };
             let (shell, rest, section, from) = (shell.clone(), rest.to_vec(), *section, from.clone());
@@ -104,11 +134,6 @@ pub fn land_fresh(shell: &Rc<Shell>, held: &Held) {
             });
         }
     }
-}
-
-/// Whether `held` is a wadspace's own icon (from the desktop, a folder, the bar).
-pub fn is_icon(held: &Held) -> bool {
-    matches!(held, Held::Space { from: Some(SpaceFrom::Desktop | SpaceFrom::Folder | SpaceFrom::Bar), .. })
 }
 
 fn piece(section: Section, item: &str, from: &str) -> Payload {

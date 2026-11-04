@@ -1,0 +1,194 @@
+/* The sidebar's Customize tab (SideCustom.svelte, IconEditor.svelte and
+   PhotoPicker.svelte's styles). */
+
+.cz-h {
+  margin: 16px 0 6px;
+  font-weight: 650;
+  font-size: 11px;
+  letter-spacing: 0.66px;
+  color: var(--faint);
+}
+.cz-h.first { margin-top: 2px; }
+
+/* The title (and the New tag dialog's name). */
+entry.cz-title {
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.05);
+  color: var(--fg);
+  font-size: 13.5px;
+  box-shadow: none;
+  outline: none;
+}
+entry.cz-title:focus-within { border-color: var(--accent); }
+entry.cz-title > text > placeholder { color: var(--faint); }
+entry.cz-title > text > selection { background: var(--accent-soft); color: var(--fg); }
+
+/* Its tag: chips. */
+button.cz-chip {
+  min-height: 30px;
+  padding: 0 11px 0 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--fg);
+  font-weight: 500;
+  font-size: 12.5px;
+  box-shadow: none;
+  outline: none;
+}
+button.cz-chip:hover:not(:disabled) { border-color: var(--accent); }
+button.cz-chip.on { border-color: var(--accent); background: var(--accent-soft); font-weight: 650; }
+button.cz-chip.suggest { border-style: dashed; color: var(--muted); }
+button.cz-chip:disabled { opacity: 0.5; }
+
+/* The New tag dialog, of the shell's look. */
+popover.cz-ask > contents {
+  min-width: 220px;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--surface-2);
+  color: var(--fg);
+  box-shadow: 0 12px 32px var(--shadow);
+}
+popover.cz-ask > arrow { background: var(--surface-2); border: 1px solid var(--line-strong); }
+.cz-ask-title { font-weight: 650; font-size: 13px; }
+button.cz-ask-b {
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: rgb(255 255 255 / 0.03);
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 12.5px;
+  box-shadow: none;
+}
+button.cz-ask-b:hover { background: var(--surface-3); }
+button.cz-ask-b.go { border-color: transparent; background: var(--accent); color: var(--accent-fg); }
+button.cz-ask-b.go:hover { background: #d4ff52; }
+
+/* Its projects. */
+.cz-project {
+  min-height: 36px;
+  padding: 0 6px 0 10px;
+  border-radius: 9px;
+  background: rgb(255 255 255 / 0.05);
+  font-size: 12.5px;
+}
+.cz-pn { font-weight: 600; }
+.cz-pk { color: var(--faint); font-size: 11.5px; }
+button.cz-project-x {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--faint);
+  box-shadow: none;
+}
+button.cz-project-x:hover { background: var(--danger); color: #fff; }
+button.cz-add {
+  min-height: 36px;
+  border: 1.5px dashed var(--line-strong);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12.5px;
+  box-shadow: none;
+}
+button.cz-add:disabled { opacity: 1; color: var(--faint); }
+button.cz-add:disabled label, button.cz-add:disabled wad-icon { color: var(--faint); }
+
+/* Pictures to pick from. */
+button.cz-upload {
+  margin: 0 0 8px;
+  padding: 0;
+  min-height: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--c-app);
+  font-weight: 500;
+  font-size: 12.5px;
+  text-decoration-line: underline;
+}
+button.cz-upload:disabled { opacity: 0.6; }
+button.cz-bg {
+  min-height: 58px;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  background: #000;
+  box-shadow: none;
+  outline: none;
+}
+button.cz-bg.empty { background: var(--bg-2); }
+.cz-ring { border-radius: 9px; box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12); }
+button.cz-bg.on .cz-ring { box-shadow: inset 0 0 0 2px var(--accent); }
+button.cz-bg:hover:not(:disabled) .cz-ring { box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.35); }
+button.cz-bg.on:hover .cz-ring { box-shadow: inset 0 0 0 2px var(--accent); }
+.cz-bg-name {
+  margin: 0 6px 4px;
+  font-weight: 600;
+  font-size: 10.5px;
+  color: #fff;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 0.9);
+}
+button.cz-bg.empty .cz-bg-name { color: var(--muted); text-shadow: none; }
+button.cz-bg:disabled { opacity: 1; }
+
+/* Its icon: what it's cut out of. */
+.cz-src {
+  margin-bottom: 8px;
+  padding: 3px;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.05);
+}
+button.cz-src-b {
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+  box-shadow: none;
+}
+button.cz-src-b.on { background: var(--surface-3); color: var(--fg); }
+.cz-icon > .cz-picker { margin-bottom: 4px; }
+.cz-sub { margin: 12px 0 6px; font-size: 11.5px; color: var(--muted); }
+cz-crop { border-radius: 10px; outline: none; }
+.cz-zoom-row { margin-top: 10px; color: var(--muted); }
+scale.cz-zoom { padding: 8px 0; }
+scale.cz-zoom > trough { min-height: 6px; border-radius: 99px; background: var(--surface-3); border: 0; box-shadow: none; }
+scale.cz-zoom > trough > highlight { min-height: 6px; border-radius: 99px; background: var(--accent); border: 0; margin: 0; }
+scale.cz-zoom > trough > slider {
+  min-width: 16px;
+  min-height: 16px;
+  margin: -5px 0;
+  padding: 0;
+  border: 0;
+  border-radius: 99px;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.5);
+}
+button.cz-reset {
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--fg);
+  font-weight: 500;
+  font-size: 12px;
+  box-shadow: none;
+}
+button.cz-reset:hover:not(:disabled) { background: var(--surface-3); }
+button.cz-reset:disabled { opacity: 0.4; }

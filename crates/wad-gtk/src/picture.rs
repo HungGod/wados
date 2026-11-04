@@ -35,7 +35,9 @@ pub fn resolve(value: &str) -> Option<PathBuf> {
 }
 
 /// A drawing of a picture: (file, pixel width bucket).
-type Key = (PathBuf, u32);
+/// A drawing: its file, the width it's drawn at, and the file's change time
+/// and size (a file replaced under the same name is drawn again).
+type Key = (PathBuf, u32, Option<(std::time::SystemTime, u64)>);
 
 thread_local! {
     static DRAWN: RefCell<HashMap<Key, Option<gdk::Texture>>> = RefCell::default();
@@ -61,15 +63,23 @@ fn svg_size(p: &Path) -> Option<(f32, f32)> {
     size
 }
 
-/// The picture at `p`, drawn about `px_wide` pixels wide (an SVG), or as it is (anything else).
+/// The picture at `p`, drawn about `px_wide` pixels wide: an SVG at that
+/// width, a photo no wider than that (nor than it is; 0: as it is).
 pub fn texture(p: &Path, px_wide: u32) -> Option<gdk::Texture> {
-    // SVGs in 64 px steps (a resize doesn't redraw every frame); others once.
-    let bucket = if is_svg(p) { px_wide.clamp(64, 8192).div_ceil(64) * 64 } else { 0 };
-    let key = (p.to_path_buf(), bucket);
+    // In steps, so a resize doesn't redraw every frame: SVGs 64 px, photos 256.
+    let bucket = if is_svg(p) {
+        px_wide.clamp(64, 8192).div_ceil(64) * 64
+    } else if px_wide == 0 {
+        0
+    } else {
+        px_wide.clamp(256, 8192).div_ceil(256) * 256
+    };
+    let stamp = std::fs::metadata(p).ok().and_then(|m| Some((m.modified().ok()?, m.len())));
+    let key = (p.to_path_buf(), bucket, stamp);
     if let Some(t) = DRAWN.with(|d| d.borrow().get(&key).cloned()) {
         return t;
     }
-    let made = if is_svg(p) { draw_svg(p, bucket) } else { gdk::Texture::from_filename(p).ok() };
+    let made = if is_svg(p) { draw_svg(p, bucket) } else { load_photo(p, bucket) };
     DRAWN.with(|d| {
         let mut d = d.borrow_mut();
         if d.len() >= CACHE_MAX {
@@ -78,6 +88,24 @@ pub fn texture(p: &Path, px_wide: u32) -> Option<gdk::Texture> {
         d.insert(key, made.clone());
     });
     made
+}
+
+/// A photo, decoded at `px_wide` (0, or wider than it is: as it is), upright
+/// as its camera said.
+fn load_photo(p: &Path, px_wide: u32) -> Option<gdk::Texture> {
+    use gtk::gdk_pixbuf::Pixbuf;
+    let (_, w, _) = Pixbuf::file_info(p)?;
+    let pb = if px_wide == 0 || w <= px_wide as i32 {
+        Pixbuf::from_file(p).ok()?
+    } else {
+        Pixbuf::from_file_at_scale(p, px_wide as i32, -1, true).ok()?
+    };
+    let pb = pb.apply_embedded_orientation().unwrap_or(pb);
+    let format = if pb.has_alpha() { gdk::MemoryFormat::R8g8b8a8 } else { gdk::MemoryFormat::R8g8b8 };
+    Some(
+        gdk::MemoryTexture::new(pb.width(), pb.height(), format, &pb.read_pixel_bytes(), pb.rowstride() as usize)
+            .upcast(),
+    )
 }
 
 fn draw_svg(p: &Path, px_wide: u32) -> Option<gdk::Texture> {
@@ -108,7 +136,8 @@ fn aspect(p: &Path) -> Option<f32> {
         let (w, h) = svg_size(p)?;
         return (h > 0.0).then(|| w / h);
     }
-    let t = texture(p, 0)?;
+    // A small decode: upright, as it's drawn.
+    let t = texture(p, 256)?;
     (t.height() > 0).then(|| t.width() as f32 / t.height() as f32)
 }
 
@@ -243,5 +272,36 @@ impl Picture {
     pub fn set_radius(&self, r: f32) {
         self.imp().radius.set(r);
         self.queue_draw();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gtk::gdk_pixbuf::{Colorspace, Pixbuf};
+
+    fn photo(path: &Path, w: i32, h: i32, grey: u32) {
+        let pb = Pixbuf::new(Colorspace::Rgb, false, 8, w, h).unwrap();
+        pb.fill(grey << 24 | grey << 16 | grey << 8 | 0xff);
+        pb.savev(path, "png", &[]).unwrap();
+    }
+
+    #[test]
+    fn a_photo_is_decoded_no_wider_than_it_s_shown_and_again_when_it_changes() {
+        let dir = std::env::temp_dir().join(format!("wad-gtk-picture-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("big.png");
+        photo(&p, 2000, 1000, 0x20);
+        // A tile 300 px wide: decoded in its step (512), not at 2000.
+        let small = texture(&p, 300).unwrap();
+        assert_eq!((small.width(), small.height()), (512, 256));
+        // As it is, and never wider than it is.
+        assert_eq!(texture(&p, 0).unwrap().width(), 2000);
+        assert_eq!(texture(&p, 4000).unwrap().width(), 2000);
+        // Replaced under the same name (another size): drawn again, not the old one.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        photo(&p, 400, 400, 0xe0);
+        assert_eq!(texture(&p, 0).unwrap().width(), 400);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

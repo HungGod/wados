@@ -48,6 +48,8 @@ pub enum Held {
     Part { payload: Payload },
     /// Several of one wadspace's things picked together (the sidebar's Secrets: web apps), as pieces.
     Pieces { section: Section, items: Vec<String>, from: String },
+    /// A web app of the machine's browser's own (`Library::web_apps`, by id).
+    WebApp { id: String },
 }
 
 impl Held {
@@ -60,6 +62,7 @@ impl Held {
                 Payload::Piece { from, .. } => from.as_deref(),
             },
             Held::Pieces { from, .. } => Some(from),
+            Held::WebApp { .. } => None,
         }
     }
 }
@@ -90,6 +93,10 @@ type Listener = Rc<dyn Fn(Option<&Held>)>;
 struct State {
     held: Option<Held>,
     hint: Option<gtk::Label>,
+    /// Over nothing that takes it, the hint says "Not here" (a drag of ours:
+    /// anywhere is a target or isn't). A ghost of its own (the desktop's
+    /// icons, moved on the desktop without a target) shows none instead.
+    not_here: bool,
     listeners: Vec<Listener>,
 }
 
@@ -125,6 +132,7 @@ pub fn end() {
         let mut s = s.borrow_mut();
         s.held = None;
         s.hint = None;
+        s.not_here = false;
         s.listeners.clone()
     });
     for f in listeners {
@@ -144,6 +152,11 @@ fn set_hint(v: Option<&Verdict>) {
                     } else {
                         l.add_css_class("no");
                     }
+                }
+                None if s.borrow().not_here => {
+                    l.set_label("Not here");
+                    l.add_css_class("no");
+                    l.set_visible(true);
                 }
                 None => l.set_visible(false),
             }
@@ -192,7 +205,12 @@ pub fn source(
     src.connect_drag_begin(move |_, drag| {
         let Some((held, look, hx, hy)) = p.borrow_mut().take() else { return };
         let icon = gtk::DragIcon::for_drag(drag);
-        icon.set_child(Some(&ghost(&look)));
+        // Several picked together: how many ride under the pointer.
+        let n = match &held {
+            Held::Pieces { items, .. } => items.len(),
+            _ => 1,
+        };
+        icon.set_child(Some(&ghost(&look, n)));
         drag.set_hotspot(hx.round() as i32, hy.round() as i32);
         begin(held);
     });
@@ -205,19 +223,48 @@ pub fn source(
     src
 }
 
-/// The drag's icon: `look` as it is (live), and the hint under it.
-fn ghost(look: &gtk::Widget) -> gtk::Widget {
+/// The drag's icon: `look` as it is (live), and the hint under it (after how many, if `n` is more than one).
+fn ghost(look: &gtk::Widget, n: usize) -> gtk::Widget {
     let col = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).css_classes(["dnd-ghost"]).build();
     let pic = gtk::Picture::for_paintable(&gtk::WidgetPaintable::new(Some(look)));
     pic.set_can_shrink(false);
+    // Left-aligned: a wider hint under it mustn't move it from the pointer.
+    pic.set_halign(gtk::Align::Start);
     let (w, h) = (look.width().max(1), look.height().max(1));
     pic.set_size_request(w, h);
     pic.set_opacity(0.92);
     col.append(&pic);
     let hint = gtk::Label::builder().css_classes(["dnd-hint"]).halign(gtk::Align::Start).visible(false).build();
-    col.append(&hint);
-    STATE.with(|s| s.borrow_mut().hint = Some(hint));
+    if n > 1 {
+        let row = gtk::Box::builder().spacing(6).halign(gtk::Align::Start).build();
+        row.append(
+            &gtk::Label::builder().label(n.to_string()).css_classes(["dnd-count"]).valign(gtk::Align::Center).build(),
+        );
+        row.append(&hint);
+        col.append(&row);
+    } else {
+        col.append(&hint);
+    }
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.hint = Some(hint);
+        s.not_here = true;
+    });
+    set_hint(None);
     col.upcast()
+}
+
+/// The hint, for a source with a ghost of its own (the desktop's icons): put
+/// it in the drag's icon, and targets here say what they'd do in it (till
+/// the drag's let go).
+pub fn hint_label() -> gtk::Label {
+    let hint = gtk::Label::builder().css_classes(["dnd-hint"]).halign(gtk::Align::Start).visible(false).build();
+    STATE.with(|s| {
+        let mut s = s.borrow_mut();
+        s.hint = Some(hint.clone());
+        s.not_here = false;
+    });
+    hint
 }
 
 /// Makes `widget` a drop target for what's held: `offer(held, x, y)` says
@@ -284,6 +331,12 @@ pub const CSS: &str = "
   box-shadow: 0 6px 18px -6px rgb(0 0 0 / 0.6);
 }
 .dnd-hint.no { background: var(--surface-3); color: var(--muted); }
+.dnd-count {
+  min-width: 22px; min-height: 22px; border-radius: 999px;
+  background: var(--accent); color: var(--accent-fg);
+  font-weight: 700; font-size: 12px;
+  box-shadow: 0 6px 18px -6px rgb(0 0 0 / 0.6);
+}
 ";
 
 #[cfg(test)]

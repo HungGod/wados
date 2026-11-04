@@ -3,6 +3,10 @@
 //! window, in the background). Click one to bring it up; right-click for
 //! full screen, a window, hiding it, or stopping it. Nothing running, it
 //! says so. Sideways when there's more than fits.
+//!
+//! Each is a drop target for what's held (`builder::drops`, the spike's
+//! `spaces/targets.ts`): another's piece is copied in. It's lit while it
+//! would take it, and the hint's under the pointer.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -12,6 +16,8 @@ use wad_model::{Phase, SessionDisplay};
 
 use super::shared::{Shared, Topic};
 use super::ui::{self, Entry, Item, entry};
+use crate::builder::drops;
+use crate::dnd;
 use crate::shell::Shell;
 
 pub struct Running {
@@ -141,12 +147,35 @@ impl Running {
                     m.menu(&id);
                 }
             });
+            self.take_drops(&r.id, &item.button);
             self.list.append(&item.button);
             items.push((r.id.clone(), item));
         }
         self.none.set_visible(rows.is_empty());
         self.scroll.set_visible(!rows.is_empty());
         *self.items.borrow_mut() = items;
+    }
+
+    /// `button` (`id`'s) takes what's held: another's piece, copied in.
+    fn take_drops(&self, id: &str, button: &gtk::Button) {
+        let (s, ws) = (self.shell.clone(), id.to_string());
+        let offer = move |held: &dnd::Held, _: f64, _: f64| drops::offer_on(&s, &ws, held);
+        let (s, ws) = (self.shell.clone(), id.to_string());
+        let land = move |held: &dnd::Held, _: f64, _: f64| drops::land_on(&s, &ws, held);
+        let b = button.downgrade();
+        let hover = move |on: bool| {
+            if let Some(b) = b.upgrade() {
+                ui::set_class(&b, "wb-hot", on);
+            }
+        };
+        dnd::target(button, offer, land, hover);
+    }
+
+    /// Where its item is, in the bar's surface (it's at the screen's top left).
+    pub fn where_(&self, id: &str) -> Option<(f64, f64)> {
+        let items = self.items.borrow();
+        let (_, item) = items.iter().find(|(x, _)| x == id)?;
+        ui::middle_of(&item.button)
     }
 
     /// Its menu: full screen, a window, hide it, stop it.

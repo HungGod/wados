@@ -117,7 +117,12 @@ impl Builder {
             if let Some(b) = w.upgrade()
                 && matches!(
                     c,
-                    Change::Library | Change::Wadspace(_) | Change::Build(_) | Change::Run(_) | Change::Machine
+                    Change::Library
+                        | Change::Wadspace(_)
+                        | Change::Build(_)
+                        | Change::Run(_)
+                        | Change::Job(_)
+                        | Change::Machine
                 )
             {
                 b.queue_refresh();

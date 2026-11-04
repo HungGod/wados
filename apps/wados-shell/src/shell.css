@@ -12,6 +12,11 @@ window.wados-chrome {
   background: transparent;
 }
 
+/* The reserve's strip: barely there, so it's drawn (and mapped) at once. */
+.reserve-fill {
+  background-color: rgb(0 0 0 / 0.004);
+}
+
 /* The launcher's backdrop: magenta top right, lime bottom left, violet in
    the middle (the spike's .backdrop). */
 .backdrop {

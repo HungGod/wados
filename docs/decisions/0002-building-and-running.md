@@ -11,6 +11,7 @@ Phase 1. `apps/wadd/dev/try.sh` runs all of it rootless, on a headless patched l
   - The checks after assembly all pass: `rpm -qa`, `rpm -V`, and `dnf install` on top.
   - dnf5's own state is left out: dnf sees the packages' RPMs as installed outside it.
 - **Sets** are the base, plus its packages' chain of layers, plus the wadspace's own RUN/COPY lines on top (`wad_gen::sets`). The key covers the packages, the base's image id and the commands. A wadspace whose layer differs from its last build shows "update" and keeps running its old image.
+- **What rebuilds one (phase 3):** only its apps, the add-ons that are packages (VS Code's extensions, the command line's tools) and its commands. Its background, icon, name, tag, web apps, sign-ins and what it starts into go into `/run/wadspaces-extra` when it starts. The spike's simulation also counted web apps as rebuilding one; wados doesn't, because they aren't in its image. wad-model's edits (`needs_build`, the Builder's hammer) and wad-gen's set key agree, which `crates/wad-gen/tests/rebuilds.rs` checks for each kind of edit.
 - **Timing on this laptop:** a set with one tool built cold in 29 s (the package, its chain and the set). Rebuilt from the cached package, it took 2.7 s.
 
 ## Running: what wadd does, and what the shell does

@@ -16,6 +16,11 @@ pub mod addons;
 pub mod apps;
 pub mod custom;
 pub mod secrets;
+// What Apps, Add-ons and Secrets share: their lists and choices (pure), and their widgets.
+pub mod addon_list;
+mod ctl;
+pub mod keys;
+mod kit;
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};

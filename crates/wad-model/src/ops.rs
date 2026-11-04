@@ -500,11 +500,20 @@ pub fn needs_build(s: Section) -> bool {
 /// Its apps, its add-ons (app and id) and its commands (kind and text).
 type Image<'a> = (Vec<AppId>, Vec<(AppId, &'a str)>, Vec<(CommandKind, &'a str)>);
 
-/// What a wadspace's image is made of: its apps, its add-ons but its games and named variants (they're its apps' content, not in the image), and its own commands, in order.
+/// What a wadspace's image is made of: its apps, the add-ons built into it
+/// (VS Code's extensions and the command line's tools: packages), and its
+/// own commands, in order. Web apps, games and discs aren't: they're its
+/// apps' content, put in when it starts (`/run/wadspaces-extra`), so adding
+/// one never rebuilds it (wad-gen's set key agrees: `tests/rebuilds.rs`).
 fn image(x: &Wadspace) -> Image<'_> {
     let mut apps: Vec<AppId> = x.apps.iter().map(|a| a.app).collect();
     apps.sort();
-    let mut exts: Vec<(AppId, &str)> = x.exts.iter().filter(|e| !is_named(e)).map(|e| (e.app, e.id.as_str())).collect();
+    let mut exts: Vec<(AppId, &str)> = x
+        .exts
+        .iter()
+        .filter(|e| !is_named(e) && matches!(e.app, AppId::Vscode | AppId::Terminal))
+        .map(|e| (e.app, e.id.as_str()))
+        .collect();
     exts.sort();
     let commands = x.commands.iter().map(|c| (c.kind, c.text.as_str())).collect();
     (apps, exts, commands)

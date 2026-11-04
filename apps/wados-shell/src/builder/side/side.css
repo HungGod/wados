@@ -1,0 +1,330 @@
+/* The sidebar's Apps, Add-ons and Secrets tabs (the styles of the spike's
+   SideApps.svelte, SideAddons.svelte, SideSecrets.svelte and Pill.svelte).
+   Each section in its colour: apps --c-app, add-ons --c-ext, keys --c-key.
+   There's no blur behind anything here: menus and dialogs are opaque. */
+
+.side-h5 {
+  margin: 14px 0 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+.side-h5.first { margin-top: 2px; }
+
+/* ------------------------------------------------------------ Apps */
+
+button.side-app {
+  min-height: 40px;
+  margin-bottom: 6px;
+  padding: 0 10px 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: rgb(255 255 255 / 0.035);
+  color: var(--fg);
+  font-weight: 500;
+  font-size: 13px;
+  box-shadow: none;
+  outline: none;
+}
+button.side-app:hover { background: rgb(255 255 255 / 0.07); }
+button.side-app.in { background: color-mix(in srgb, var(--c-app) 13%, rgb(255 255 255 / 0.03)); }
+button.side-app .side-check { color: var(--c-app); }
+button.side-app:disabled { opacity: 0.6; }
+button.side-app:disabled label { color: var(--fg); }
+.side-grip { color: var(--faint); }
+
+/* ------------------------------------------------------------ Add-ons */
+
+.side-card {
+  padding: 10px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.035);
+}
+.side-for { font-size: 11.5px; color: var(--muted); }
+
+button.side-pill {
+  min-height: 26px;
+  padding: 0 10px 0 7px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--fg);
+  font-weight: 500;
+  font-size: 12px;
+  box-shadow: none;
+  outline: none;
+}
+button.side-pill:hover { background: rgb(255 255 255 / 0.06); }
+button.side-pill.in {
+  border-color: color-mix(in srgb, var(--c-ext) 70%, transparent);
+  background: color-mix(in srgb, var(--c-ext) 14%, transparent);
+}
+button.side-pill:disabled { opacity: 0.6; }
+button.side-pill:disabled label { color: var(--fg); }
+.side-img { border-radius: 4px; }
+
+/* Suggestions: dashed, in the add-ons' colour, why beside them. */
+.side-suggested button.side-pill {
+  border-style: dashed;
+  border-color: color-mix(in srgb, var(--c-ext) 55%, transparent);
+}
+.side-why { font-size: 11px; color: var(--faint); }
+
+.side-none { font-size: 12px; color: var(--faint); }
+.side-err { font-size: 12px; color: var(--danger); }
+
+/* The command line's own commands, under its tools. */
+.side-commands {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.side-sub { font-size: 11.5px; color: var(--muted); }
+.side-cmd {
+  padding: 6px 6px 6px 8px;
+  border-radius: 8px;
+  background: rgb(0 0 0 / 0.25);
+}
+.side-cmd-name {
+  font-family: monospace;
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--c-ext);
+}
+.side-cmd-text {
+  font-family: monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+button.side-x {
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--faint);
+  box-shadow: none;
+}
+button.side-x:hover { background: rgb(255 255 255 / 0.1); color: var(--fg); }
+
+.side-type {
+  min-height: 34px;
+  padding: 0 4px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--c-ext) 35%, transparent);
+  background: rgb(0 0 0 / 0.2);
+}
+.side-type:focus-within { border-color: var(--c-ext); }
+button.side-kind {
+  min-height: 24px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: rgb(255 255 255 / 0.06);
+  box-shadow: none;
+  font-family: monospace;
+  font-weight: 700;
+  font-size: 11px;
+  color: var(--c-ext);
+}
+button.side-kind:hover { background: rgb(255 255 255 / 0.1); }
+entry.side-entry {
+  min-height: 24px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+  color: var(--fg);
+  font-family: monospace;
+  font-size: 12px;
+}
+entry.side-entry:focus-within { box-shadow: none; outline: none; }
+button.side-add {
+  min-width: 26px;
+  min-height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+button.side-add:hover:not(:disabled) { background: var(--surface-3); color: var(--fg); }
+button.side-add:disabled { opacity: 0.4; }
+
+/* ------------------------------------------------------------ Secrets */
+
+.side-app-h {
+  margin: 16px 0 8px;
+  font-family: 'Space Grotesk', Inter, sans-serif;
+  font-weight: 650;
+  font-size: 13px;
+}
+.side-app-h.first { margin-top: 2px; }
+
+.side-group,
+.side-line {
+  margin-bottom: 8px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgb(255 255 255 / 0.035);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+.side-group.hot {
+  box-shadow: inset 0 0 0 2px var(--accent), 0 0 0 3px var(--accent-soft);
+}
+.side-label { font-weight: 600; font-size: 12.5px; }
+
+/* A thing, as a pill (Pill.svelte), in the keys' colour; picked: ringed in the accent. */
+button.side-thing {
+  min-height: 26px;
+  padding: 0 10px 0 6px;
+  border: 0;
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--c-key) 14%, rgb(255 255 255 / 0.03));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c-key) 45%, transparent);
+  color: var(--fg);
+  font-weight: 500;
+  font-size: 12px;
+  outline: none;
+}
+button.side-thing:hover { background: color-mix(in srgb, var(--c-key) 24%, rgb(255 255 255 / 0.04)); }
+button.side-thing.picked {
+  background: color-mix(in srgb, var(--accent) 18%, rgb(255 255 255 / 0.04));
+  box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 0 2px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+/* A key's dropdown. */
+button.side-select {
+  min-height: 37px;
+  padding: 0 12px;
+  border: 1.5px solid var(--c-key);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--c-key) 14%, transparent);
+  color: var(--fg);
+  font-family: 'Space Grotesk', Inter, sans-serif;
+  font-weight: 650;
+  font-size: 13.5px;
+  box-shadow: none;
+  outline: none;
+}
+button.side-select:hover:not(:disabled) { background: color-mix(in srgb, var(--c-key) 22%, transparent); }
+button.side-select.none {
+  border-style: dashed;
+  border-color: var(--line-strong);
+  background: transparent;
+  color: var(--muted);
+}
+button.side-select.none:hover:not(:disabled) { background: rgb(255 255 255 / 0.04); }
+button.side-select:disabled { opacity: 0.6; }
+button.side-select:disabled label { color: var(--fg); }
+
+.side-picked {
+  margin: 0 0 8px;
+  padding: 6px 6px 6px 10px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  font-size: 12px;
+  color: var(--fg);
+}
+button.side-clear {
+  min-height: 24px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: rgb(255 255 255 / 0.08);
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 12px;
+  box-shadow: none;
+}
+button.side-clear:hover { background: rgb(255 255 255 / 0.14); }
+
+.side-own {
+  min-height: 37px;
+  margin-bottom: 8px;
+  border: 1.5px dashed color-mix(in srgb, var(--c-key) 70%, transparent);
+  border-radius: 10px;
+  color: var(--c-key);
+  font-weight: 600;
+  font-size: 12.5px;
+}
+.side-own.hot { background: color-mix(in srgb, var(--c-key) 16%, transparent); }
+
+.side-note { margin-top: 12px; font-size: 12px; color: var(--faint); }
+
+/* ------------------------------------------------------------ menus and dialogs */
+
+popover.side-menu,
+popover.side-ask { background: none; box-shadow: none; padding: 0; }
+popover.side-menu > contents,
+popover.side-ask > contents {
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+  /* --surface-2, opaque (there's no blur behind it here). */
+  background-color: var(--surface-2);
+  box-shadow: 0 18px 48px -12px var(--shadow);
+  color: var(--fg);
+}
+popover.side-ask > contents { padding: 14px; }
+button.side-menu-item {
+  min-height: 22px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  box-shadow: none;
+  outline: none;
+  color: var(--fg);
+}
+button.side-menu-item:hover,
+button.side-menu-item:focus-visible { background-color: var(--surface-3); }
+button.side-menu-item:disabled { color: var(--faint); background: none; opacity: 1; }
+button.side-menu-item:disabled label { color: var(--faint); }
+.side-menu-ic { color: var(--muted); }
+button.side-menu-item.checked .side-menu-ic { color: var(--accent); }
+.side-menu-label { font-size: 13.5px; }
+.side-menu-hint { font-size: 11.5px; color: var(--faint); }
+.side-menu-sep { min-height: 1px; margin: 5px 8px; background-color: var(--line); }
+.side-menu-heading {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+
+.side-ask-title {
+  font-family: 'Space Grotesk', Inter, sans-serif;
+  font-weight: 650;
+  font-size: 14px;
+}
+.side-ask-label { font-size: 11.5px; color: var(--muted); }
+entry.side-ask-entry {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: rgb(0 0 0 / 0.2);
+  color: var(--fg);
+  box-shadow: none;
+  outline: none;
+}
+entry.side-ask-entry:focus-within { border-color: var(--accent); }
+button.side-ask-ok,
+button.side-ask-cancel {
+  min-height: 32px;
+  padding: 0 14px;
+  border-radius: 99px;
+  font-weight: 650;
+  font-size: 12.5px;
+  box-shadow: none;
+}
+button.side-ask-ok { border: 0; background: var(--accent); color: var(--accent-fg); }
+button.side-ask-ok:hover { background: #d4ff52; }
+button.side-ask-cancel { border: 1px solid var(--line-strong); background: transparent; color: var(--fg); }
+button.side-ask-cancel:hover { background: var(--surface-3); }

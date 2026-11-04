@@ -13,8 +13,10 @@ pub mod session_lock;
 pub mod spring;
 pub mod theme;
 pub mod tile;
+pub mod wrap;
 
 pub use icon::{Icon, Svg};
 pub use picture::Picture;
 pub use spring::{Params, Spring};
 pub use tile::{TileState, WadspaceTile};
+pub use wrap::Wrap;

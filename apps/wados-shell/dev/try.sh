@@ -9,7 +9,9 @@
 #   TRY_NAME=home …                              a session of its own (several can run at once)
 #   TRY_FULLSCREEN=1 …                           also open a wadspace full screen (needs the base image)
 #
-# The shell runs with a home of its own (the spike's sample Desktop), never the real one.
+# The shell runs with a home of its own (the spike's sample Desktop), never the
+# real one, and a session bus of its own with no desktop portals: a file dialog
+# or an app it opens stays in this headless session, off your real desktop.
 #
 # Shots: launcher.png, desktop.png (and display-2.png, fullscreen.png).
 set -euo pipefail
@@ -80,7 +82,7 @@ for _ in $(seq 50); do [[ -S "$WADD_SOCKET" ]] && break; sleep 0.1; done
 
 in_labwc env WADD_SOCKET="$WADD_SOCKET" WADOS_NO_LOCK=1 GSK_RENDERER=cairo WADOS_PRIMARY=HEADLESS-1 \
   HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache" \
-  wados-shell >"$tmp/shell.log" 2>&1 &
+  GDK_DEBUG=no-portals GTK_USE_PORTAL=0 GTK_A11Y=none dbus-run-session -- wados-shell >"$tmp/shell.log" 2>&1 &
 for _ in $(seq 100); do in_labwc wadsctl ping >/dev/null 2>&1 && break; sleep 0.1; done
 for _ in $(seq 50); do in_labwc wadsctl wadd 2>/dev/null | grep -q "connected=true" && break; sleep 0.1; done
 echo "shell: $(in_labwc wadsctl wadd)"
