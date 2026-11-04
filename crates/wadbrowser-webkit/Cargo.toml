@@ -1,0 +1,16 @@
+[package]
+name = "wadbrowser-webkit"
+description = "WadBrowser's WebKitGTK layer (forked from Cactus): web views, network sessions, request policy, downloads"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license = "MPL-2.0"
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+url.workspace = true
+wadbrowser-core.workspace = true
+wadbrowser-privacy.workspace = true
+webkit6.workspace = true

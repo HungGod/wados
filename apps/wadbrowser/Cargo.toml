@@ -1,0 +1,18 @@
+[package]
+name = "wadbrowser"
+description = "WadBrowser, WadOS's web browser: a fork of Cactus (WebKitGTK 6, GTK4 and libadwaita)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license = "MPL-2.0"
+
+[[bin]]
+name = "wadbrowser"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+tracing-subscriber.workspace = true
+wadbrowser-core.workspace = true
+wadbrowser-ui.workspace = true
