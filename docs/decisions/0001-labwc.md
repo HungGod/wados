@@ -53,6 +53,22 @@ The patch moves the window to that output first.
 - **Verified:** a wadspace opened on HEADLESS-2 goes full screen on HEADLESS-1, and then back to HEADLESS-2
   ("Open on 2", "To 2").
 
+## The desktop takes the keys when it comes into view: **patch** (`host/labwc/0003-…`, phase 2)
+
+The desktop is a BOTTOM-layer surface with on-demand keys, and labwc gives those a click only (top and overlay
+ones also get the keys when they map). So after coming down to the desktop by the keys, Delete, F2 or Ctrl+A did
+nothing until a click, and the bar (TOP, on-demand) took the keys as it mapped. An exclusive desktop isn't an
+answer: labwc won't let a window have the keys while an exclusive surface does, whatever its layer.
+
+The patch: a mapped layer surface that turns on-demand on (from none) asks for the keys, and gets them unless
+an exclusive surface has them. Only the host's clients have layer-shell, so a wadspace can't use it.
+
+- **The shell:** the desktop turns its keys off, then on-demand again once that's committed (the frame after),
+  when it lands, and when a bar flyout closes with no window in front. The bar and the extra displays' bars take
+  no keys of their own: their flyouts are popovers that grab, which labwc gives the keys to.
+- **Verified:** Page Down from the launcher, then Ctrl+A, selects every desktop icon; the start menu's search
+  takes typing; Esc closes it and the desktop has the keys again.
+
 ## What else the probes showed (no patch)
 
 - **Layering:** a full-screen window covers the TOP layer (the bar), and OVERLAY shows above it. So the
@@ -61,13 +77,15 @@ The patch moves the window to that output first.
 - **foreign-toplevel** `activate`, `set_minimized`/`unset_minimized`, `unset_fullscreen` and `close` all work
   on wadspace windows and host windows alike. `output_enter`/`output_leave` say which display a window is on.
 - **Keybinds:** labwc's `rc.xml` (`host/etc/xdg/labwc/rc.xml`) runs `wadsctl` for Super+Tab, Super+Shift+Tab,
-  Alt+Space, Ctrl+Alt+↓ and Ctrl+Alt+L. A virtual keyboard (`wtype`, the same protocol the shell uses) triggers
+  Alt+Space, Ctrl+Alt+↓ (a full-screen wadspace into a window: `wadsctl windowed`) and Ctrl+Alt+L. A virtual keyboard (`wtype`, the same protocol the shell uses) triggers
   them too.
 - **Moving a window between displays:** there's no foreign-toplevel request for it. The shell activates the
   window and types `W-C-A-S-F13` (or `F14`), which `rc.xml` binds to `MoveToOutput right` (`left`). Verified:
   foot moved from HEADLESS-2 to HEADLESS-1.
-- **Drag and drop:** a drag from an ordinary window (the Builder) lands on the desktop's BOTTOM layer surface,
-  in its coordinates (desktop y = screen y − the bar's 78 px). Driven by a virtual pointer.
+- **Drag and drop:** a drag from an ordinary window lands on the desktop's BOTTOM layer surface, in its
+  coordinates (desktop y = screen y − the bar's 78 px). Driven by a virtual pointer. Phase 0 dragged a piece
+  from a Builder stub; since phase 2 the probe drags a file from another app (`tools/drag-source.py`) and checks
+  it's copied into the desktop's folder. The Builder's pieces come back in phase 3.
 - **The lock screen:** gtk4-layer-shell 1.3's session lock (`wad_gtk::session_lock`, our FFI; its Rust crate
   has none) holds every monitor. PAM, called directly (`apps/wados-shell/src/pam.rs`, no bindgen), checks the
   user's own password without root and refuses a wrong one. The right password is checked in the VM (phase 4),

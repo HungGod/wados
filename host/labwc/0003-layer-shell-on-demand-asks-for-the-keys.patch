@@ -1,0 +1,34 @@
+From: WadOS <wados@wadspaces.com>
+Subject: [PATCH] layer-shell: a client turning on-demand on gets the keys
+
+A layer surface that's mapped and changes its keyboard interactivity to
+on-demand (from none) is given keyboard focus, unless an exclusive layer
+has it. Stock labwc only gives on-demand surfaces focus on a click (and,
+for top and overlay, when they map), so a bottom-layer desktop couldn't
+take the keys without one.
+
+WadOS's shell uses it when its desktop page comes into view by the keys
+(Page Down, ↓ from the launcher): the desktop's keys work at once. Only
+the host's own clients have layer-shell (sandboxed clients don't see it).
+---
+ src/layers.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+diff --git a/src/layers.c b/src/layers.c
+index 60421e3..ff956e2 100644
+--- a/src/layers.c
++++ b/src/layers.c
+@@ -286,6 +286,13 @@ handle_surface_commit(struct wl_listener *listener, void *data)
+ 				 */
+ 				struct server *server = layer->server;
+ 				try_to_focus_next_layer_or_toplevel(server);
++			} else if (layer_surface->surface->mapped) {
++				/*
++				 * A mapped client turning on-demand on (from
++				 * none) asks for the keys: give them, unless an
++				 * exclusive layer has them.
++				 */
++				layer_try_set_focus(seat, layer_surface);
+ 			}
+ 			goto out;
+ 		}

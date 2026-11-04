@@ -7,9 +7,6 @@
 //!
 //! It answers `wadsctl` on `$XDG_RUNTIME_DIR/wados/shell.sock`.
 
-// Phase 2: the surfaces are being built on the shell's verbs; this goes when they all use them.
-#![allow(dead_code)]
-
 mod assets;
 mod bar;
 mod builder;
@@ -162,8 +159,9 @@ fn handle(app: &gtk::Application, m: &Rc<Machine>, shell: &Rc<Shell>, words: &[&
             return "ok".into();
         }
         ["wadd"] => {
+            let screen = shell.store.screen().map(|s| format!("{:?}", s.from)).unwrap_or_else(|| "?".into());
             return format!(
-                "ok connected={} machine={} wadspaces={} running={}",
+                "ok connected={} machine={} wadspaces={} running={} screen={screen}",
                 shell.store.connected(),
                 shell.store.machine_id(),
                 shell.store.live().len(),

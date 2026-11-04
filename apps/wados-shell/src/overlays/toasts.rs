@@ -1,0 +1,241 @@
+//! Toasts (`ui/Toasts.svelte`): wadd's notices and the shell's, top right
+//! over everything (a full-screen wadspace too), the newest four; each goes
+//! after six seconds (nine for an error), or on its ×. One that took
+//! something out has Undo.
+
+use std::cell::RefCell;
+use std::rc::Rc;
+use std::time::Duration;
+
+use gtk::{glib, prelude::*};
+use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use wad_gtk::Icon;
+use wad_proto::Level;
+
+use crate::bar::in_front;
+use crate::machine::{BAR, Page};
+use crate::shell::Shell;
+use crate::surface::{self, Anchor, Spec};
+
+/// The most shown at once (older ones go first).
+pub const MAX: usize = 4;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Toast {
+    pub id: u64,
+    pub level: Level,
+    pub title: String,
+    pub undo: Option<String>,
+}
+
+/// How long one stays.
+pub fn lasts(level: Level) -> Duration {
+    Duration::from_millis(if level == Level::Error { 9000 } else { 6000 })
+}
+
+/// The toasts showing, oldest first. Pure: `Toasts` draws it.
+#[derive(Debug, Default)]
+pub struct Queue {
+    shown: Vec<Toast>,
+    next: u64,
+}
+
+impl Queue {
+    pub fn push(&mut self, level: Level, title: &str, undo: Option<String>) -> u64 {
+        self.next += 1;
+        // The same again (a retry, a double click) moves up rather than piling up.
+        self.shown.retain(|t| !(t.title == title && t.undo == undo));
+        self.shown.push(Toast { id: self.next, level, title: title.into(), undo });
+        if self.shown.len() > MAX {
+            let extra = self.shown.len() - MAX;
+            self.shown.drain(..extra);
+        }
+        self.next
+    }
+
+    pub fn dismiss(&mut self, id: u64) -> bool {
+        let before = self.shown.len();
+        self.shown.retain(|t| t.id != id);
+        self.shown.len() != before
+    }
+
+    pub fn shown(&self) -> &[Toast] {
+        &self.shown
+    }
+}
+
+pub struct Toasts {
+    shell: Rc<Shell>,
+    win: gtk::ApplicationWindow,
+    col: gtk::Box,
+    queue: RefCell<Queue>,
+}
+
+impl Toasts {
+    pub fn new(shell: &Rc<Shell>) -> Rc<Self> {
+        let win = surface::make(
+            &shell.app,
+            &shell.primary,
+            &Spec {
+                namespace: "wados-toasts",
+                layer: Layer::Overlay,
+                anchor: Anchor::Top,
+                exclusive: -1,
+                keyboard: KeyboardMode::None,
+                height: 0,
+            },
+        );
+        win.set_anchor(Edge::Left, false);
+        win.set_margin(Edge::Right, 12);
+        let col = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(8).build();
+        col.set_size_request(360, -1);
+        win.set_child(Some(&col));
+        Rc::new(Self { shell: shell.clone(), win, col, queue: RefCell::default() })
+    }
+
+    pub fn push(self: &Rc<Self>, level: Level, title: &str, undo: Option<String>) {
+        let id = self.queue.borrow_mut().push(level, title, undo);
+        let w = Rc::downgrade(self);
+        glib::timeout_add_local_once(lasts(level), move || {
+            if let Some(m) = w.upgrade() {
+                m.dismiss(id);
+            }
+        });
+        self.draw();
+    }
+
+    pub fn dismiss(self: &Rc<Self>, id: u64) {
+        if self.queue.borrow_mut().dismiss(id) {
+            self.draw();
+        }
+    }
+
+    /// Its surface's size, while it's up (for `wadsctl toasts`).
+    pub fn size(&self) -> Option<(i32, i32)> {
+        self.win.is_visible().then(|| (self.win.width(), self.win.height()))
+    }
+
+    pub fn shown(&self) -> Vec<Toast> {
+        self.queue.borrow().shown().to_vec()
+    }
+
+    /// Where they go: under the bar on the desktop, by the top over a
+    /// full-screen wadspace (beside its reveal bar), else near the top.
+    fn top(&self) -> i32 {
+        let primary = self.shell.primary.connector().map(|c| c.to_string()).unwrap_or_default();
+        let full = self
+            .shell
+            .placer
+            .windows()
+            .iter()
+            .any(|t| t.wadspace().is_some() && t.fullscreen && in_front(t) && t.outputs.contains(&primary));
+        if full {
+            44
+        } else if self.shell.page() == Page::Desktop {
+            BAR + 8
+        } else {
+            12
+        }
+    }
+
+    fn draw(self: &Rc<Self>) {
+        while let Some(c) = self.col.first_child() {
+            self.col.remove(&c);
+        }
+        let shown = self.shown();
+        for t in &shown {
+            self.col.append(&self.card(t));
+        }
+        if shown.is_empty() {
+            self.win.set_visible(false);
+            return;
+        }
+        self.win.set_margin(Edge::Top, self.top());
+        // As tall as what's in it (a layer surface keeps its size otherwise).
+        self.win.set_default_size(-1, 1);
+        self.win.present();
+    }
+
+    fn card(self: &Rc<Self>, t: &Toast) -> gtk::Box {
+        let card = gtk::Box::builder().spacing(10).css_classes(["ov-toast", crate::bar::level_class(t.level)]).build();
+        let ic = gtk::Box::builder().css_classes(["ov-tic"]).homogeneous(true).valign(gtk::Align::Start).build();
+        ic.append(&Icon::new(crate::bar::level_icon(t.level), 16));
+        card.append(&ic);
+        let title = gtk::Label::builder()
+            .label(&t.title)
+            .xalign(0.0)
+            .wrap(true)
+            .wrap_mode(gtk::pango::WrapMode::WordChar)
+            .hexpand(true)
+            .valign(gtk::Align::Center)
+            .css_classes(["ov-toast-title"])
+            .build();
+        card.append(&title);
+        if let Some(undo) = t.undo.clone() {
+            let b = gtk::Button::builder().label("Undo").css_classes(["ov-act"]).valign(gtk::Align::Center).build();
+            let (w, id) = (Rc::downgrade(self), t.id);
+            b.connect_clicked(move |_| {
+                if let Some(m) = w.upgrade() {
+                    m.shell.undo(&undo);
+                    m.dismiss(id);
+                }
+            });
+            card.append(&b);
+        }
+        let x = gtk::Button::builder()
+            .child(&Icon::new("x", 14))
+            .css_classes(["ov-x"])
+            .tooltip_text("Dismiss")
+            .valign(gtk::Align::Start)
+            .build();
+        let (w, id) = (Rc::downgrade(self), t.id);
+        x.connect_clicked(move |_| {
+            if let Some(m) = w.upgrade() {
+                m.dismiss(id);
+            }
+        });
+        card.append(&x);
+        card
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_newest_four_oldest_first() {
+        let mut q = Queue::default();
+        for i in 1..=6 {
+            q.push(Level::Info, &format!("t{i}"), None);
+        }
+        let titles: Vec<&str> = q.shown().iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, ["t3", "t4", "t5", "t6"]);
+    }
+
+    #[test]
+    fn dismissing_and_the_same_again() {
+        let mut q = Queue::default();
+        let a = q.push(Level::Ok, "Built", None);
+        let b = q.push(Level::Info, "Moved to the Trash", Some("u1".into()));
+        assert!(q.dismiss(a));
+        assert!(!q.dismiss(a));
+        assert_eq!(q.shown().len(), 1);
+        // The same notice again replaces itself, and comes last (newest).
+        q.push(Level::Warn, "Other", None);
+        let c = q.push(Level::Info, "Moved to the Trash", Some("u1".into()));
+        assert_ne!(b, c);
+        let titles: Vec<&str> = q.shown().iter().map(|t| t.title.as_str()).collect();
+        assert_eq!(titles, ["Other", "Moved to the Trash"]);
+        // But a different Undo is a different toast.
+        q.push(Level::Info, "Moved to the Trash", Some("u2".into()));
+        assert_eq!(q.shown().len(), 3);
+    }
+
+    #[test]
+    fn errors_stay_longer() {
+        assert_eq!(lasts(Level::Info), Duration::from_secs(6));
+        assert_eq!(lasts(Level::Ok), Duration::from_secs(6));
+        assert_eq!(lasts(Level::Error), Duration::from_secs(9));
+    }
+}

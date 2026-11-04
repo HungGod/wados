@@ -9,6 +9,8 @@
 #   TRY_NAME=home …                              a session of its own (several can run at once)
 #   TRY_FULLSCREEN=1 …                           also open a wadspace full screen (needs the base image)
 #
+# The shell runs with a home of its own (the spike's sample Desktop), never the real one.
+#
 # Shots: launcher.png, desktop.png (and display-2.png, fullscreen.png).
 set -euo pipefail
 root=$(cd "$(dirname "$0")/../../.." && pwd)
@@ -42,6 +44,20 @@ cleanup() {
 trap cleanup EXIT
 
 python3 tools/seed-library.py "$tmp/state" >/dev/null
+# A home of its own, so the shell never sees (or moves, or trashes) the real
+# one's files: the spike's sample Desktop (sim/scenarios homeTree).
+home=$tmp/home
+mkdir -p "$home/Desktop/Thesis" "$home/.config" "$home/.local/share/Trash/files" "$home/.local/share/Trash/info" "$home/.cache"
+for c in "01 Introduction.md" "02 Method.md" "03 Results.md" "references.bib"; do
+  printf '# %s\n\nDraft.\n' "${c%.*}" >"$home/Desktop/Thesis/$c"
+done
+printf '%%PDF-1.4\n%%%%EOF\n' >"$home/Desktop/Pitch deck.pdf"
+printf 'Things to do\n\n- Try the Apps window (and Alt+Space)\n- Stream VanuaAcademy to the client\n- Copy the sprites from Desk\n' >"$home/Desktop/notes.txt"
+if command -v rsvg-convert >/dev/null; then
+  rsvg-convert -w 512 assets/wallpapers/art/bloom.svg -o "$home/Desktop/moodboard.png"
+else
+  cp assets/apps/krita/icon.png "$home/Desktop/moodboard.png"
+fi
 cat >"$tmp/wadd.toml" <<TOML
 [machine]
 id = "m-surface"
@@ -62,13 +78,19 @@ wadd_pid=$!
 for _ in $(seq 50); do [[ -S "$WADD_SOCKET" ]] && break; sleep 0.1; done
 
 in_labwc env WADD_SOCKET="$WADD_SOCKET" WADOS_NO_LOCK=1 GSK_RENDERER=cairo WADOS_PRIMARY=HEADLESS-1 \
+  HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache" \
   wados-shell >"$tmp/shell.log" 2>&1 &
 for _ in $(seq 100); do in_labwc wadsctl ping >/dev/null 2>&1 && break; sleep 0.1; done
 for _ in $(seq 50); do in_labwc wadsctl wadd 2>/dev/null | grep -q "connected=true" && break; sleep 0.1; done
 echo "shell: $(in_labwc wadsctl wadd)"
-sleep 1
+# Software rendering at 3000 x 2000 is slow (a frame can take half a second):
+# wait for things to settle before each shot.
+wait_for() { for _ in $(seq 80); do in_labwc wadsctl "$1" 2>/dev/null | grep -q "$2" && return; sleep 0.25; done; }
+wait_for home "moving=false"
+sleep 1.5
 shot HEADLESS-1 "$shots/launcher.png"
 in_labwc wadsctl page desktop >/dev/null
+wait_for page "Desktop 1.00"
 sleep 1.5
 shot HEADLESS-1 "$shots/desktop.png"
 [[ "$outputs" -ge 2 ]] && shot HEADLESS-2 "$shots/display-2.png"

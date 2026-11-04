@@ -3,7 +3,7 @@
 # patched labwc (tools/build-labwc.sh) in a headless session. Each prints
 # ok or FAIL; the script exits 1 if any failed.
 #
-#   cargo build -p wad-wayland --examples -p wados-shell -p wadsctl
+#   cargo build -p wados-shell -p wadsctl && cargo build -p wad-wayland --examples
 #   tools/probe-labwc.sh
 set -uo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -44,8 +44,12 @@ wadspace() {
 globals() { grep -oE "interface: '[a-z0-9_]+'" | sed "s/interface: //; s/'//g" | sort -u; }
 
 start_labwc 2 || exit 1
+# A home of its own: the shell never sees the real one's Desktop.
+home=$nested_cfg/home
+mkdir -p "$home/Desktop" "$home/.config" "$home/.local/share" "$home/.cache"
 in_labwc env WADOS_NO_LOCK=1 GSK_RENDERER=cairo WADOS_PRIMARY=HEADLESS-1 WADOS_PAM_SERVICE=login \
-  wados-shell --builder >"$shell_log" 2>&1 &
+  HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache" \
+  wados-shell >"$shell_log" 2>&1 &
 pids+=($!)
 for _ in $(seq 50); do in_labwc wadsctl ping >/dev/null 2>&1 && break; sleep 0.2; done
 # The desktop: on the launcher, its chrome holds the keyboard and covers the windows.
@@ -96,6 +100,9 @@ sleep 0.4
 log=$(in_labwc wadsctl log)
 check "Super+Tab reaches the shell" "grep -q 'switcher next' <<<\"\$log\""
 check "Alt+Space reaches the shell" "grep -q 'search' <<<\"\$log\""
+# The search holds the keyboard while it's open.
+in_labwc wadsctl search close >/dev/null
+sleep 0.4
 term_on() { in_labwc wadsctl wm list | tr ';' '\n' | grep Terminal | grep -oE '\[[^]]*\]'; }
 before=$(term_on)
 in_labwc wadsctl wm activate io.wados.Terminal >/dev/null
@@ -105,16 +112,21 @@ sleep 0.6
 after=$(term_on)
 check "the chord moves a window to the other display ($before -> $after)" "[ \"$before\" != \"$after\" ]"
 
-# 5. A drag from the Builder lands on the desktop.
+# 5. A file dragged from another app (a window) lands on the desktop (its
+# BOTTOM layer): it's copied into ~/Desktop. (The Builder's pieces come in phase 3.)
 in_labwc wadsctl wm close io.wados.Terminal >/dev/null
 in_labwc wadsctl wm close io.wadspaces.vanua >/dev/null
+echo "From the probe." >"$nested_cfg/probe-notes.txt"
+in_labwc python3 -I tools/drag-source.py "$nested_cfg/probe-notes.txt" >/dev/null 2>&1 &
+pids+=($!)
+for _ in $(seq 40); do in_labwc wadsctl wm list | grep -q io.wados.Probe && break; sleep 0.25; done
 sleep 1.5
-builder=$(in_labwc wadsctl wm list | tr ';' '\n' | grep '"Builder"' | grep -oE '\[[^]]*\]')
-if [ "$builder" = "[HEADLESS-1]" ]; then x0=1280; else x0=0; fi
-# The Builder (520x420) is centred on its display; its first piece is 100 px down.
-in_labwc "$ex/pointer" 2560 720 drag $((x0 + 450)) 275 $((1280 + 150)) 600
-sleep 0.5
-check "a piece dragged from the Builder lands on the desktop" "in_labwc wadsctl log | grep -qE 'dropped \"(app|web|key):'"
+source_on=$(in_labwc wadsctl wm list | tr ';' '\n' | grep io.wados.Probe | grep -oE '\[[^]]*\]')
+if [ "$source_on" = "[HEADLESS-1]" ]; then x0=1280; else x0=0; fi
+# The window (400x300) is centred on its display; the desktop is HEADLESS-1's.
+in_labwc "$ex/pointer" 2560 720 drag $((x0 + 640)) 360 $((1280 + 300)) 640
+sleep 1.5
+check "a file dragged from another app lands on the desktop" "[ -f \"$home/Desktop/probe-notes.txt\" ]"
 
 # 6. The lock screen locks, and refuses a wrong password.
 in_labwc wadsctl lock >/dev/null

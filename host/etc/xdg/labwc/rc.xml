@@ -24,8 +24,8 @@
     <keybind key="W-S-Tab"><action name="Execute" command="wadsctl switcher prev"/></keybind>
     <!-- Alt+Space: search every app's variants. -->
     <keybind key="A-space"><action name="Execute" command="wadsctl search"/></keybind>
-    <!-- Ctrl+Alt+Down: off a full-screen wadspace, to the desktop. -->
-    <keybind key="C-A-Down"><action name="Execute" command="wadsctl page desktop"/></keybind>
+    <!-- Ctrl+Alt+Down: the full-screen wadspace into a window. -->
+    <keybind key="C-A-Down"><action name="Execute" command="wadsctl windowed"/></keybind>
     <!-- Ctrl+Alt+L: lock the screen. -->
     <keybind key="C-A-l"><action name="Execute" command="wadsctl lock"/></keybind>
 

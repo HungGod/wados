@@ -59,10 +59,6 @@ impl Link {
         Rc::new(Self { rt, client, store })
     }
 
-    pub fn store(&self) -> &Rc<Store> {
-        &self.store
-    }
-
     /// Runs `call` on wadd, then `done` with its answer on the main loop.
     pub fn call<T, F>(&self, call: impl FnOnce(Wadd) -> F, done: impl FnOnce(Result<T, Failure>) + 'static)
     where

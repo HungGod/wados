@@ -22,7 +22,11 @@ pub struct Placer {
     windows: RefCell<Vec<Top>>,
     /// What each window was last told (by its toplevel id), so it's told once.
     applied: RefCell<HashMap<u32, SessionDisplay>>,
+    /// Told each time the windows change (`on_windows`).
+    on_windows: RefCell<Vec<OnWindows>>,
 }
+
+type OnWindows = Box<dyn Fn(&[Top])>;
 
 impl Placer {
     pub fn new(wm: Option<Rc<Wm>>, store: Rc<Store>, primary: &str) -> Rc<Self> {
@@ -32,7 +36,13 @@ impl Placer {
             primary: RefCell::new(primary.to_string()),
             windows: RefCell::default(),
             applied: RefCell::default(),
+            on_windows: RefCell::default(),
         })
+    }
+
+    /// Calls `f` with every window each time they change (after they're placed).
+    pub fn on_windows(&self, f: impl Fn(&[Top]) + 'static) {
+        self.on_windows.borrow_mut().push(Box::new(f));
     }
 
     /// Every window on the machine, as foreign-toplevel last said.
@@ -49,18 +59,16 @@ impl Placer {
         self.wm.as_ref()
     }
 
-    pub fn set_primary(&self, connector: &str) {
-        *self.primary.borrow_mut() = connector.to_string();
-        self.applied.borrow_mut().clear();
-        self.place_all();
-    }
-
     /// foreign-toplevel's list changed.
     pub fn windows_changed(&self, list: Vec<Top>) {
         let ids: Vec<u32> = list.iter().map(|t| t.id).collect();
         self.applied.borrow_mut().retain(|id, _| ids.contains(id));
         *self.windows.borrow_mut() = list;
         self.place_all();
+        let list = self.windows();
+        for f in self.on_windows.borrow().iter() {
+            f(&list);
+        }
     }
 
     /// A wadspace's run changed (it may be shown another way now).

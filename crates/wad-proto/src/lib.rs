@@ -112,7 +112,10 @@ pub enum Event {
         undo: Option<String>,
     },
     /// A job (a wadspace's build) as it is now: its stages, progress and the last of its log.
-    Job(Box<JobInfo>),
+    /// Nested under `job`: a job has a `kind` of its own (build…), which would clash with the tag.
+    Job {
+        job: Box<JobInfo>,
+    },
     /// Lines a job printed, from line `from` on (`GET /v1/jobs/{id}?since=` has them all).
     JobLines {
         id: String,
@@ -136,7 +139,7 @@ impl Event {
     pub fn latest_key(&self) -> Option<String> {
         match self {
             Event::Machine(_) => Some("machine".into()),
-            Event::Job(j) => Some(format!("job:{}", j.job.id)),
+            Event::Job { job } => Some(format!("job:{}", job.job.id)),
             Event::Build(b) => Some(format!("build:{}", b.id)),
             Event::Run(r) => Some(format!("run:{}", r.id)),
             Event::Screen(_) => Some("screen".into()),
@@ -313,5 +316,19 @@ mod tests {
         let s: ScreenSession =
             serde_json::from_str(r#"{"waylandSocket": "/run/user/1000/wayland-0", "uid": 1000}"#).unwrap();
         assert_eq!(s.uid, 1000);
+    }
+
+    #[test]
+    fn a_job_event_comes_back_as_one() {
+        // A job has a `kind` of its own; the event's tag mustn't meet it.
+        let job: Job = serde_json::from_value(serde_json::json!({
+            "id": "j1", "kind": "build", "status": "running", "title": "Building Studio",
+            "subject": "studio", "progress": 0.5, "startedAt": 10, "source": "machine", "visible": true,
+        }))
+        .unwrap();
+        let e = Event::Job { job: Box::new(JobInfo { job, line_count: 3 }) };
+        let json = serde_json::to_string(&e).unwrap();
+        assert_eq!(serde_json::from_str::<Event>(&json).unwrap(), e);
+        assert_eq!(e.latest_key().as_deref(), Some("job:j1"));
     }
 }

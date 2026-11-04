@@ -112,7 +112,10 @@ impl Machine {
                 layer: Layer::Top,
                 anchor: Anchor::Top,
                 exclusive: -1,
-                keyboard: KeyboardMode::OnDemand,
+                // None: on-demand, it would take the keys each time it maps
+                // (labwc focuses top-layer on-demand surfaces then). Its
+                // flyouts are popovers that grab, which labwc gives the keys.
+                keyboard: KeyboardMode::None,
                 height: BAR,
             },
         );
@@ -175,6 +178,15 @@ impl Machine {
             }
         });
         *me.spring.borrow_mut() = Some(spring);
+        // A half that changes size (a task, the jobs' ring, the clock) is laid out again.
+        for h in [&me.chrome_halves, &me.bar_halves] {
+            let w = Rc::downgrade(&me);
+            h.on_resize(move || {
+                if let Some(m) = w.upgrade() {
+                    m.lay_out(m.progress());
+                }
+            });
+        }
 
         for w in &me._wallpapers {
             w.present();
@@ -250,7 +262,31 @@ impl Machine {
                 }
             });
             self.desktop.shown();
+            self.desktop_keys();
         }
+    }
+
+    /// Gives the desktop the keys (it's in the BOTTOM layer, so labwc gives
+    /// them on a click only): it turns its keyboard off, then, once that's
+    /// committed, on-demand again, which host/labwc/0003 takes as asking.
+    pub fn desktop_keys(&self) {
+        let win = self.desktop_win.clone();
+        win.set_keyboard_mode(KeyboardMode::None);
+        let Some(clock) = win.frame_clock() else {
+            win.set_keyboard_mode(KeyboardMode::OnDemand);
+            return;
+        };
+        let handler = Rc::new(Cell::new(None::<glib::SignalHandlerId>));
+        let h = handler.clone();
+        let id = clock.connect_after_paint(move |clock| {
+            // Painted: the None went with that frame's commit.
+            if let Some(id) = h.take() {
+                clock.disconnect(id);
+            }
+            win.set_keyboard_mode(KeyboardMode::OnDemand);
+        });
+        handler.set(Some(id));
+        self.desktop_win.queue_draw();
     }
 
     pub fn page(&self) -> Page {

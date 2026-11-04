@@ -9,7 +9,7 @@
 use std::cell::{OnceCell, RefCell};
 use std::rc::{Rc, Weak};
 
-use gtk::{gdk, prelude::*};
+use gtk::{gdk, glib, prelude::*};
 use wad_model::SessionDisplay;
 use wad_model::edit::Op;
 use wad_proto::{Event, Level, OpResult};
@@ -72,6 +72,24 @@ impl Shell {
         if let Some(m) = self.machine() {
             m.go(page);
         }
+    }
+
+    /// A flyout or menu that had the keys closed: on the desktop page with
+    /// no window in front, the desktop has them back (labwc gives them to
+    /// the topmost window, or no one). A moment later, so a window the
+    /// close's click picked shows as in front first.
+    pub fn keys_back(self: &Rc<Self>) {
+        let me = Rc::downgrade(self);
+        glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+            let Some(me) = me.upgrade() else { return };
+            let in_front = me.placer.windows().iter().any(|t| t.activated && !t.minimized);
+            if me.page() == Page::Desktop
+                && !in_front
+                && let Some(m) = me.machine()
+            {
+                m.desktop_keys();
+            }
+        });
     }
 
     /// The primary display's size, in logical pixels.

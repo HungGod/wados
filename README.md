@@ -2,7 +2,7 @@
 
 The software that runs a WadSpaces machine: a Fedora 44 bootc computer that boots into desktops you design. Each wadspace is a container with its own apps, files and sign-ins, and you run it full screen, in a window, or streamed to another device. v2 rebuilds the `wadspaces-v2-spike` design for real: the launcher and the desktop, the Builder, streams and the phone remote.
 
-**Status: phase 1** (wadd builds and runs wadspaces; the shell isn't on it yet).
+**Status: phase 2.** wadd builds and runs wadspaces. The shell runs on it: the launcher, the desktop, the bar and its tray, Super+Tab, Alt+Space, toasts with Undo, the reveal bar over a full-screen wadspace, and the other displays' bars. Next is the Builder (phase 3).
 
 ## Layout
 
@@ -22,11 +22,11 @@ The software that runs a WadSpaces machine: a Fedora 44 bootc computer that boot
 | `apps/wadsctl` | Tells the shell what to do: what labwc's keybinds run, and what tests drive it with. |
 | `apps/selkies-desktop` | The panel and Start menu inside each wadspace (C, v1's). |
 | `images/` | The wadspace images on Fedora 44: the base, the builder, `wadspaces-pkg` (packages captured and assembled on rpm), the feature scripts; `build.sh` and `check.sh`. |
-| `host/` | The machine's OS image. So far it holds labwc's config (`etc/xdg/labwc/rc.xml`) and the two labwc patches (`labwc/`). |
+| `host/` | The machine's OS image. So far it holds labwc's config (`etc/xdg/labwc/rc.xml`) and the three labwc patches (`labwc/`, `docs/decisions/0001`). |
 | `site/` | wadspaces.com, the landing page on Cloudflare Pages (`site/README.md` has the domain's layout). |
 | `assets/` | The spike's fonts, marks, app and web icons, the players' pictures, the art wallpapers (`scripts/art.py` makes them), and lucide's icons (`tools/lucide.mjs`). |
 | `docs/decisions/` | What was found and decided: labwc (`0001`), building and running a wadspace (`0002`). |
-| `tools/` | `headless.sh` (a headless labwc for probes and screenshots), `build-labwc.sh` (labwc with our patches), `lucide.mjs`. |
+| `tools/` | `headless.sh` (a headless labwc for probes and screenshots), `build-labwc.sh` (labwc with our patches), `probe-labwc.sh` (what we need from labwc, as checks; `drag-source.py` is its other app), `seed-library.py` (the spike's sample library for a test wadd), `lucide.mjs`. |
 
 ## Develop
 
@@ -46,7 +46,14 @@ cargo build -p wados-shell -p wadsctl
 PATH=$PWD/target/debug:$PATH .build/labwc/labwc -C host/etc/xdg/labwc -s 'wados-shell --builder'
 ```
 
-Or headless, for screenshots and tests:
+That shell is the real thing: it uses your home (its desktop is your `~/Desktop`, its layout `~/.config/wados/desk.json`). To try it safely, on a wadd of its own seeded with the spike's sample library and a home of its own with the spike's sample Desktop, with screenshots:
+
+```bash
+apps/wados-shell/dev/try.sh                       # .build/shell/{launcher,desktop}.png
+TRY_OUTPUTS=2 TRY_FULLSCREEN=1 TRY_KEEP=1 apps/wados-shell/dev/try.sh   # a second display, a wadspace full screen, left running
+```
+
+Or headless by hand:
 
 ```bash
 . tools/headless.sh

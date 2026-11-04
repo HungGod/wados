@@ -756,6 +756,11 @@ mod sim {
         assert!(!lib.live().iter().any(|x| x.id == "cosmic-bodybuilding"));
         act(&mut lib, Op::Restore { ws: s("cosmic-bodybuilding") });
         assert_eq!(ws(&lib, "cosmic-bodybuilding").deleted_at, None);
+        // The Trash's toast has an Undo: it comes back out.
+        let out = act(&mut lib, Op::Trash { ws: s("cosmic-bodybuilding") });
+        assert_eq!(out.toast.as_deref(), Some("Moved to the Trash"));
+        wad_model::undo(&mut lib, &out.undo.expect("an Undo")).expect("undone");
+        assert_eq!(ws(&lib, "cosmic-bodybuilding").deleted_at, None);
         // A copy of a wadspace: "(copy)".
         let copy = act(&mut lib, Op::Duplicate { ws: s("vanua-academy"), machine: None }).created.expect("a copy");
         assert_eq!(ws(&lib, &copy).name, "VanuaAcademy (copy)");

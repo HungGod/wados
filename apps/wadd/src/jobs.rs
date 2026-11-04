@@ -326,7 +326,7 @@ impl Jobs {
                     out.push(Event::JobLines { id: e.job.id.clone(), from: e.sent, lines: e.log.since(e.sent) });
                     e.sent = total;
                 }
-                out.push(Event::Job(Box::new(e.info())));
+                out.push(Event::Job { job: Box::new(e.info()) });
                 e.dirty = false;
                 e.published = Some(now);
             }
@@ -435,7 +435,7 @@ mod tests {
                     assert_eq!(from as usize, heard.len());
                     heard.extend(lines);
                 }
-                Event::Job(j) => last = Some(j.job.status),
+                Event::Job { job } => last = Some(job.job.status),
                 _ => {}
             }
         }

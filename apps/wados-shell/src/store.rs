@@ -106,9 +106,9 @@ impl Store {
                 self.builds.borrow_mut().insert(id.clone(), *b);
                 Change::Build(id)
             }
-            Event::Job(j) => {
-                let id = j.job.id.clone();
-                self.jobs.borrow_mut().insert(id.clone(), *j);
+            Event::Job { job } => {
+                let id = job.job.id.clone();
+                self.jobs.borrow_mut().insert(id.clone(), *job);
                 Change::Job(id)
             }
             Event::JobLines { .. } => return,

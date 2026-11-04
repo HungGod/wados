@@ -527,10 +527,13 @@ impl Tx<'_> {
             }
             Op::Trash { ws } => {
                 let now = self.ctx.now_ms;
+                let before = self.get(&ws)?.clone();
                 let x = self.ws(&ws)?;
                 if x.deleted_at.is_none() {
                     x.deleted_at = Some(now);
                     self.touched(&ws);
+                    // The spike's toast, with its Undo (the wadspace as it was: out of the Trash).
+                    self.keep_undo(before, "Moved to the Trash".to_string());
                 }
                 Ok(())
             }
