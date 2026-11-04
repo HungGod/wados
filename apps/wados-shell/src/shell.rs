@@ -14,6 +14,7 @@ use wad_model::SessionDisplay;
 use wad_model::edit::Op;
 use wad_proto::{Event, Level, OpResult};
 
+use crate::builder::Builder;
 use crate::machine::{Machine, Page};
 use crate::placer::Placer;
 use crate::store::Store;
@@ -29,6 +30,7 @@ pub struct Shell {
     pub primary: gdk::Monitor,
     pub others: Vec<gdk::Monitor>,
     machine: OnceCell<Weak<Machine>>,
+    builder: OnceCell<Weak<Builder>>,
     ctl: RefCell<Vec<(String, CtlHandler)>>,
 }
 
@@ -49,12 +51,22 @@ impl Shell {
             primary,
             others,
             machine: OnceCell::new(),
+            builder: OnceCell::new(),
             ctl: RefCell::default(),
         })
     }
 
     pub(crate) fn set_machine(&self, m: &Rc<Machine>) {
         let _ = self.machine.set(Rc::downgrade(m));
+    }
+
+    pub(crate) fn set_builder(&self, b: &Rc<Builder>) {
+        let _ = self.builder.set(Rc::downgrade(b));
+    }
+
+    /// The Builder (its window may be closed).
+    pub fn builder(&self) -> Option<Rc<Builder>> {
+        self.builder.get().and_then(Weak::upgrade)
     }
 
     fn machine(&self) -> Option<Rc<Machine>> {
@@ -132,6 +144,35 @@ impl Shell {
                 me.open(&id, display);
             }
         });
+    }
+
+    /// Its group, in the desktop's order: the desktop's loose wadspaces (work
+    /// before gaming), or its tag folder's. Another machine's is alone.
+    pub fn group_of(&self, id: &str) -> Vec<String> {
+        let Some(x) = self.store.wadspace(id) else { return vec![] };
+        let mut spaces = self.store.live();
+        if !spaces.iter().any(|y| y.id == x.id) {
+            return vec![x.id];
+        }
+        spaces.sort_by_key(|y| y.category_or_default() == wad_model::Category::Gaming);
+        let tags = self.store.library().tags.clone();
+        let tag = wad_model::tags::tag_of(&tags, &x).to_string();
+        spaces.into_iter().filter(|y| wad_model::tags::tag_of(&tags, y) == tag).map(|y| y.id).collect()
+    }
+
+    /// Opened in the Builder with the rest of its group, it selected (a
+    /// wadspace double-clicked on the desktop, its menu's Edit).
+    pub fn edit(&self, id: &str) {
+        if let Some(b) = self.builder() {
+            b.open_group(&self.group_of(id), id);
+        }
+    }
+
+    /// A new wadspace: empty glass on the desktop, in the Builder, its title ready to type.
+    pub fn new_wadspace(&self) {
+        if let Some(b) = self.builder() {
+            b.new_wadspace();
+        }
     }
 
     /// Brings a running wadspace up (its window to the front, as it's shown).

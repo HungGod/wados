@@ -73,7 +73,8 @@ fi
 in_labwc wlr-randr --output HEADLESS-1 --pos 0,0 >/dev/null 2>&1 || true
 
 export WADD_SOCKET=$tmp/wadd.sock
-wadd serve --user --config "$tmp/wadd.toml" --socket "$WADD_SOCKET" --state-dir "$tmp/state" >"$tmp/wadd.log" 2>&1 &
+# wadd's ~ is the test's home too (photos, COPY sources), never the real one.
+HOME="$home" wadd serve --user --config "$tmp/wadd.toml" --socket "$WADD_SOCKET" --state-dir "$tmp/state" >"$tmp/wadd.log" 2>&1 &
 wadd_pid=$!
 for _ in $(seq 50); do [[ -S "$WADD_SOCKET" ]] && break; sleep 0.1; done
 

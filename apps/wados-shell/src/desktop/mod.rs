@@ -637,7 +637,7 @@ impl Desktop {
             Hit::Inside(id) if n >= 2 => {
                 self.s.borrow_mut().open_tag = None;
                 self.lay_panel();
-                self.open_space(&id);
+                self.shell.edit(&id);
             }
             Hit::Inside(_) | Hit::Panel => {}
             Hit::Background => {
@@ -1180,7 +1180,7 @@ impl Desktop {
     /// Opened (double-click, Enter): a wadspace, a folder shown, a file with its app.
     fn open_key(&self, key: &str) {
         if let Some(id) = key.strip_prefix("ws:") {
-            self.open_space(id);
+            self.shell.edit(id);
         } else if let Some(tag) = key.strip_prefix("folder:") {
             self.open_folder(tag);
         } else if let Some(e) = self.entry(key) {
@@ -1192,18 +1192,8 @@ impl Desktop {
         }
     }
 
-    /// A wadspace double-clicked: up on the screen (shown, if it's running).
-    // TODO(phase 3): open it in the Builder, with the rest of its group (the
-    // desktop's loose ones, or its tag folder's), it selected, as
-    // Desktop.svelte's `shell.showSpace`; its menu's Open runs it.
-    fn open_space(&self, id: &str) {
-        if self.shell.store.is_running(id) {
-            self.shell.show(id);
-        } else {
-            self.shell.open(id, SessionDisplay::Screen);
-        }
-    }
-
+    /// Up on the screen as `display` (shown, if it's running): its menu's
+    /// Open. A double-click opens it in the Builder instead (`Shell::edit`).
     fn open_space_as(&self, id: &str, display: SessionDisplay) {
         if self.shell.store.is_running(id) {
             self.shell.show(id);
@@ -1276,16 +1266,10 @@ impl Desktop {
         });
     }
 
-    /// A new wadspace: empty glass after everything, its name ready to type.
-    // TODO(phase 3): it opens in the Builder, its title ready to type there.
+    /// A new wadspace: empty glass after everything; it opens in the
+    /// Builder, its title ready to type there.
     fn new_wadspace(&self) {
-        let w = self.weak();
-        self.shell.op(Op::Create { name: None, category: None, machine: None }, move |r| {
-            if let (Some(m), Some(id)) = (w.upgrade(), r.created) {
-                m.s.borrow_mut().pending_rename = Some(format!("ws:{id}"));
-                m.refill();
-            }
-        });
+        self.shell.new_wadspace();
     }
 
     fn new_folder(&self) {
@@ -1529,7 +1513,6 @@ impl Desktop {
                 let i = i.clone();
                 self.on(move |m| m.open_space_as(&i, SessionDisplay::Screen))
             })
-            .key("Enter")
             .entry(),
         );
         out.push(
@@ -1540,10 +1523,13 @@ impl Desktop {
             .entry(),
         );
         out.push(
-            MenuItem::new("edit", "Edit in the Builder", "blocks", || {})
-                .hint("What's in it, to change")
-                .off(Some("Comes with the Builder"))
-                .entry(),
+            MenuItem::new("edit", "Edit in the Builder", "blocks", {
+                let i = i.clone();
+                self.on(move |m| m.shell.edit(&i))
+            })
+            .hint("What's in it, to change (or double-click it)")
+            .key("Enter")
+            .entry(),
         );
         out.push(
             MenuItem::new("rename", "Rename", "pencil", {

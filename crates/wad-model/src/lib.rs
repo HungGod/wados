@@ -98,6 +98,7 @@ pub mod groups;
 pub mod look;
 pub mod names;
 pub mod ops;
+pub mod stack;
 pub mod starter;
 pub mod suggest;
 pub mod tags;

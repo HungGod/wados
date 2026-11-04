@@ -299,7 +299,9 @@ impl Start {
                 }
             }
             "builder" => {
-                crate::builder::open(&s.app).present();
+                if let Some(b) = s.builder() {
+                    b.present();
+                }
             }
             "agents" => s.toast(wad_proto::Level::Info, "Agents come in phase 11", None),
             "updates" => s.toast(wad_proto::Level::Info, "Updates come in phase 8", None),

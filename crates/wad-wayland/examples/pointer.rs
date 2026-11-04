@@ -3,8 +3,9 @@
 //!     WAYLAND_DISPLAY=… pointer <width> <height> <step>…
 //!
 //! `width`×`height` is the output layout's size in logical pixels; each step
-//! is one of `move X Y`, `down`, `up`, `wait MS`, or `drag X1 Y1 X2 Y2` (press,
-//! move there in small steps, release).
+//! is one of `move X Y`, `down`, `up`, `wait MS`, `drag X1 Y1 X2 Y2` (press,
+//! move there in small steps, release), `click X Y`, `rclick X Y` (the right
+//! button: menus), `dblclick X Y`, or `scroll DY` (wheel notches: + down).
 
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -15,6 +16,7 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
 };
 
 const BTN_LEFT: u32 = 0x110;
+const BTN_RIGHT: u32 = 0x111;
 
 #[derive(Default)]
 struct State {
@@ -60,8 +62,24 @@ impl Mouse<'_> {
         let _ = self.conn.flush();
     }
     fn button(&self, down: bool) {
+        self.press(BTN_LEFT, down);
+    }
+    fn press(&self, button: u32, down: bool) {
         use wayland_client::protocol::wl_pointer::ButtonState;
-        self.p.button(self.t(), BTN_LEFT, if down { ButtonState::Pressed } else { ButtonState::Released });
+        self.p.button(self.t(), button, if down { ButtonState::Pressed } else { ButtonState::Released });
+        self.p.frame();
+        let _ = self.conn.flush();
+    }
+    fn click(&self, button: u32) {
+        self.press(button, true);
+        sleep(Duration::from_millis(40));
+        self.press(button, false);
+    }
+    fn scroll(&self, notches: f64) {
+        use wayland_client::protocol::wl_pointer::{Axis, AxisSource};
+        self.p.axis_source(AxisSource::Wheel);
+        self.p.axis(self.t(), Axis::VerticalScroll, notches * 15.0);
+        self.p.axis_discrete(self.t(), Axis::VerticalScroll, notches * 15.0, notches as i32);
         self.p.frame();
         let _ = self.conn.flush();
     }
@@ -117,6 +135,21 @@ fn main() {
                 sleep(Duration::from_millis(150));
                 m.button(false);
                 i += 5;
+            }
+            "click" | "rclick" | "dblclick" => {
+                m.to(num(i + 1), num(i + 2));
+                sleep(Duration::from_millis(80));
+                let b = if args[i] == "rclick" { BTN_RIGHT } else { BTN_LEFT };
+                m.click(b);
+                if args[i] == "dblclick" {
+                    sleep(Duration::from_millis(80));
+                    m.click(b);
+                }
+                i += 3;
+            }
+            "scroll" => {
+                m.scroll(num(i + 1));
+                i += 2;
             }
             other => panic!("unknown step {other}"),
         }

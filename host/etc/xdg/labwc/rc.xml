@@ -12,8 +12,22 @@
 
   <core>
     <decoration>server</decoration>
-    <gap>0</gap>
+    <!-- Room around a snapped or maximized window (the Builder floats, as the spike's). -->
+    <gap>10</gap>
   </core>
+
+  <!-- The Builder, down the right of the screen: the desktop's first columns
+       stay in view to its left. Regions are of the usable area (below the bar). -->
+  <regions>
+    <region name="builder" x="26%" y="0%" width="74%" height="100%"/>
+  </regions>
+
+  <windowRules>
+    <!-- The shell's Builder window (its own app id): its own title bar, in its region. -->
+    <windowRule identifier="io.wados.Builder" serverDecoration="no">
+      <action name="SnapToRegion" region="builder"/>
+    </windowRule>
+  </windowRules>
 
   <keyboard>
     <repeatRate>25</repeatRate>

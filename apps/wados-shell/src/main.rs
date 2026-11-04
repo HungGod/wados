@@ -9,9 +9,13 @@
 
 mod assets;
 mod bar;
+// Phase 3: the Builder's parts are being built on these; this goes when they all use them.
+#[allow(dead_code)]
 mod builder;
 mod ctl;
 mod desktop;
+#[allow(dead_code)]
+mod dnd;
 mod home;
 mod lock;
 mod machine;
@@ -103,10 +107,12 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     });
 
     let shell = Shell::new(app, store, link, placer, primary, others);
+    let builder = builder::Builder::new(&shell);
+    shell.set_builder(&builder);
     let machine = Machine::new(&shell);
     let _overlays = overlays::Overlays::new(&shell);
     if with_builder {
-        builder::open(app);
+        builder.present();
     }
 
     let (tx, rx) = async_channel::unbounded::<ctl::Request>();
@@ -116,7 +122,7 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     }
     let app = app.clone();
     glib::spawn_future_local(async move {
-        let _keep = _overlays;
+        let _keep = (_overlays, builder);
         while let Ok(req) = rx.recv().await {
             let words: Vec<&str> = req.line.split_whitespace().collect();
             let answer = match words.as_slice() {

@@ -1,0 +1,103 @@
+/* The Builder's window (Builder.svelte's styles): its title bar, its bar,
+   the board and the sidebar's tabs. The stacks and panels have their own. */
+
+window.builder {
+  background-color: var(--bg);
+  background-image:
+    radial-gradient(ellipse at 15% 0%, rgb(120 50 160 / 0.22), transparent 60%),
+    radial-gradient(ellipse at 100% 100%, rgb(198 255 31 / 0.05), transparent 60%);
+  color: var(--fg);
+  border-radius: 14px;
+}
+
+headerbar.builder-head {
+  min-height: 40px;
+  padding: 0 6px 0 12px;
+  background: rgb(255 255 255 / 0.02);
+  border-bottom: 1px solid var(--line);
+  box-shadow: none;
+  color: var(--fg);
+}
+headerbar.builder-head .builder-title { font-weight: 650; font-size: 13.5px; }
+headerbar.builder-head windowcontrols button {
+  min-width: 28px; min-height: 28px; padding: 0;
+  border-radius: 8px; background: none; color: var(--muted);
+}
+headerbar.builder-head windowcontrols button:hover { background: var(--surface-3); color: var(--fg); }
+
+.builder-bar {
+  min-height: 48px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--line);
+  background: rgb(255 255 255 / 0.02);
+}
+.builder-which {
+  margin-right: 4px;
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 650;
+  font-size: 13px;
+  color: var(--muted);
+}
+.builder-rule { min-width: 1px; min-height: 22px; margin: 0 2px; background: var(--line-strong); }
+
+button.builder-tool {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+  background: rgb(255 255 255 / 0.03);
+  color: var(--fg);
+  font-weight: 600;
+  font-size: 12.5px;
+  box-shadow: none;
+}
+button.builder-tool.icon { min-width: 32px; padding: 0; }
+button.builder-tool:hover { background: var(--surface-3); }
+button.builder-tool:disabled { opacity: 0.35; }
+button.builder-tool.danger:hover:not(:disabled) { background: var(--danger); border-color: transparent; color: #fff; }
+button.builder-tool.go { border-color: transparent; background: var(--accent); color: var(--accent-fg); }
+button.builder-tool.go:hover { background: #d4ff52; }
+
+/* The sidebar: a column as wide as a stack's. */
+.builder-side {
+  min-width: 260px;
+  border-left: 1px solid var(--line);
+  background: rgb(10 6 20 / 0.35);
+}
+.builder-side-head { padding: 10px; border-bottom: 1px solid var(--line); }
+.builder-tabs {
+  padding: 3px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgb(0 0 0 / 0.22);
+}
+button.builder-tab {
+  min-height: 48px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: 11px;
+  background: none;
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 10.5px;
+  box-shadow: none;
+}
+button.builder-tab:hover { color: var(--fg); }
+button.builder-tab.on { background: var(--surface-3); color: var(--fg); box-shadow: inset 0 0 0 1px var(--line-strong); }
+/* Each tab's icon (and the line under the one shown) in its section's colour. */
+button.builder-tab.apps wad-icon { color: var(--c-app); }
+button.builder-tab.addons wad-icon { color: var(--c-ext); }
+button.builder-tab.secrets wad-icon { color: var(--c-key); }
+button.builder-tab.customize wad-icon { color: var(--fg); }
+button.builder-tab.on.apps { box-shadow: inset 0 0 0 1px var(--line-strong), inset 0 -2px 0 var(--c-app); }
+button.builder-tab.on.addons { box-shadow: inset 0 0 0 1px var(--line-strong), inset 0 -2px 0 var(--c-ext); }
+button.builder-tab.on.secrets { box-shadow: inset 0 0 0 1px var(--line-strong), inset 0 -2px 0 var(--c-key); }
+button.builder-tab.on.customize { box-shadow: inset 0 0 0 1px var(--line-strong), inset 0 -2px 0 var(--fg); }
+.builder-panel { padding: 12px 10px; }
+.builder-away {
+  margin-bottom: 12px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgb(127 211 255 / 0.12);
+  font-size: 12px;
+}

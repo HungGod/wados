@@ -8,10 +8,12 @@ publish.workspace = true
 
 [dependencies]
 async-channel.workspace = true
+gdk4-wayland.workspace = true
 gtk.workspace = true
 gtk4-layer-shell.workspace = true
 indexmap.workspace = true
 libc.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 tracing-subscriber.workspace = true
