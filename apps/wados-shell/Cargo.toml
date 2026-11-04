@@ -23,4 +23,5 @@ wad-model.workspace = true
 wad-proto.workspace = true
 wad-wadd-client.workspace = true
 wayland-client.workspace = true
+wayland-protocols.workspace = true
 wayland-protocols-wlr.workspace = true

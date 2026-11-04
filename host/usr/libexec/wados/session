@@ -1,0 +1,44 @@
+#!/bin/bash
+# The machine's session: greetd's initial_session, as the machine's person
+# (/usr/libexec/wados/greetd-config). labwc with the shell, which locks
+# before anything else shows (unless WADOS_NO_LOCK is set: never here).
+# labwc's config is /etc/xdg/labwc (rc.xml: every keybind runs wadsctl), the
+# person's own ~/.config/labwc merged over it.
+#
+# labwc and everything it starts log to the journal: journalctl -t labwc.
+# labwc is started again if it ends (the shell locks again as it starts),
+# unless it keeps ending at once: then this ends, and greetd shows the login
+# prompt on tty1.
+export WADOS_SESSION=machine
+export XDG_SESSION_TYPE=wayland
+export XCURSOR_THEME=WadOS
+export XCURSOR_SIZE=24
+unset WADOS_NO_LOCK
+
+# A GPU to draw with: there's a render node. The driver gets a moment to
+# start, unless the machine was started without graphics drivers (nomodeset
+# at the boot menu, for a card whose open driver misbehaves).
+gpu() { compgen -G '/dev/dri/renderD*' > /dev/null; }
+if ! grep -qw nomodeset /proc/cmdline; then
+    for _ in $(seq 1 15); do gpu && break; sleep 1; done
+fi
+
+quick=0
+while true; do
+    # No GPU (nomodeset, or a card no driver here runs): the screen is the
+    # firmware's framebuffer. labwc then draws with pixman and GTK with
+    # cairo, rather than OpenGL in software, slower still.
+    if gpu; then
+        unset WLR_RENDERER GSK_RENDERER
+    else
+        export WLR_RENDERER=pixman GSK_RENDERER=cairo
+    fi
+    started=${SECONDS}
+    systemd-cat -t labwc -- labwc -s wados-shell
+    if (( SECONDS - started < 30 )); then quick=$((quick + 1)); else quick=0; fi
+    if (( quick >= 5 )); then
+        echo "labwc ended five times in a row within 30 s: the login prompt instead" | systemd-cat -t wados-session -p err
+        exit 1
+    fi
+    sleep 2
+done

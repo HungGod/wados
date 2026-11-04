@@ -1,0 +1,48 @@
+#!/bin/bash
+# greetd's config for this start (greetd.service's ExecStartPre, WadOS's
+# drop-in): the machine's person, uid 1000 (the installer makes them), logged
+# straight into the session; with no uid 1000, only the login prompt.
+#
+# The session is greetd's initial_session, which goes through the full
+# `greetd` PAM stack (SELinux user context, loginuid, a logind session).
+# default_session is the greeter's slot (the minimal greetd-greeter stack):
+# agreety, the login prompt, shown if the session ends for good. greetd
+# runs initial_session once per runfile; it's removed here, so a greetd
+# started again logs the person in again (the shell locks first).
+set -euo pipefail
+out=/run/wados/greetd.toml
+user="$(getent passwd 1000 | cut -d: -f1)" || user=""
+# A name TOML can hold as it is (useradd's rules are stricter still).
+[[ "${user}" =~ ^[a-z_][a-z0-9_.-]*[$]?$ ]] || user=""
+
+mkdir -p /run/wados
+tmp="$(mktemp /run/wados/.greetd.toml.XXXXXX)"
+{
+    echo "# greetd's config for this start: /usr/libexec/wados/greetd-config wrote it."
+    echo "[general]"
+    echo 'runfile = "/run/greetd.run"'
+    echo
+    echo "[terminal]"
+    echo "vt = 1"
+    if [[ -n "${user}" ]]; then
+        echo
+        echo "[initial_session]"
+        echo 'command = "/usr/libexec/wados/session"'
+        echo "user = \"${user}\""
+    fi
+    echo
+    echo "[default_session]"
+    echo 'command = "agreety --cmd /bin/bash"'
+    echo 'user = "greetd"'
+} > "${tmp}"
+chmod 0644 "${tmp}"
+mv -f "${tmp}" "${out}"
+# greetd (xdm_t) reads only files labelled for it: WadOS's SELinux module
+# labels this one xdm_var_run_t.
+restorecon "${out}" 2> /dev/null || true
+rm -f /run/greetd.run
+if [[ -n "${user}" ]]; then
+    echo "greetd: ${user} (uid 1000) is logged into the session"
+else
+    echo "greetd: no uid 1000 on this machine: the login prompt"
+fi

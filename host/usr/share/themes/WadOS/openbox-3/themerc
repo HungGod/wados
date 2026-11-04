@@ -1,0 +1,105 @@
+# WadOS: labwc's theme on a WadSpaces machine, in WadSpaces' dark colours
+# (crates/wad-gtk/src/theme.rs). It draws the few windows labwc decorates
+# itself, such as foot's, and labwc's own menus and on-screen boxes; the
+# shell's surfaces and the Builder draw their own. rc.xml names it:
+# <theme><name>WadOS</name></theme>. The cursors are the WadOS cursor theme
+# (/usr/share/icons/WadOS, XCURSOR_THEME in the session).
+#
+# Colours, from the tokens: --bg #0a0614, --bg-2 #0e0919, --surface #140d22,
+# --surface-2 #1b132d, --surface-3 #241a39, --fg #f5f2fa, --accent #c6ff1f,
+# --accent-2 #ff3d81. --muted (fg at 62%), --line (9%) and --line-strong
+# (18%) are flattened onto the surface they're drawn on.
+
+border.width: 1
+window.titlebar.padding.width: 6
+window.titlebar.padding.height: 2
+
+# The window's edge: --line-strong when it has the keys, --line when not.
+window.active.border.color: #3c3549
+window.inactive.border.color: #282135
+# ToggleKeybinds' mark.
+window.active.indicator.toggled-keybind.color: #ff3d81
+
+# The title bar: --surface when it has the keys, --bg-2 when not.
+window.active.title.bg.color: #140d22
+window.inactive.title.bg.color: #0e0919
+window.*.title.bg: Solid
+
+window.active.label.text.color: #f5f2fa
+window.inactive.label.text.color: #9d99a5
+window.label.text.justify: center
+
+window.button.width: 26
+window.button.height: 26
+window.button.spacing: 2
+window.button.hover.bg.color: #f5f2fa1f
+window.button.hover.bg.corner-radius: 6
+window.active.button.unpressed.image.color: #f5f2fa
+window.inactive.button.unpressed.image.color: #9d99a5
+# Close goes --accent-2 when it has the keys.
+window.active.button.close.unpressed.image.color: #ff3d81
+
+# --shadow (when rc.xml turns drop shadows on).
+window.active.shadow.size: 40
+window.inactive.shadow.size: 24
+window.active.shadow.color: #030208b3
+window.inactive.shadow.color: #03020880
+
+# Menus (labwc's own, e.g. a title bar's).
+menu.overlap.x: 0
+menu.overlap.y: 0
+menu.width.min: 160
+menu.width.max: 320
+menu.border.width: 1
+menu.border.color: #3c3549
+menu.items.bg.color: #140d22
+menu.items.text.color: #f5f2fa
+menu.items.active.bg.color: #241a39
+menu.items.active.text.color: #f5f2fa
+menu.items.padding.x: 10
+menu.items.padding.y: 6
+menu.separator.width: 1
+menu.separator.padding.width: 8
+menu.separator.padding.height: 4
+menu.separator.color: #282135
+menu.title.bg.color: #1b132d
+menu.title.text.color: #f5f2fa
+menu.title.text.justify: Center
+
+# labwc's on-screen boxes (its window switcher; the shell has its own).
+osd.bg.color: #140d22
+osd.border.color: #3c3549
+osd.border.width: 1
+osd.label.text.color: #f5f2fa
+osd.window-switcher.style-classic.width: 600
+osd.window-switcher.style-classic.padding: 6
+osd.window-switcher.style-classic.item.padding.x: 10
+osd.window-switcher.style-classic.item.padding.y: 4
+osd.window-switcher.style-classic.item.active.border.width: 2
+osd.window-switcher.style-classic.item.active.border.color: #c6ff1f
+osd.window-switcher.style-classic.item.active.bg.color: #241a39
+osd.window-switcher.style-thumbnail.width.max: 80%
+osd.window-switcher.style-thumbnail.padding: 6
+osd.window-switcher.style-thumbnail.item.width: 300
+osd.window-switcher.style-thumbnail.item.height: 250
+osd.window-switcher.style-thumbnail.item.padding: 10
+osd.window-switcher.style-thumbnail.item.active.border.width: 2
+osd.window-switcher.style-thumbnail.item.active.border.color: #c6ff1f
+osd.window-switcher.style-thumbnail.item.active.bg.color: #241a39
+osd.window-switcher.style-thumbnail.item.icon.size: 60
+osd.window-switcher.preview.border.width: 2
+osd.window-switcher.preview.border.color: #c6ff1f
+osd.workspace-switcher.boxes.width: 20
+osd.workspace-switcher.boxes.height: 20
+osd.workspace-switcher.boxes.border.width: 2
+
+# Where a dragged window will snap: --accent-soft, edged in --accent.
+snapping.overlay.region.bg.color: #c6ff1f33
+snapping.overlay.edge.bg.color: #c6ff1f33
+snapping.overlay.region.border.width: 1
+snapping.overlay.edge.border.width: 1
+snapping.overlay.region.border.color: #c6ff1f
+snapping.overlay.edge.border.color: #c6ff1f
+
+magnifier.border.width: 1
+magnifier.border.color: #c6ff1f

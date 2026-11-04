@@ -42,6 +42,7 @@ use wad_gtk::{Icon, Svg};
 
 pub use display::Displays;
 pub use notices::{level_class, level_icon};
+pub use system::Volume;
 pub use tasks::in_front;
 
 use crate::machine::Page;
@@ -284,6 +285,16 @@ impl Halves {
         });
         b
     }
+}
+
+/// The volume as the keys left it (session.rs): the tray shows it.
+pub fn set_volume(shell: &Rc<Shell>, v: Option<Volume>) {
+    shared::get(shell).update_system(&|st| st.volume = v);
+}
+
+/// The brightness (0 to 1) as the keys left it.
+pub fn set_brightness(shell: &Rc<Shell>, b: f64) {
+    shared::get(shell).update_system(&|st| st.brightness = Some(b));
 }
 
 /// Tells labwc (through foreign-toplevel).

@@ -3074,6 +3074,7 @@ dependencies = [
  "wad-proto",
  "wad-wadd-client",
  "wayland-client",
+ "wayland-protocols",
  "wayland-protocols-wlr",
 ]
 

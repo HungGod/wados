@@ -1,0 +1,4 @@
+# The machine may run from a USB drive (the installer stick, or a drive
+# installed with it). Never let USB power management suspend or drop it: a
+# dropped root disk turns every read into EIO and hangs the boot.
+kargs = ["usbcore.autosuspend=-1"]

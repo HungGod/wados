@@ -1,0 +1,115 @@
+# The public images wadspaces are built on, from images/: the builder
+# (Fedora 44 with Rust 1.99) and the base (the desktop every wadspace runs
+# on), built by images/build.sh, then checked by images/check.sh: two
+# packages captured apart on the new base and assembled into a set that rpm
+# and dnf take for one system (its desktop check needs a screen: not here).
+# From main they're pushed as ghcr.io/hunggod/wados-{builder,base}:44 and
+# :44-<date>-<commit>. Pull requests build and check, and push nothing.
+#
+# Weekly, the base is built again with Fedora's updates (its `dnf upgrade`
+# layer is the build day's). The packages workflow runs after every run of
+# this one on main, so packages are captured on the base as it is now.
+#
+# TODO(phase 7): the stream sidecar, ghcr.io/hunggod/wados-stream:44
+# (images/stream: linuxserver's baseimage-selkies with Selkies 2.x). images/
+# has no stream/ yet; when it does, build, check and push it here beside
+# the base.
+#
+# Secrets: only GITHUB_TOKEN, to push to ghcr (packages: write, this job's
+# alone).
+name: images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - images/**
+      - crates/wad-clip/**
+      - crates/wad-session/**
+      - apps/selkies-desktop/**
+      - .github/workflows/images.yml
+  # Also what the check builds with: wados-pkgs (wad-gen, wad-model) and
+  # Cargo's files.
+  pull_request:
+    paths:
+      - images/**
+      - crates/wad-clip/**
+      - crates/wad-session/**
+      - apps/selkies-desktop/**
+      - crates/wad-gen/**
+      - crates/wad-model/**
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/images.yml
+      - .github/workflows/wados-pkgs.yml
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  wados-pkgs:
+    uses: ./.github/workflows/wados-pkgs.yml
+
+  images:
+    needs: wados-pkgs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    permissions:
+      contents: read
+      packages: write
+    # podman 5 rather than the runner's 4.9, as v1's CI. A frozen release's
+    # digest (quay rebuilds the newest release's tag daily and collects what
+    # it untags). Its storage on the runner's temporary disk (/mnt), which
+    # has more room than the root one.
+    container:
+      image: quay.io/podman/stable:v5.8.7@sha256:2fb39ca923dd9e0ee33f9e319c3a107a2bfde022a6a31560cbd56a862821e7d3
+      options: --privileged
+      volumes:
+        - /mnt/wados-containers:/var/lib/containers
+    defaults:
+      run:
+        shell: bash
+    env:
+      REGISTRY: ghcr.io/hunggod
+      PUSH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+    steps:
+      - name: Tools
+        run: dnf -y -q install git-core jq skopeo tar gawk
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wados-pkgs
+          path: .build/ci
+      - name: Room
+        run: df -h / /var/lib/containers "$GITHUB_WORKSPACE"
+      - name: The builder, then the base (images/build.sh)
+        run: images/build.sh
+      - name: Check them (images/check.sh)
+        run: |
+          export WADOS_PKGS="$GITHUB_WORKSPACE/.build/ci/wados-pkgs"
+          chmod +x "$WADOS_PKGS"
+          images/check.sh --no-build --no-display
+      - name: Push
+        if: env.PUSH == 'true'
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
+          dated="44-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
+          for name in builder base; do
+            for tag in 44 "$dated"; do
+              podman tag "localhost/wados-$name:44" "$REGISTRY/wados-$name:$tag"
+              podman push -q "$REGISTRY/wados-$name:$tag"
+            done
+            echo "pushed $REGISTRY/wados-$name:44 and :$dated" >>"$GITHUB_STEP_SUMMARY"
+          done

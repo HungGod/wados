@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- WadOS arrow (left_ptr): WadSpaces night (bg #0a0614) edged in its light (fg #f5f2fa). Hotspot 4,3. -->
+  <path d="M4 3 L4 25.5 L9.6 20.4 L13.2 28.6 L17 26.9 L13.5 18.9 L21 18.9 Z"
+        fill="#0a0614" stroke="#f5f2fa" stroke-width="1.6" stroke-linejoin="round"/>
+</svg>

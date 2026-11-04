@@ -1,0 +1,7 @@
+# host/ is the image's build context: never a secret in it, nor the
+# binaries' build (they come in as the `bin` context).
+secrets/
+**/*.priv
+**/*.der
+**/*.key
+**/*.pem

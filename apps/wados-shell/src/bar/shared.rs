@@ -37,6 +37,8 @@ pub struct Shared {
     pub jobs: RefCell<IndexMap<String, JobInfo>>,
     pub recent: RefCell<Recency>,
     pub system: RefCell<Status>,
+    /// Changes `system` (system.rs's own, so it keeps what's told it).
+    set_system: RefCell<Option<super::system::Set>>,
     subs: RefCell<Vec<Sub>>,
     /// The halves (true: the bar's own, which stays on the desktop).
     halves: RefCell<Vec<(bool, Weak<Halves>)>>,
@@ -57,6 +59,7 @@ pub fn get(shell: &Rc<Shell>) -> Rc<Shared> {
         jobs: RefCell::default(),
         recent: RefCell::default(),
         system: RefCell::default(),
+        set_system: RefCell::default(),
         subs: RefCell::default(),
         halves: RefCell::default(),
         middle: RefCell::default(),
@@ -110,13 +113,22 @@ impl Shared {
             }
         });
         let w = Rc::downgrade(self);
-        super::system::start(Rc::new(move |st| {
+        let set = super::system::start(Rc::new(move |st| {
             if let Some(me) = w.upgrade() {
                 *me.system.borrow_mut() = st.clone();
                 me.emit(Topic::System);
             }
         }));
+        *self.set_system.borrow_mut() = Some(set);
         self.ctl(shell);
+    }
+
+    /// What the machine says of itself, told from elsewhere (the session's keys).
+    pub fn update_system(&self, f: &dyn Fn(&mut Status)) {
+        let set = self.set_system.borrow().clone();
+        if let Some(set) = set {
+            set(f);
+        }
     }
 
     /// `f` each time `topic` changes.

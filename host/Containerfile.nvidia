@@ -1,0 +1,85 @@
+# WadOS's host image with NVIDIA's own driver: the host image
+# (host/Containerfile) plus NVIDIA's open kernel modules (Turing, GeForce 16
+# and 20, and newer) and its libraries, from RPM Fusion. A machine with an
+# NVIDIA card runs it instead of nouveau when that's chosen (phase 8).
+#
+# The kernel modules are built here, for the image's own kernel, and signed
+# with the MOK key, which a machine with Secure Boot on asks its firmware to
+# trust (mokutil, with the certificate this image carries). The key reaches
+# the build stage only, as podman build secrets (/run/secrets, for one RUN):
+# never in a layer, the context or a log. Built by host/build.sh:
+#   host/build.sh image --variant nvidia [--test-key]
+ARG BASE=localhost/wados-host:unchunked
+
+FROM ${BASE} AS build
+RUN dnf -y install --setopt=install_weak_deps=False \
+      "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+      "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" \
+    && kver="$(rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}')" \
+    && { dnf -y install --setopt=install_weak_deps=False "kernel-devel-${kver}" \
+         || dnf -y install "https://kojipkgs.fedoraproject.org/packages/kernel/$(rpm -q kernel --qf '%{VERSION}/%{RELEASE}/%{ARCH}')/kernel-devel-${kver}.rpm"; } \
+    && dnf -y install --setopt=install_weak_deps=False akmod-nvidia openssl \
+    && mkdir -p /etc/nvidia && echo "MODULE_VARIANT=kernel-open" > /etc/nvidia/kernel.conf
+# akmods signs what it builds with the key at its paths. It builds as its
+# own user, which can't read a build secret (root's alone): a copy its group
+# reads, removed in this same step whatever happens, so in no layer. What's
+# kept: the modules' RPM, the certificate (public), and its name, which the
+# modules' signer must be.
+RUN --mount=type=secret,id=mok_key --mount=type=secret,id=mok_der \
+    set -e; \
+    kver="$(rpm -q kernel --qf '%{VERSION}-%{RELEASE}.%{ARCH}')"; \
+    install -d -m 0750 -o root -g akmods /etc/pki/akmods/private; \
+    install -d -m 0755 /etc/pki/akmods/certs; \
+    install -m 0640 -o root -g akmods /run/secrets/mok_key /etc/pki/akmods/private/private_key.priv; \
+    install -m 0644 -o root -g akmods /run/secrets/mok_der /etc/pki/akmods/certs/public_key.der; \
+    ok=0; akmods --force --kernels "${kver}" --kmod nvidia && ok=1; \
+    rm -f /etc/pki/akmods/private/private_key.priv; \
+    if [ "${ok}" != 1 ] || ! ls /var/cache/akmods/nvidia/kmod-nvidia-*.rpm > /dev/null 2>&1; then \
+        tail -50 /var/cache/akmods/nvidia/*.log >&2 || true; echo "akmods didn't build NVIDIA's modules" >&2; exit 1; \
+    fi; \
+    mkdir -p /kmods; \
+    cp /var/cache/akmods/nvidia/kmod-nvidia-*.rpm /kmods/; \
+    install -m 0644 /run/secrets/mok_der /kmods/wados-mok.der; \
+    openssl x509 -inform der -in /kmods/wados-mok.der -noout -subject -nameopt multiline \
+        | sed -n 's/^ *commonName *= *//p' > /kmods/signer; \
+    test -s /kmods/signer; \
+    ls -l /kmods
+
+FROM ${BASE}
+# "test": signed with host/build.sh --test-key's throwaway key.
+ARG MOK=wados
+LABEL org.opencontainers.image.title="WadOS host (NVIDIA)" \
+      io.wados.variant="nvidia"
+COPY --from=build /kmods /tmp/kmods
+COPY --from=build /etc/nvidia/kernel.conf /etc/nvidia/kernel.conf
+# RPM Fusion for the install only: the machine's updates are this image.
+# Checked: the modules are for this kernel, signed with the MOK key's
+# certificate, and the open ones.
+RUN dnf -y install --setopt=install_weak_deps=False \
+      "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+      "https://mirrors.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm" \
+    && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+      /tmp/kmods/kmod-nvidia-*.rpm xorg-x11-drv-nvidia xorg-x11-drv-nvidia-libs \
+      xorg-x11-drv-nvidia-cuda-libs libva-nvidia-driver egl-wayland egl-gbm \
+    && dnf -y remove rpmfusion-free-release rpmfusion-nonfree-release \
+    && dnf clean all \
+    && kver="$(ls /usr/lib/modules)" && depmod "${kver}" \
+    && signer="$(cat /tmp/kmods/signer)" \
+    && modinfo -k "${kver}" -F signer nvidia | grep -qxF "${signer}" \
+    && modinfo -k "${kver}" -F license nvidia | grep -q "Dual MIT/GPL" \
+    && ls /usr/lib/modules/"${kver}"/extra/nvidia/nvidia.ko* > /dev/null \
+    && echo "NVIDIA's modules for ${kver}, signed by: ${signer}" \
+    && install -D -m 0644 /tmp/kmods/wados-mok.der /usr/share/wados/mok/wados-mok.der \
+    && rm -rf /tmp/kmods
+
+# nouveau kept away (in the initramfs too), NVIDIA's own driving the screen.
+RUN printf '%s\n' \
+      '# NVIDIA'"'"'s own driver instead of nouveau (host/Containerfile.nvidia).' \
+      'kargs = ["rd.driver.blacklist=nouveau", "modprobe.blacklist=nouveau", "nvidia-drm.modeset=1", "nvidia-drm.fbdev=1"]' \
+      > /usr/lib/bootc/kargs.d/20-wados-nvidia.toml \
+    && python3 -c 'import os; [os.setxattr(p, "user.component", b"wados") for p in ("/usr/lib/bootc/kargs.d/20-wados-nvidia.toml", "/usr/share/wados/mok/wados-mok.der")]' \
+    && rm -rf /var/log/dnf5.log* /var/lib/dnf /var/cache/libdnf5 /run/dnf
+
+# Which key signed it: "test" (host/build.sh --test-key) is never pushed.
+LABEL io.wados.mok="${MOK}"
+RUN bootc container lint

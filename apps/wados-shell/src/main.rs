@@ -5,7 +5,10 @@
 //!
 //!     wados-shell [--builder]
 //!
-//! It answers `wadsctl` on `$XDG_RUNTIME_DIR/wados/shell.sock`.
+//! It answers `wadsctl` on `$XDG_RUNTIME_DIR/wados/shell.sock`. Run as the
+//! machine's own session (`WADOS_SESSION=machine`, session.rs), it also
+//! restarts and powers off the machine, locks when idle and before sleep,
+//! and sets the brightness.
 
 mod assets;
 mod bar;
@@ -20,6 +23,7 @@ mod machine;
 mod overlays;
 mod pam;
 mod placer;
+mod session;
 mod shell;
 mod store;
 mod surface;
@@ -39,6 +43,8 @@ const CSS: &str = include_str!("shell.css");
 fn main() -> glib::ExitCode {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        // Colours only on a terminal: the machine's journal stores escapes as binary (journalctl -g can't find them).
+        .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
     let with_builder = std::env::args().any(|a| a == "--builder");
     let app =
@@ -109,6 +115,7 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     shell.set_builder(&builder);
     let machine = Machine::new(&shell);
     let _overlays = overlays::Overlays::new(&shell);
+    let session = session::Session::new(&shell, &lock);
     dnd_probe::install(&shell);
     if with_builder {
         builder.present();
@@ -125,7 +132,7 @@ fn activate(app: &gtk::Application, with_builder: bool) {
         while let Ok(req) = rx.recv().await {
             let words: Vec<&str> = req.line.split_whitespace().collect();
             let answer = match words.as_slice() {
-                ["lock"] => match lock.lock(&app) {
+                ["lock"] => match session.lock() {
                     Ok(()) => "ok".into(),
                     Err(e) => format!("error {e}"),
                 },
@@ -184,7 +191,7 @@ fn handle(app: &gtk::Application, m: &Rc<Machine>, shell: &Rc<Shell>, words: &[&
         return answer;
     }
     match words {
-        ["help"] => "ok ping | page [desktop|home|toggle] | wadd | wm list|activate|fullscreen|unfullscreen|minimize|unminimize|close <#id|app-id> [output] | lock | locked | quit (and each module's own)".into(),
+        ["help"] => "ok ping | page [desktop|home|toggle] | wadd | wm list|activate|fullscreen|unfullscreen|minimize|unminimize|close <#id|app-id> [output] | lock | locked | session [heard] | power [state|close|lock|restart|off] | volume [up|down|mute] | brightness [up|down] | server off | quit (and each module's own)".into(),
         _ => format!("error unknown: {}", words.join(" ")),
     }
 }

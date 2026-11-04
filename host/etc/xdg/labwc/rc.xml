@@ -7,6 +7,10 @@
 
   Keyboard and mouse settings are the user's ~/.config/labwc/rc.xml, which
   Settings writes (labwc merges it over this one).
+
+  The cursor theme (WadOS, Adwaita's beneath it) isn't set here: labwc reads
+  it only from XCURSOR_THEME and XCURSOR_SIZE, which the machine's session
+  sets (/usr/libexec/wados/session).
 -->
 <labwc_config>
 
@@ -15,6 +19,12 @@
     <!-- Room around a snapped or maximized window (the Builder floats, as the spike's). -->
     <gap>10</gap>
   </core>
+
+  <!-- The machine's dark title bars, in the spike's colours
+       (/usr/share/themes/WadOS/openbox-3/themerc, the image's). -->
+  <theme>
+    <name>WadOS</name>
+  </theme>
 
   <!-- The Builder, down the right of the screen: the desktop's first columns
        stay in view to its left. Regions are of the usable area (below the bar). -->
@@ -42,6 +52,22 @@
     <keybind key="C-A-Down"><action name="Execute" command="wadsctl windowed"/></keybind>
     <!-- Ctrl+Alt+L: lock the screen. -->
     <keybind key="C-A-l"><action name="Execute" command="wadsctl lock"/></keybind>
+    <!-- Ctrl+Alt+Delete: back from server mode (phase 10), which leaves the screen locked. -->
+    <keybind key="C-A-Delete" allowWhenLocked="yes"><action name="Execute" command="wadsctl server off"/></keybind>
+
+    <!-- The power key: the shell's power menu (Lock, Restart, Power off), or on
+         the lock screen its Power off. logind leaves the key to the shell
+         (/etc/systemd/logind.conf.d/10-wados.conf); the lid and the suspend
+         key are still logind's, and the shell locks before it sleeps. -->
+    <keybind key="XF86PowerOff" allowWhenLocked="yes"><action name="Execute" command="wadsctl power"/></keybind>
+    <!-- The media keys, on the lock screen too, through the shell so the bar
+         shows what they did: the volume (wpctl) and the brightness (logind's
+         SetBrightness, the machine's session only). -->
+    <keybind key="XF86AudioRaiseVolume" allowWhenLocked="yes"><action name="Execute" command="wadsctl volume up"/></keybind>
+    <keybind key="XF86AudioLowerVolume" allowWhenLocked="yes"><action name="Execute" command="wadsctl volume down"/></keybind>
+    <keybind key="XF86AudioMute" allowWhenLocked="yes"><action name="Execute" command="wadsctl volume mute"/></keybind>
+    <keybind key="XF86MonBrightnessUp" allowWhenLocked="yes"><action name="Execute" command="wadsctl brightness up"/></keybind>
+    <keybind key="XF86MonBrightnessDown" allowWhenLocked="yes"><action name="Execute" command="wadsctl brightness down"/></keybind>
 
     <!-- What the shell itself types (zwp_virtual_keyboard) to move a window
          between displays: no foreign-toplevel request does that. -->

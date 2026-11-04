@@ -120,7 +120,7 @@ impl Server {
                 l.set_nonblocking(true)?;
                 (UnixListener::from_std(l)?, None)
             }
-            Listen::Path(p) => (bind(&p, profile)?, Some(p)),
+            Listen::Path(p) => (bind(&p, profile, &d.allow_groups)?, Some(p)),
         };
         let root = nix::unistd::geteuid().is_root();
         let jobs = jobs::Jobs::new(bus.clone(), &d.state_dir);
@@ -227,9 +227,10 @@ async fn watch_screen(app: Arc<AppState>) {
     }
 }
 
-/// Binds the API's socket: the machine's people may use a machine's (its
-/// group, 0660, as wadd.socket makes it), only you a laptop's (0600).
-fn bind(path: &std::path::Path, profile: Profile) -> std::io::Result<UnixListener> {
+/// Binds the API's socket: the machine's people may use a machine's (0660,
+/// its group the first of `groups` the machine has, as wadd.socket makes
+/// it), only you a laptop's (0600). Its folder must let them reach it.
+fn bind(path: &std::path::Path, profile: Profile, groups: &[String]) -> std::io::Result<UnixListener> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
@@ -239,7 +240,40 @@ fn bind(path: &std::path::Path, profile: Profile) -> std::io::Result<UnixListene
         Err(e) => return Err(e),
     }
     let l = UnixListener::bind(path)?;
-    let mode = if profile == Profile::System { 0o660 } else { 0o600 };
+    let system = profile == Profile::System;
+    if system && nix::unistd::geteuid().is_root() {
+        let lookup = |name: &str| nix::unistd::Group::from_name(name).ok().flatten().map(|g| g.gid.as_raw());
+        match socket_group(groups, lookup) {
+            Some(gid) => std::os::unix::fs::chown(path, None, Some(gid))?,
+            None => {
+                tracing::warn!("none of the groups {groups:?} is on this machine: only root may use {}", path.display())
+            }
+        }
+    }
+    let mode = if system { 0o660 } else { 0o600 };
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))?;
     Ok(l)
+}
+
+/// The API socket's group: the first of `groups` (wadd's allowed ones) that `lookup` finds.
+fn socket_group(groups: &[String], lookup: impl Fn(&str) -> Option<u32>) -> Option<u32> {
+    groups.iter().find_map(|g| lookup(g))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_socket_is_the_first_allowed_group_the_machine_has() {
+        let groups = vec!["wados".to_string(), "wheel".to_string()];
+        let both = |g: &str| match g {
+            "wados" => Some(990),
+            "wheel" => Some(10),
+            _ => None,
+        };
+        assert_eq!(super::socket_group(&groups, both), Some(990));
+        let wheel_only = |g: &str| (g == "wheel").then_some(10);
+        assert_eq!(super::socket_group(&groups, wheel_only), Some(10));
+        assert_eq!(super::socket_group(&groups, |_| None), None);
+        assert_eq!(super::socket_group(&[], both), None);
+    }
 }

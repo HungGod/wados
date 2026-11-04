@@ -1,0 +1,39 @@
+# wadd, the machine's daemon (apps/wadd): the wadspaces (their documents,
+# builds and runs) for the shell, over wadd.socket. Root, with root's podman
+# (podman.socket) and systemd's own manager for the wadspaces' quadlet units.
+# Its settings: /usr/lib/wados/wadd.toml, then /etc/wados/wadd.toml.
+[Unit]
+Description=WadSpaces machine daemon (wadd)
+Requires=wadd.socket
+After=wadd.socket podman.socket network-online.target
+Wants=podman.socket network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+ExecStart=/usr/bin/wadd serve
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+# /var/lib/wados: the library, its keys and projects (tmpfiles makes them).
+StateDirectory=wados
+StateDirectoryMode=0700
+# /run/wados/screen: the wadspaces' screen folders ([daemon] screen_dir).
+# Kept when wadd restarts: the wadspaces running have them mounted.
+RuntimeDirectory=wados/screen
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+# Everything else read-only. wadd writes the wadspaces' units in
+# /run/containers/systemd ([daemon] units_dir) and a tunnel's token in
+# /etc/cloudflared (later). It reads the person's home (a build's COPY, a
+# wallpaper), and binds PulseAudio's folder into a screen folder in PID 1's
+# mounts (apps/wadd/src/mounts.rs), which this namespace doesn't stop.
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/wados /run/containers/systemd
+ReadWritePaths=-/etc/cloudflared
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

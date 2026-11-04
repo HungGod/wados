@@ -1,0 +1,21 @@
+# The machine's Cloudflare tunnel: public streams reach wadd's proxy
+# (127.0.0.1:8085) through it. Its token is the machine's own, put in
+# /etc/cloudflared/token by the installer stick's provision (phase 9). No
+# token, no tunnel: public streams are simply off.
+[Unit]
+Description=Cloudflare Tunnel (public streams, to wadd's proxy)
+ConditionPathExists=/etc/cloudflared/token
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+TimeoutStartSec=15
+# No self-updates: cloudflared comes with the image. Its metrics' /ready
+# tells wadd whether it's connected ([streaming] metrics).
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel --metrics 127.0.0.1:20241 run --token-file /etc/cloudflared/token
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,266 @@
+# WadOS's host image: the machine's own OS. Fedora 44 bootc, which boots
+# through greetd straight into labwc (ours, patched) and the WadSpaces shell,
+# locked first; wadd runs the wadspaces with root's podman; tailscaled and
+# cloudflared are its ways in from outside (docs/decisions/0003-host-image.md).
+#
+# The open graphics drivers (Intel, AMD, nouveau/NVK) and their firmware: the
+# installer stick, a new machine and the Surface run this. A machine with an
+# NVIDIA card may run Containerfile.nvidia instead, built on this one.
+#
+# Built by host/build.sh image, with host/ as the context and two more:
+#   bin     .build/host/bin: wadd, wados-shell, wadsctl, wadspaces-clipboard
+#           (release builds for Fedora 44, from host/builder)
+#   assets  assets/: WadSpaces' pictures and fonts
+# No secret is in any of them: the image is the same for everyone.
+
+# ------------------------------------------------------------ labwc
+# labwc 0.9.6 from Fedora's own source package, with WadOS's patches
+# (host/labwc/*.patch, docs/decisions/0001-labwc.md), built against Fedora
+# 44's wlroots0.19 as tools/build-labwc.sh does for a laptop. It's an RPM, so
+# dnf brings what it needs to run and rpm knows it's ours (release .wados1);
+# Fedora's unpatched labwc is never installed. Its one Requires dropped:
+# xdg-desktop-portal-wlr (no portals here: nothing on the machine needs one).
+FROM registry.fedoraproject.org/fedora:44@sha256:cb3bd21415bd82a2fae1a9379f3f972fa8e78d460c9f86101274d13230dd6fd6 AS labwc
+ARG LABWC=labwc-0.9.6-1.fc44
+COPY labwc/*.patch /root/rpmbuild/SOURCES/
+RUN set -eu; \
+    dnf -y -q --setopt=install_weak_deps=False install dnf5-plugins rpm-build redhat-rpm-config forge-srpm-macros; \
+    cd /root; \
+    dnf -y -q download --source "${LABWC}"; \
+    rpmkeys --import /etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-44-primary; \
+    rpmkeys -K "${LABWC}.src.rpm"; \
+    rpm -i "${LABWC}.src.rpm"; \
+    spec=/root/rpmbuild/SPECS/labwc.spec; \
+    n=1001; for p in $(cd /root/rpmbuild/SOURCES && ls [0-9]*.patch | sort); do \
+        echo "Patch${n}: ${p}"; n=$((n + 1)); \
+    done > /tmp/patches; \
+    cat /tmp/patches; \
+    sed -i -e '/^Source:/r /tmp/patches' \
+           -e 's/^Release:.*/Release:    1%{?dist}.wados1/' \
+           -e '/^Requires:[[:space:]]*xdg-desktop-portal-wlr/d' "${spec}"; \
+    [ "$(grep -c '^Patch10[0-9][0-9]:' "${spec}")" = "$(ls /root/rpmbuild/SOURCES/[0-9]*.patch | wc -l)" ]; \
+    ! grep -q xdg-desktop-portal-wlr "${spec}"; \
+    dnf -y -q builddep "${spec}"; \
+    rpmbuild -bb --nocheck --quiet \
+        --define 'debug_package %{nil}' --define '_smp_build_ncpus 2' "${spec}"; \
+    mkdir -p /out && cp /root/rpmbuild/RPMS/x86_64/labwc-0.9.6-*.wados1.x86_64.rpm /out/; \
+    rpm -qp --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' /out/*.rpm
+
+# ------------------------------------------------------------ cursors
+# The WadOS cursor theme, rendered from host/cursors/*.svg.
+FROM registry.fedoraproject.org/fedora:44@sha256:cb3bd21415bd82a2fae1a9379f3f972fa8e78d460c9f86101274d13230dd6fd6 AS cursors
+RUN dnf -y -q --setopt=install_weak_deps=False install librsvg2-tools xcursorgen && dnf clean all
+COPY cursors/ /src/
+RUN /src/build.sh /out/WadOS && ls -l /out/WadOS/cursors
+
+# ------------------------------------------------------------ the image
+FROM quay.io/fedora/fedora-bootc:44@sha256:291bda73006a5cfc6d4ac24f9a261915624f9f555d9ff1a426cb412928f152ac
+
+LABEL org.opencontainers.image.title="WadOS host" \
+      org.opencontainers.image.description="The WadSpaces machine's OS: Fedora 44 bootc, labwc and the WadSpaces shell, wadd" \
+      org.opencontainers.image.source="https://github.com/HungGod/wados" \
+      io.wados.variant="host"
+
+# The screen: our labwc (and Xwayland, which wlroots needs to be there; it
+# starts only for an X client), greetd, GTK 4 with layer shell, libadwaita
+# and WebKitGTK (the browser, phase 5), foot (the terminal), gvfs (Files'
+# Machines over Taildrive, phase 6), Mesa's GL, Vulkan and VA-API, GStreamer's
+# codecs (WebKitGTK plays through it), the fonts and the icons. No
+# xdg-desktop-portal: the shell opens its own file dialog and files.
+COPY --from=labwc /out/ /tmp/labwc/
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+      /tmp/labwc/labwc-0.9.6-*.wados1.x86_64.rpm xorg-x11-server-Xwayland \
+      greetd \
+      gtk4 gtk4-layer-shell libadwaita webkitgtk6.0 glib-networking gsettings-desktop-schemas \
+      librsvg2 shared-mime-info hicolor-icon-theme adwaita-icon-theme adwaita-cursor-theme \
+      foot gvfs dbus-tools wlr-randr \
+      mesa-dri-drivers mesa-vulkan-drivers libva-intel-media-driver libva-utils \
+      gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav gstreamer1-plugin-openh264 \
+      google-noto-sans-vf-fonts google-noto-serif-vf-fonts google-noto-sans-mono-vf-fonts google-noto-color-emoji-fonts \
+    && dnf clean all && rm -rf /tmp/labwc \
+    && rpm -q --qf '%{RELEASE}\n' labwc | grep -q '\.wados1$' \
+    && ! rpm -q xdg-desktop-portal xdg-desktop-portal-wlr > /dev/null
+
+# Sound: PipeWire, its PulseAudio socket (the session's, which wadd binds
+# into each wadspace on the screen: PULSE_SERVER) and WirePlumber, as the
+# person's user units, socket-activated.
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+      pipewire pipewire-pulseaudio pipewire-alsa wireplumber alsa-ucm alsa-sof-firmware \
+    && dnf clean all \
+    && systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
+
+# Networks: NetworkManager with Wi-Fi (and nmtui on a text console), and
+# BlueZ (wadd drives both over D-Bus).
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+      NetworkManager-wifi NetworkManager-tui bluez \
+    && dnf clean all
+
+# Firmware: the GPUs' (Intel, AMD, NVIDIA's GSP for nouveau), sound's, and
+# the Wi-Fi cards' (the base lacks Intel's: setup and a new machine's first
+# start need the internet, on whatever card). The Surface's Marvell Wi-Fi
+# is linux-firmware's.
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+      linux-firmware intel-gpu-firmware amd-gpu-firmware nvidia-gpu-firmware intel-npu-firmware \
+      intel-audio-firmware iwlwifi-dvm-firmware iwlwifi-mvm-firmware iwlwifi-mld-firmware \
+      realtek-firmware atheros-firmware brcmfmac-firmware mt7xxx-firmware \
+    && dnf clean all
+
+# Tailscale, the owner's private network (the remote API, private streams,
+# Taildrive): Tailscale's own RPM, pinned and checked (the sha256 is the one
+# in its repo's metadata), without its scriptlets (they only preset the unit,
+# enabled below). tailscaled keeps its state in /var/lib/tailscale.
+ARG TAILSCALE_VERSION=1.104.5
+ARG TAILSCALE_SHA256=ece63c45b1ae28b9478c87a0ffbd26a691afdf1a9638d44d4ac63a67e26a416a
+RUN curl -fsSLo /tmp/tailscale.rpm \
+      "https://pkgs.tailscale.com/stable/fedora/x86_64/tailscale_${TAILSCALE_VERSION}_x86_64.rpm" \
+    && echo "${TAILSCALE_SHA256}  /tmp/tailscale.rpm" | sha256sum -c - \
+    && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=noscripts,nodocs /tmp/tailscale.rpm \
+    && dnf clean all && rm /tmp/tailscale.rpm
+
+# cloudflared, the Cloudflare tunnel's connector (public streams reach wadd's
+# proxy through it): Cloudflare's own RPM, pinned and checked (the sha256 is
+# its release's), without its scriptlets (they'd write under /usr/local,
+# which is /var on bootc). It needs nothing else, so no repo is read. Updates
+# come with the image: --no-autoupdate.
+ARG CLOUDFLARED_VERSION=2026.10.7
+ARG CLOUDFLARED_SHA256=26c47d9d361459a818b519bc6b207dafe941bc50da921294752c6b0f094c32f0
+RUN curl -fsSLo /tmp/cloudflared.rpm \
+      "https://github.com/cloudflare/cloudflared/releases/download/${CLOUDFLARED_VERSION}/cloudflared-linux-x86_64.rpm" \
+    && echo "${CLOUDFLARED_SHA256}  /tmp/cloudflared.rpm" | sha256sum -c - \
+    && dnf -y install --disablerepo='*' --setopt=tsflags=noscripts,nodocs /tmp/cloudflared.rpm \
+    && dnf clean all && rm /tmp/cloudflared.rpm
+
+# The initramfs again, with the Surface's drivers in it, loaded in order in
+# the first seconds of boot: without them the controller hub fails, and
+# graphics (so the backlight) and sound stall for minutes or never come
+# (usr/lib/modprobe.d/wados-surface.conf says why). Harmless on other
+# machines: the modules find nothing and stay idle. Checked: those, the
+# GPU's firmware, a VM's disk, XFS and LUKS's unlock are in it. Its own
+# layer, so it only runs again when those two files change.
+COPY usr/lib/modprobe.d/wados-surface.conf /usr/lib/modprobe.d/
+COPY usr/lib/dracut/dracut.conf.d/60-wados-surface.conf /usr/lib/dracut/dracut.conf.d/
+RUN kver="$(ls /usr/lib/modules)" \
+    && mkdir -p /var/roothome \
+    && dracut --force --no-hostonly --kver "${kver}" "/usr/lib/modules/${kver}/initramfs.img" \
+    && chmod 644 "/usr/lib/modules/${kver}/initramfs.img" \
+    && lsinitrd "/usr/lib/modules/${kver}/initramfs.img" > /tmp/initrd.txt \
+    && for m in pinctrl-sunrisepoint surface_aggregator.ko surface_hid.ko i915.ko snd-hda-intel \
+                snd-hda-codec-alc269 kbl_dmc virtio_scsi xfs.ko systemd-cryptsetup wados-surface.conf; do \
+         grep -q "${m}" /tmp/initrd.txt || { echo "the initramfs lacks ${m}" >&2; exit 1; }; \
+       done \
+    && echo "initramfs: $(du -h "/usr/lib/modules/${kver}/initramfs.img" | cut -f1), with the Surface's drivers" \
+    && rm -rf /tmp/initrd.txt /var/roothome
+
+# WadOS's own: its config and units (host/etc, host/usr), the cursors,
+# the binaries (wadd's clipboard bridge where it looks for it:
+# apps/wadd/src/clip.rs), and WadSpaces' pictures where wad-gtk, the shell
+# and wadd look (crates/wad-gtk/src/assets.rs). Its fonts are the system's.
+COPY etc/ /etc/
+COPY usr/ /usr/
+COPY --from=cursors /out/WadOS /usr/share/icons/WadOS
+COPY --from=bin --chmod=755 wadd wados-shell wadsctl /usr/bin/
+COPY --from=bin --chmod=755 wadspaces-clipboard /usr/libexec/wados/
+COPY --from=assets / /usr/share/wados/assets/
+RUN mkdir -p /usr/share/fonts/wados \
+    && mv /usr/share/wados/assets/fonts/* /usr/share/fonts/wados/ \
+    && rmdir /usr/share/wados/assets/fonts \
+    && ln -s ../../fonts/wados /usr/share/wados/assets/fonts \
+    && chmod -R a+rX /usr/share/wados /usr/share/fonts/wados /usr/share/icons/WadOS \
+    && fc-cache -f /usr/share/fonts/wados \
+    && fc-list : family | grep -q '^Inter' \
+    && fc-list : family | grep -q 'Space Grotesk'
+
+# SELinux stays on: WadOS's module (usr/share/selinux/packages/wados) lets
+# wadspaces on the screen use the session's PulseAudio socket, and labels
+# greetd's config for this start.
+RUN semodule -i /usr/share/selinux/packages/wados/wados.cil \
+    && semodule -l | grep -qx wados \
+    && matchpathcon /run/wados/greetd.toml | grep -q ':xdm_var_run_t:'
+
+# Users: wados (who may use wadd) and wadspaces-clip (the clipboard bridges),
+# made now too, so the image has them before its first start (a disk
+# image's test user joins wados). The ids a machine's wadspaces' users are
+# (all but abc's 1000: wad-gen's USERNS_BASE), kept from anything else that
+# hands out ranges (useradd's start at 524288).
+RUN systemd-sysusers /usr/lib/sysusers.d/wados.conf \
+    && getent group wados > /dev/null && getent passwd wadspaces-clip > /dev/null \
+    && for f in /etc/subuid /etc/subgid; do echo "wadspaces:1000000:65536" >> "${f}"; done
+
+# The units. Updates (bootc-fetch-apply-updates.timer, on in the base) wait
+# for phase 8. Ctrl+Alt+Delete and tty1 are the shell's.
+RUN systemctl enable greetd.service podman.socket wadd.socket wadd.service \
+      bluetooth.service tailscaled.service cloudflared.service \
+    && systemctl disable bootc-fetch-apply-updates.timer \
+    && systemctl set-default graphical.target \
+    && rm -f /etc/systemd/system/ctrl-alt-del.target \
+    && systemctl mask getty@tty1.service ctrl-alt-del.target \
+    && rm -rf /var/log/dnf5.log* /var/lib/dnf /var/cache/libdnf5 /run/dnf \
+              /var/cache/ldconfig /var/cache/swcatalog /run/selinux-policy
+
+# Checks: every binary loads (all its libraries and symbols are here), the
+# tools are there, the firmware is there, and greetd's config is made right
+# for a machine with its person and one without.
+RUN set -e; \
+    for b in /usr/bin/wadd /usr/bin/wados-shell /usr/bin/wadsctl /usr/libexec/wados/wadspaces-clipboard \
+             /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \
+        out="$(ldd -r "${b}" 2>&1)"; \
+        if grep -E 'not found|undefined symbol' <<< "${out}"; then echo "${b} doesn't load" >&2; exit 1; fi; \
+    done; \
+    wadd version; \
+    wadsctl --help 2>&1 | grep -q usage; \
+    labwc --version; \
+    mkdir -m 0700 /tmp/xdg; \
+    XDG_RUNTIME_DIR=/tmp/xdg WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
+        timeout 3 labwc > /tmp/labwc.log 2>&1 || true; \
+    if grep -E 'Failed to load|cannot|Unable to' /tmp/labwc.log; then echo "labwc doesn't start cleanly with /etc/xdg/labwc" >&2; exit 1; fi; \
+    rm -rf /tmp/xdg /tmp/labwc.log /tmp/.X11-unix /tmp/.X*-lock; \
+    foot --check-config; \
+    tailscale version | head -1; \
+    cloudflared --version; \
+    for t in Xwayland agreety podman skopeo bootc nmcli nmtui bluetoothctl wpctl pipewire wireplumber \
+             tailscaled vainfo wlr-randr dbus-update-activation-environment systemd-cat semodule restorecon; do \
+        command -v "${t}" > /dev/null || { echo "missing ${t}" >&2; exit 1; }; \
+    done; \
+    ls /usr/lib64/libgtk4-layer-shell.so.0 /usr/lib64/libwebkitgtk-6.0.so.4 /usr/lib64/libadwaita-1.so.0 > /dev/null; \
+    ls -d /usr/lib/firmware/mrvl/pcie8897_uapsta.bin* /usr/lib/firmware/iwlwifi-*.ucode* /usr/lib/firmware/rtl_nic \
+          /usr/lib/firmware/i915 /usr/lib/firmware/amdgpu /usr/lib/firmware/nvidia/tu106/gsp \
+          /usr/lib/firmware/intel/sof* > /dev/null; \
+    test -f /usr/share/themes/WadOS/openbox-3/themerc; \
+    test -f /usr/share/icons/WadOS/cursors/left_ptr; \
+    grep -q '<name>WadOS</name>' /etc/xdg/labwc/rc.xml; \
+    grep -qx 'HandlePowerKey=ignore' /etc/systemd/logind.conf.d/10-wados.conf; \
+    grep -qx 'export XCURSOR_THEME=WadOS' /usr/libexec/wados/session; \
+    test -f /usr/share/wados/assets/wallpapers/art/silk.svg; \
+    python3 -c 'import tomllib; tomllib.load(open("/usr/lib/wados/wadd.toml", "rb"))'; \
+    mkdir -p /tmp/fake; \
+    printf '#!/bin/sh\n[ "$2" = 1000 ] && echo "sam:x:1000:1000:Sam:/var/home/sam:/bin/bash"\n' > /tmp/fake/getent; \
+    chmod 755 /tmp/fake/getent; \
+    /usr/libexec/wados/greetd-config; \
+    python3 -c 'import tomllib; c = tomllib.load(open("/run/wados/greetd.toml", "rb")); assert "initial_session" not in c and c["default_session"]["user"] == "greetd", c'; \
+    PATH=/tmp/fake:$PATH /usr/libexec/wados/greetd-config; \
+    python3 -c 'import tomllib; c = tomllib.load(open("/run/wados/greetd.toml", "rb")); assert c["initial_session"] == {"command": "/usr/libexec/wados/session", "user": "sam"}, c'; \
+    rm -rf /tmp/fake /run/wados
+
+# WadOS's own files go in a chunk of their own when host/build.sh rechunks
+# the image (rpm-ostree's user.component): an update that changes them
+# downloads that chunk, not the initramfs and everything else no package owns.
+RUN --mount=type=bind,source=etc,target=/ctx/etc --mount=type=bind,source=usr,target=/ctx/usr \
+    python3 - <<'EOF'
+import os
+ours = []
+for top in ("etc", "usr"):
+    for d, _, fs in os.walk(os.path.join("/ctx", top)):
+        ours += ["/" + os.path.relpath(os.path.join(d, f), "/ctx") for f in fs]
+ours += ["/usr/bin/wadd", "/usr/bin/wados-shell", "/usr/bin/wadsctl"]
+for top in ("/usr/libexec/wados", "/usr/lib/wados", "/usr/share/wados", "/usr/share/fonts/wados",
+            "/usr/share/icons/WadOS", "/usr/share/themes/WadOS", "/usr/share/selinux/packages/wados"):
+    ours += [os.path.join(d, f) for d, _, fs in os.walk(top) for f in fs]
+n = 0
+for p in sorted(set(ours)):
+    if os.path.isfile(p) and not os.path.islink(p):
+        os.setxattr(p, "user.component", b"wados")
+        n += 1
+print(f"{n} files in the wados chunk")
+EOF
+
+RUN bootc container lint

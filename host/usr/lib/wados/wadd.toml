@@ -1,0 +1,44 @@
+# wadd's settings on a WadSpaces machine: the image's (crates/wad-config reads
+# this, then /etc/wados/wadd.toml, key by key). wadd never writes either;
+# what changes at run time is state, under /var/lib/wados.
+#
+# Most of it is wad-config's defaults for a machine, said again here because
+# the image's own files depend on them: wadd.socket, wadd.service,
+# tmpfiles.d/wados.conf, podman.socket, tailscaled and cloudflared.service.
+# The machine's name is its hostname (Settings changes it); its id and
+# public host ([machine] id, [streaming] host) are the installer's, in
+# /etc/wados/wadd.toml. No secrets here: the TURN key is a file of its own
+# (/etc/wados/turn.toml), the tunnel's token cloudflared's.
+
+[daemon]
+# wadd.socket's; who may use it besides root (wadd.socket's group is wados).
+socket = "/run/wadd/wadd.sock"
+allow_groups = ["wados", "wheel"]
+# tmpfiles.d/wados.conf's, and wadd.service's StateDirectory.
+state_dir = "/var/lib/wados"
+signins_dir = "/var/lib/wados/keys"
+projects_dir = "/var/lib/wados/projects"
+# root's podman (podman.socket), and where quadlet reads root's units.
+podman_socket = "/run/podman/podman.sock"
+units_dir = "/run/containers/systemd"
+# wadd.service's RuntimeDirectory.
+screen_dir = "/run/wados/screen"
+# abc's in the wadspaces, and the machine's person's.
+projects_uid = 1000
+
+[display]
+# The person's session (uid 1000), until the shell says where it is.
+runtime_dir = "/run/user/1000"
+
+[streaming]
+# Public streams need the installer's host and tunnel; private ones don't.
+# cloudflared.service's metrics.
+metrics = "127.0.0.1:20241"
+turn = "/etc/wados/turn.toml"
+
+[tailnet]
+# tailscaled.service; the remote API on the tailnet only.
+socket = "/run/tailscale/tailscaled.sock"
+cli = "/usr/bin/tailscale"
+port = 8087
+bind_device = "tailscale0"

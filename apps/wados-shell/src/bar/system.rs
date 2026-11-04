@@ -1,8 +1,9 @@
 //! What the tray can say about the machine without Settings (phase 8 does
 //! the changing): the network (NetworkManager), the battery (UPower),
-//! Bluetooth (BlueZ) and the screen's brightness (sysfs), read-only. What
-//! isn't there stays `None`, and the tray says it doesn't know rather than
-//! making a value up.
+//! Bluetooth (BlueZ) and the screen's brightness (sysfs), read-only; and the
+//! volume and the brightness as the session's keys left them (session.rs
+//! tells it, through [`start`]'s setter). What isn't there stays `None`, and
+//! the tray says it doesn't know rather than making a value up.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -16,6 +17,32 @@ pub struct Status {
     pub bluetooth: Option<Bluetooth>,
     /// 0 to 1.
     pub brightness: Option<f64>,
+    pub volume: Option<Volume>,
+}
+
+/// The default output's volume (PipeWire's, through wpctl).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Volume {
+    /// 0 to 1 (1.5 at most, as PipeWire allows).
+    pub level: f64,
+    pub muted: bool,
+}
+
+/// The spike's (`Tray.svelte`): muted or silent, low, or more.
+pub fn volume_icon(v: Option<&Volume>) -> &'static str {
+    match v {
+        Some(v) if v.muted || v.level <= 0.0 => "volume-x",
+        Some(v) if v.level < 0.4 => "volume-1",
+        _ => "volume-2",
+    }
+}
+
+pub fn volume_tip(v: Option<&Volume>) -> String {
+    match v {
+        None => "Sound".into(),
+        Some(v) if v.muted => "Sound: muted".into(),
+        Some(v) => format!("Sound: {}%", (v.level * 100.0).round() as i64),
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -139,8 +166,12 @@ pub fn bluetooth_tip(b: Option<&Bluetooth>) -> String {
     }
 }
 
-/// Starts following the machine; `out` gets the whole status at each change.
-pub fn start(out: Rc<dyn Fn(&Status)>) {
+/// Changes the status (`out` hears it if that changed it).
+pub type Set = Rc<dyn Fn(&dyn Fn(&mut Status))>;
+
+/// Starts following the machine; `out` gets the whole status at each
+/// change. What it gives back changes it from elsewhere.
+pub fn start(out: Rc<dyn Fn(&Status)>) -> Set {
     let st = Rc::new(RefCell::new(Status::default()));
     let set = {
         let (st, out) = (st.clone(), out.clone());
@@ -202,7 +233,7 @@ pub fn start(out: Rc<dyn Fn(&Status)>) {
     });
 
     // Bluetooth and the brightness: looked at now and then.
-    let s = set.clone();
+    let s: Set = set.clone();
     let look = move || {
         let s2 = s.clone();
         glib::spawn_future_local(async move {
@@ -217,6 +248,7 @@ pub fn start(out: Rc<dyn Fn(&Status)>) {
         look();
         glib::ControlFlow::Continue
     });
+    set
 }
 
 async fn proxy(name: &str, path: &str, iface: &str) -> Option<gio::DBusProxy> {
@@ -337,6 +369,19 @@ mod tests {
         assert_eq!(battery_icon(&low), "battery-low");
         assert_eq!(battery_text(&low), "12% · on battery");
         assert_eq!(upower_state(4), (false, true));
+    }
+
+    #[test]
+    fn the_volume() {
+        assert_eq!(volume_icon(None), "volume-2");
+        assert_eq!(volume_tip(None), "Sound");
+        let v = |level, muted| Volume { level, muted };
+        assert_eq!(volume_icon(Some(&v(0.45, false))), "volume-2");
+        assert_eq!(volume_tip(Some(&v(0.45, false))), "Sound: 45%");
+        assert_eq!(volume_icon(Some(&v(0.2, false))), "volume-1");
+        assert_eq!(volume_icon(Some(&v(0.0, false))), "volume-x");
+        assert_eq!(volume_icon(Some(&v(0.8, true))), "volume-x");
+        assert_eq!(volume_tip(Some(&v(0.8, true))), "Sound: muted");
     }
 
     #[test]

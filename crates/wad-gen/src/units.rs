@@ -89,7 +89,8 @@ pub struct Machine {
     pub pulse_dir: Option<String>,
     /// The machine's screens: its compositor draws one window per screen.
     pub screens: u32,
-    /// Draw in software (NVIDIA's own driver: the images haven't its libraries).
+    /// Draw in software: NVIDIA's own driver (the images haven't its libraries), or a GPU
+    /// with no 3D (a VM's virtio GPU without virgl), where wlroots won't fall back by itself.
     pub software_render: bool,
 }
 

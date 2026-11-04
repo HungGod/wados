@@ -1,0 +1,3 @@
+# Defaults for `bootc install` (the installer, phase 9; bootc-image-builder).
+[install.filesystem.root]
+type = "xfs"

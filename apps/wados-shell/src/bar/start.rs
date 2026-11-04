@@ -1,7 +1,9 @@
 //! The logo's menu (`shell/bar/Launcher.svelte`): search, your wadspaces
 //! (what's running, then the latest launched: two rows; the rest on the
-//! launcher), the machine's own apps (and the Builder), and power. It's the
-//! logo's half grown out: over it on the dock, under it on the desktop.
+//! launcher), the machine's own apps (and the Builder), and power (Lock,
+//! and in the machine's own session Restart and Power off: session.rs).
+//! It's the logo's half grown out: over it on the dock, under it on the
+//! desktop.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -13,6 +15,7 @@ use wad_model::{SessionDisplay, Wadspace};
 use super::tasks::MachineApp;
 use super::ui::{self, label};
 use crate::machine::Page;
+use crate::session;
 use crate::shell::Shell;
 
 /// Two rows of four.
@@ -248,31 +251,28 @@ impl Start {
         me.append(&avatar);
         me.append(&label(&name, &["wb-me"]));
         foot.append(&me);
-        let (lock, _) = ui::tb("lock", 15, "Lock");
-        lock.add_css_class("wb-pw");
-        let w = Rc::downgrade(self);
-        lock.connect_clicked(move |_| {
-            if let Some(m) = w.upgrade() {
-                m.close();
-                // The lock is main.rs's: asked for the way labwc's Ctrl+Alt+L does.
-                if !ui::spawn(&["wadsctl", "lock"]) {
-                    m.shell.toast(wad_proto::Level::Error, "Couldn't lock: wadsctl isn't on the machine", None);
-                }
-            }
-        });
-        foot.append(&lock);
-        for (icon, tip) in [
-            ("server", "Server mode (the screen goes off and it only streams) comes in phase 10"),
-            ("rotate-ccw", "Restart comes with the host image (phase 4)"),
-            ("power", "Power off comes with the host image (phase 4)"),
-        ] {
-            let (b, _) = ui::tb(icon, 15, tip);
+        // Lock, Server mode (phase 10), Restart and Power off: the last two
+        // only in the machine's own session, and with no asking again (the
+        // spike's don't).
+        for it in session::items(self.shell.is_machine()) {
+            let (b, _) = ui::tb(it.icon, 15, &it.tip);
             b.add_css_class("wb-pw");
-            b.set_sensitive(false);
-            // Its tooltip still says why.
-            let holder = gtk::Box::builder().tooltip_text(tip).build();
-            holder.append(&b);
-            foot.append(&holder);
+            if it.on {
+                let (w, p) = (Rc::downgrade(self), it.power);
+                b.connect_clicked(move |_| {
+                    if let Some(m) = w.upgrade() {
+                        m.close();
+                        m.shell.power(p);
+                    }
+                });
+                foot.append(&b);
+            } else {
+                b.set_sensitive(false);
+                // Its tooltip still says why.
+                let holder = gtk::Box::builder().tooltip_text(&it.tip).build();
+                holder.append(&b);
+                foot.append(&holder);
+            }
         }
         self.body.append(&foot);
     }

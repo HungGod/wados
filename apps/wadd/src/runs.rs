@@ -53,6 +53,8 @@ use crate::screen::Screen;
 
 /// There when NVIDIA's own kernel driver runs the machine's card.
 const NVIDIA_DRIVER: &str = "/proc/driver/nvidia/version";
+/// The machine's DRM devices (its render nodes: `renderD*`).
+const DRM_CLASS: &str = "/sys/class/drm";
 /// A wallpaper's picture, at most.
 const MAX_WALLPAPER: u64 = 16 << 20;
 
@@ -90,7 +92,7 @@ impl Settings {
             screen_dir: config.display.enabled.then(|| d.screen_dir.to_string_lossy().into_owned()),
             pulse_dir: None,
             screens: 1,
-            software_render: Path::new(NVIDIA_DRIVER).exists(),
+            software_render: Path::new(NVIDIA_DRIVER).exists() || no_3d(Path::new(DRM_CLASS)),
         };
         let home = match profile {
             wad_config::Profile::User => std::env::var_os("HOME").map(PathBuf::from),
@@ -108,6 +110,42 @@ impl Settings {
             keys_uid: root.then_some(d.projects_uid),
         }
     }
+}
+
+/// A GPU whose render nodes can't draw in 3D: a VM's virtio GPU without
+/// virgl (VIRTIO_GPU_F_VIRGL, its first feature bit, off). Mesa has no
+/// driver for its render node, and a wadspace's labwc (wlroots, on the
+/// machine's Wayland) tries GLES2 and Vulkan on it, then gives up rather than
+/// draw with pixman. False when there's no render node at all: wlroots
+/// draws in software by itself then.
+fn no_3d(drm: &Path) -> bool {
+    let nodes: Vec<PathBuf> = std::fs::read_dir(drm)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("renderD"))
+        .map(|e| e.path())
+        .collect();
+    !nodes.is_empty() && nodes.iter().all(|n| virtio_gpu_without_virgl(&n.join("device")))
+}
+
+/// `device` (a render node's), or a virtio device under it (its PCI
+/// device's `virtio<n>`), is virtio_gpu with its virgl bit off.
+fn virtio_gpu_without_virgl(device: &Path) -> bool {
+    let driver = |d: &Path| std::fs::read_link(d.join("driver")).ok().and_then(|l| l.file_name().map(|n| n.to_owned()));
+    let mut candidates = vec![device.to_path_buf()];
+    candidates.extend(
+        std::fs::read_dir(device)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with("virtio"))
+            .map(|e| e.path()),
+    );
+    candidates.iter().any(|d| {
+        driver(d).is_some_and(|n| n == "virtio_gpu")
+            && std::fs::read_to_string(d.join("features")).is_ok_and(|f| f.trim_start().starts_with('0'))
+    })
 }
 
 /// The machine's time zone (/etc/localtime's link), empty when it's UTC or unknown.
@@ -644,4 +682,57 @@ fn remove(path: &Path) -> Res<()> {
 /// on a laptop's build.
 fn assets_dirs() -> Vec<PathBuf> {
     vec![PathBuf::from("/usr/share/wados/assets"), PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets"))]
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+    use std::path::Path;
+
+    /// A render node on a PCI virtio GPU, as Linux 7.2's sysfs has it:
+    /// renderD128/device is the PCI device (virtio-pci), virtio1 under it is virtio_gpu.
+    fn virtio(root: &Path, features: &str) {
+        let pci = root.join("devices/pci0000:00/0000:00:02.0");
+        let virtio = pci.join("virtio1");
+        std::fs::create_dir_all(&virtio).unwrap();
+        std::fs::create_dir_all(root.join("drivers/virtio-pci")).unwrap();
+        std::fs::create_dir_all(root.join("drivers/virtio_gpu")).unwrap();
+        symlink(root.join("drivers/virtio-pci"), pci.join("driver")).unwrap();
+        symlink(root.join("drivers/virtio_gpu"), virtio.join("driver")).unwrap();
+        std::fs::write(virtio.join("features"), format!("{features}\n")).unwrap();
+        let node = root.join("class/drm/renderD128");
+        std::fs::create_dir_all(&node).unwrap();
+        symlink(&pci, node.join("device")).unwrap();
+    }
+
+    #[test]
+    fn a_virtio_gpu_without_virgl_draws_in_software() {
+        let d = tempfile::tempdir().unwrap();
+        virtio(d.path(), "0100000000000000000000000000110010000000100000000000000000000000");
+        assert!(super::no_3d(&d.path().join("class/drm")));
+    }
+
+    #[test]
+    fn a_virtio_gpu_with_virgl_or_another_gpu_draws_in_3d() {
+        let d = tempfile::tempdir().unwrap();
+        virtio(d.path(), "1100000000000000000000000000110010000000100000000000000000000000");
+        assert!(!super::no_3d(&d.path().join("class/drm")));
+
+        // An Intel GPU: its render node's device is the PCI device, driven by i915.
+        let d = tempfile::tempdir().unwrap();
+        let pci = d.path().join("devices/pci0000:00/0000:00:02.0");
+        std::fs::create_dir_all(&pci).unwrap();
+        std::fs::create_dir_all(d.path().join("drivers/i915")).unwrap();
+        symlink(d.path().join("drivers/i915"), pci.join("driver")).unwrap();
+        let node = d.path().join("class/drm/renderD128");
+        std::fs::create_dir_all(&node).unwrap();
+        symlink(&pci, node.join("device")).unwrap();
+        assert!(!super::no_3d(&d.path().join("class/drm")));
+
+        // No render node at all (a firmware framebuffer): wlroots chooses pixman itself.
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(d.path().join("class/drm/card0")).unwrap();
+        assert!(!super::no_3d(&d.path().join("class/drm")));
+        assert!(!super::no_3d(&d.path().join("missing")));
+    }
 }

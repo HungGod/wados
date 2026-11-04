@@ -1,0 +1,76 @@
+# The host image (the machine's own OS, host/): built as host/build.sh
+# image builds it (WadOS's binaries in host/builder, the image with its
+# patched labwc, then rechunked by package), and checked with `bootc
+# container lint` (its Containerfile lints as its last step too; this lints
+# the image as it would be pushed).
+#
+# Nothing is pushed. The build computer pushes the host image
+# (host/build.sh push), and the NVIDIA variant's modules are signed with a
+# MOK key that never comes to CI: only the open-drivers variant is built
+# here, which needs no secret at all.
+name: host
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - host/**
+      - apps/wadd/**
+      - apps/wados-shell/**
+      - apps/wadsctl/**
+      - crates/**
+      - assets/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/host.yml
+  pull_request:
+    paths:
+      - host/**
+      - apps/wadd/**
+      - apps/wados-shell/**
+      - apps/wadsctl/**
+      - crates/**
+      - assets/**
+      - Cargo.toml
+      - Cargo.lock
+      - rust-toolchain.toml
+      - .github/workflows/host.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    # podman 5 for host/build.sh (its rechunk runs rpm-ostree in a
+    # privileged container), as images.yml (which says why this digest, and
+    # /mnt).
+    container:
+      image: quay.io/podman/stable:v5.8.7@sha256:2fb39ca923dd9e0ee33f9e319c3a107a2bfde022a6a31560cbd56a862821e7d3
+      options: --privileged
+      volumes:
+        - /mnt/wados-containers:/var/lib/containers
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Tools
+        run: dnf -y -q install git-core skopeo tar gawk
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Room
+        run: df -h / /var/lib/containers "$GITHUB_WORKSPACE"
+      - name: The host image (host/build.sh image)
+        env:
+          JOBS: "4"
+        run: host/build.sh image
+      - name: bootc container lint
+        run: podman run --rm localhost/wados-host:latest bootc container lint

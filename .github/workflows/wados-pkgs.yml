@@ -1,0 +1,30 @@
+# wados-pkgs (crates/wad-gen/src/bin/wados-pkgs), built once for the jobs
+# after it (images.yml and packages.yml call this): what images/build.sh's
+# pkg and set targets and the packages workflow ask wad-gen. Uploaded as
+# the artifact `wados-pkgs`; artifacts lose the executable bit, so each job
+# that downloads it runs chmod +x on it.
+name: wados-pkgs
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # rust-toolchain.toml's Rust (1.99), which the runner's rustup installs.
+      - name: Build
+        run: cargo build --release --locked -p wad-gen --bin wados-pkgs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wados-pkgs
+          path: target/release/wados-pkgs
+          if-no-files-found: error
+          retention-days: 7

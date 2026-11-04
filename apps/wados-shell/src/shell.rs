@@ -1,7 +1,8 @@
 //! The shell's verbs, for every surface (the spike's `shell/controller.ts`
 //! `getShell()`): what wadd knows ([`Store`]), asking it for things
 //! ([`Link`]), the windows ([`Placer`]), the page (launcher or desktop), toasts,
-//! and `wadsctl` commands of each module's own.
+//! the machine's session (is it the machine's own, locking, power), and
+//! `wadsctl` commands of each module's own.
 //!
 //! Surfaces hold an `Rc<Shell>` and use only what's here; a module that
 //! needs more adds a verb of its own on top of these.
@@ -17,6 +18,7 @@ use wad_proto::{Event, Level, OpResult};
 use crate::builder::Builder;
 use crate::machine::{Machine, Page};
 use crate::placer::Placer;
+use crate::session::{Power, Session};
 use crate::store::Store;
 use crate::wadd::Link;
 
@@ -31,6 +33,7 @@ pub struct Shell {
     pub others: Vec<gdk::Monitor>,
     machine: OnceCell<Weak<Machine>>,
     builder: OnceCell<Weak<Builder>>,
+    session: OnceCell<Weak<Session>>,
     ctl: RefCell<Vec<(String, CtlHandler)>>,
 }
 
@@ -52,6 +55,7 @@ impl Shell {
             others,
             machine: OnceCell::new(),
             builder: OnceCell::new(),
+            session: OnceCell::new(),
             ctl: RefCell::default(),
         })
     }
@@ -62,6 +66,10 @@ impl Shell {
 
     pub(crate) fn set_builder(&self, b: &Rc<Builder>) {
         let _ = self.builder.set(Rc::downgrade(b));
+    }
+
+    pub(crate) fn set_session(&self, s: &Rc<Session>) {
+        let _ = self.session.set(Rc::downgrade(s));
     }
 
     /// The Builder (its window may be closed).
@@ -198,6 +206,24 @@ impl Shell {
 
     pub fn undo(&self, id: &str) {
         self.link.undo(id);
+    }
+
+    // ------------------------------------------------------------ the session
+
+    /// This is the machine's own session (`WADOS_SESSION=machine`, as
+    /// greetd starts it), not a test or a window on a laptop: only then do
+    /// Restart, Power off and the brightness keys reach the machine.
+    pub fn is_machine(&self) -> bool {
+        crate::session::is_machine()
+    }
+
+    /// A power item (the start menu's: Lock, Restart, Power off): done, or
+    /// toasted why not.
+    pub fn power(&self, p: Power) {
+        let r = self.session.get().and_then(Weak::upgrade).map(|s| s.power(p));
+        if let Some(Err(e)) = r {
+            self.toast(Level::Warn, &e, None);
+        }
     }
 
     // ------------------------------------------------------------ toasts

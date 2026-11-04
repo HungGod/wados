@@ -1,0 +1,7 @@
+[Icon Theme]
+Name=WadOS
+Comment=WadSpaces' cursors: the arrow, the hand and the I-beam in its colours; the rest are Adwaita's
+Inherits=Adwaita
+# labwc's icon theme is its theme's name (rc.xml has no <theme><icon>), so this
+# is a valid icon theme too, with no icons of its own: Adwaita's, then hicolor's.
+Directories=

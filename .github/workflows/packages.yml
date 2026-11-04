@@ -1,0 +1,220 @@
+# Packages: each app, tool and VS Code extension the catalog offers that
+# WadOS has a recipe for (crates/wad-gen/src/recipes.rs), captured on the
+# base (wadspaces-pkg capture) and published as
+# ghcr.io/hunggod/wados-pkg-<id>:<abi> (and :<abi>-<version>), with v1's
+# labels, plus the index machines read: index.json on the `packages`
+# release, which wadd's [packages] index_url names. What a package is (its
+# waves, its Containerfile, its labels, the index) is wad-gen's, asked
+# through wados-pkgs; package.yml builds one wave.
+#
+# The base is ghcr.io/hunggod/wados-base:44, as the images workflow pushed
+# it; its io.wadspaces.abi label is the ABI packages are published for.
+# This runs after each of that workflow's runs on main (a new base: the
+# weekly one has Fedora's updates in), when wad-gen or the catalog changes,
+# and by hand.
+#
+# What isn't built again: a package's Containerfile names the base and
+# what it needs by digest (and the base carries the feature scripts and
+# wadspaces-pkg), so its sha256 stands for everything the package is built
+# from. inputs.json, beside index.json, keeps each published package's. One
+# whose Containerfile is the same as its published image's isn't built.
+# One that is built is pushed only when its files changed (its content
+# label, v1's way), so machines keep the one they have; its new inputs are
+# kept either way. `force` builds and pushes them all.
+#
+# Secrets: only GITHUB_TOKEN. packages: write for the waves (they push to
+# ghcr), contents: write for the index job (the release's files).
+name: packages
+
+on:
+  workflow_run:
+    workflows: [images]
+    types: [completed]
+    branches: [main]
+  push:
+    branches: [main]
+    # What a package is: its recipe, Containerfile, labels and index, and
+    # the catalog (the apps, tools and extensions there are).
+    paths:
+      - crates/wad-gen/src/packages.rs
+      - crates/wad-gen/src/recipes.rs
+      - crates/wad-gen/src/labels.rs
+      - crates/wad-gen/src/index.rs
+      - crates/wad-gen/src/bin/wados-pkgs/main.rs
+      - crates/wad-model/data/catalog.json
+      - .github/workflows/packages.yml
+      - .github/workflows/package.yml
+      - .github/workflows/wados-pkgs.yml
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: Packages to build, space-separated (what they need comes too); empty for all
+        required: false
+        default: ""
+      force:
+        description: Build and push each even when nothing changed
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: packages
+  cancel-in-progress: false
+
+env:
+  BASE: ghcr.io/hunggod/wados-base:44
+
+jobs:
+  wados-pkgs:
+    # After the images workflow: only when it pushed a base.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    uses: ./.github/workflows/wados-pkgs.yml
+
+  plan:
+    needs: wados-pkgs
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      waves: ${{ steps.plan.outputs.waves }}
+      abi: ${{ steps.plan.outputs.abi }}
+      base: ${{ steps.plan.outputs.base }}
+      digest: ${{ steps.plan.outputs.digest }}
+      built: ${{ steps.plan.outputs.built }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wados-pkgs
+      - id: plan
+        name: Plan
+        env:
+          IDS: ${{ inputs.ids }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          chmod +x wados-pkgs
+          # The base's ABI: packages built for it fit every base with the same.
+          printf '%s' "$GH_TOKEN" | skopeo login ghcr.io -u "$ACTOR" --password-stdin
+          inspect=$(skopeo inspect "docker://$BASE")
+          abi=$(jq -r '.Labels["io.wadspaces.abi"] // empty' <<<"$inspect")
+          if [ -z "$abi" ]; then
+            echo "::error::$BASE has no io.wadspaces.abi label: the images workflow pushes one built from this repo"
+            exit 1
+          fi
+          digest=$(jq -r .Digest <<<"$inspect")
+          # Every package (or those asked for, and what they need), in waves:
+          # each wave needs only earlier ones'.
+          # shellcheck disable=SC2086 # one word per id
+          plan=$(./wados-pkgs packages $IDS)
+          waves=$(jq -c '[group_by(.wave)[] | map(.id)]' <<<"$plan")
+          if [ "$(jq length <<<"$waves")" -gt 3 ]; then
+            echo "::error::$(jq length <<<"$waves") waves: packages.yml has jobs for three (add a wave job)"
+            exit 1
+          fi
+          # What each published package was built from (none the first time).
+          gh release download packages --pattern inputs.json --output inputs.json 2>/dev/null || echo '{}' >inputs.json
+          built=$(jq -c --arg abi "$abi" 'if .version == 1 then .abis[$abi] // {} else {} end' inputs.json)
+          {
+            echo "abi=$abi"
+            echo "digest=$digest"
+            echo "base=$BASE@$digest"
+            echo "waves=$waves"
+            echo "built=$built"
+          } >>"$GITHUB_OUTPUT"
+          echo "On $BASE@$digest (ABI $abi): $(jq length <<<"$plan") packages in $(jq length <<<"$waves") waves" >>"$GITHUB_STEP_SUMMARY"
+
+  # Each wave on ghcr before the next. A package that failed doesn't stop
+  # the next waves: what needs it is built on the one published before (or
+  # fails, saying so, when there's none).
+  wave0:
+    needs: plan
+    if: fromJSON(needs.plan.outputs.waves)[0] != null
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/package.yml
+    with:
+      ids: ${{ toJSON(fromJSON(needs.plan.outputs.waves)[0]) }}
+      abi: ${{ needs.plan.outputs.abi }}
+      base: ${{ needs.plan.outputs.base }}
+      built: ${{ needs.plan.outputs.built }}
+      force: ${{ inputs.force == true }}
+  wave1:
+    needs: [plan, wave0]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.waves)[1] != null }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/package.yml
+    with:
+      ids: ${{ toJSON(fromJSON(needs.plan.outputs.waves)[1]) }}
+      abi: ${{ needs.plan.outputs.abi }}
+      base: ${{ needs.plan.outputs.base }}
+      built: ${{ needs.plan.outputs.built }}
+      force: ${{ inputs.force == true }}
+  wave2:
+    needs: [plan, wave1]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && fromJSON(needs.plan.outputs.waves)[2] != null }}
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/package.yml
+    with:
+      ids: ${{ toJSON(fromJSON(needs.plan.outputs.waves)[2]) }}
+      abi: ${{ needs.plan.outputs.abi }}
+      base: ${{ needs.plan.outputs.base }}
+      built: ${{ needs.plan.outputs.built }}
+      force: ${{ inputs.force == true }}
+
+  # What this run pushed, into index.json (wad-gen's Index::merge: other
+  # ABIs' entries stay), and what each package it built was built from,
+  # into inputs.json. Even after a failed wave: what was pushed is listed.
+  index:
+    needs: [plan, wave0, wave1, wave2]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wados-pkgs
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: result-*
+          path: results
+          merge-multiple: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: inputs-*
+          path: inputs
+          merge-multiple: true
+      - name: Publish index.json and inputs.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ABI: ${{ needs.plan.outputs.abi }}
+          DIGEST: ${{ needs.plan.outputs.digest }}
+        run: |
+          chmod +x wados-pkgs
+          gh release view packages >/dev/null 2>&1 ||
+            gh release create packages --title "Packages index" \
+              --notes "What machines read to find packages (index.json), and what each was built from (inputs.json). Written by the packages workflow."
+          gh release download packages --pattern index.json --output old-index.json 2>/dev/null || echo '{}' >old-index.json
+          gh release download packages --pattern inputs.json --output old-inputs.json 2>/dev/null || echo '{}' >old-inputs.json
+          shopt -s nullglob
+          results=(results/*.json)
+          built=(inputs/*.json)
+          ./wados-pkgs index old-index.json "$ABI" "$DIGEST" "${results[@]}" >index.json
+          jq -s --arg abi "$ABI" '
+            (.[0] | if .version == 1 then . else {version: 1, abis: {}} end) as $old
+            | (.[1:] | map({(.id): .inputs}) | add // {}) as $new
+            | $old | .abis[$abi] = ((.abis[$abi] // {}) + $new)' old-inputs.json "${built[@]}" >inputs.json
+          gh release upload packages index.json inputs.json --clobber
+          echo "${#results[@]} packages pushed, ${#built[@]} built; index.json and inputs.json updated" >>"$GITHUB_STEP_SUMMARY"

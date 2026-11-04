@@ -113,3 +113,18 @@ window.wados-lock { background: var(--bg); }
 .lock-welcome { font-size: 26px; }
 .lock-entry { min-height: 44px; border-radius: 14px; }
 .lock-error { color: var(--danger); }
+/* Its corner (the spike's): Power off. */
+button.lock-power {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 999px;
+  border: none;
+  outline: none;
+  box-shadow: none;
+  background: rgb(255 255 255 / 0.12);
+  color: #fff;
+}
+button.lock-power:hover { background: rgb(255 255 255 / 0.2); }
+button.lock-power:focus-visible { box-shadow: 0 0 0 2px rgb(255 255 255 / 0.85); }
+button.lock-power:disabled { background: rgb(255 255 255 / 0.06); color: rgb(255 255 255 / 0.35); }

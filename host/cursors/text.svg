@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- WadOS's I-beam (text): light on a night edge, so it shows on both. Hotspot 16,16. -->
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12.5 6.5 H14.5 Q16 6.5 16 8 V24 Q16 25.5 14.5 25.5 H12.5 M19.5 6.5 H17.5 Q16 6.5 16 8 M19.5 25.5 H17.5 Q16 25.5 16 24"
+          stroke="#0a0614" stroke-width="4"/>
+    <path d="M12.5 6.5 H14.5 Q16 6.5 16 8 V24 Q16 25.5 14.5 25.5 H12.5 M19.5 6.5 H17.5 Q16 6.5 16 8 M19.5 25.5 H17.5 Q16 25.5 16 24"
+          stroke="#f5f2fa" stroke-width="1.6"/>
+  </g>
+</svg>

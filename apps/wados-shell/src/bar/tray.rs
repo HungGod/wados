@@ -5,8 +5,9 @@
 //! over the dock on the launcher, under the bar on the desktop.
 //!
 //! Real where the machine says: wadd's jobs (with Cancel), this session's
-//! notices (with Undo), the time, and read-only the network, Bluetooth, the
-//! battery and the brightness. The rest says which phase brings it.
+//! notices (with Undo), the time, read-only the network, Bluetooth and the
+//! battery, and the volume and the brightness as their keys leave them.
+//! The rest says which phase brings it.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -47,6 +48,7 @@ pub struct Tray {
     jobs_ring: Ring,
     net_icon: Icon,
     bt_icon: Icon,
+    vol_icon: Icon,
     bell_badge: gtk::Box,
     clock_t: gtk::Label,
     clock_d: gtk::Label,
@@ -68,6 +70,7 @@ impl Tray {
             jobs_ring,
             net_icon: Icon::new("wifi", 17),
             bt_icon: Icon::new("bluetooth", 17),
+            vol_icon: Icon::new("volume-2", 17),
             bell_badge: gtk::Box::builder()
                 .css_classes(["wb-badge"])
                 .halign(gtk::Align::End)
@@ -91,7 +94,7 @@ impl Tray {
         me.add("clipboard", Icon::new("clipboard-list", 17).upcast(), "Clipboard: what you've copied lately");
         me.add("bluetooth", me.bt_icon.clone().upcast(), "Bluetooth");
         me.add("brightness", Icon::new("sun-medium", 17).upcast(), "Brightness and night light");
-        me.add("volume", Icon::new("volume-2", 17).upcast(), "Sound");
+        me.add("volume", me.vol_icon.clone().upcast(), "Sound");
         me.add("network", me.net_icon.clone().upcast(), "Network");
         me.add("agents", Icon::new("bot", 17).upcast(), "AI agents: the last runs");
         let bell = gtk::Overlay::new();
@@ -305,7 +308,11 @@ impl Tray {
         if let Some(b) = self.button("bluetooth") {
             b.set_tooltip_text(Some(&system::bluetooth_tip(st.bluetooth.as_ref())));
         }
-        for n in ["network", "bluetooth", "brightness", "hidden"] {
+        self.vol_icon.set(system::volume_icon(st.volume.as_ref()));
+        if let Some(b) = self.button("volume") {
+            b.set_tooltip_text(Some(&system::volume_tip(st.volume.as_ref())));
+        }
+        for n in ["network", "bluetooth", "brightness", "volume", "hidden"] {
             self.refill_open(n);
         }
     }
@@ -347,7 +354,16 @@ impl Tray {
             }
             "volume" => {
                 col.append(&head("Sound", None));
-                col.append(&later("The volume and outputs come with Settings and PipeWire (phase 8)."));
+                match &st.volume {
+                    Some(v) => col.append(&row(
+                        system::volume_icon(Some(v)),
+                        if v.muted { "Muted" } else { "Volume" },
+                        &format!("{}%", (v.level * 100.0).round() as i64),
+                        !v.muted,
+                    )),
+                    None => col.append(&ui::label("The sound server (PipeWire) isn't answering.", &["wb-p"])),
+                }
+                col.append(&later("The volume keys change it. A slider and the outputs come with Settings (phase 8)."));
             }
             "brightness" => {
                 col.append(&head("Display", None));
@@ -357,7 +373,9 @@ impl Tray {
                     }
                     None => col.append(&ui::label("This screen has no brightness to read here.", &["wb-p"])),
                 }
-                col.append(&later("Changing it, and night light, come with Settings (phase 8)."));
+                col.append(&later(
+                    "The brightness keys change it. A slider and night light come with Settings (phase 8).",
+                ));
             }
             "bluetooth" => {
                 col.append(&head("Bluetooth", None));

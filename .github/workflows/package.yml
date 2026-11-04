@@ -1,0 +1,162 @@
+# One wave of packages (packages.yml calls it, one job per package): each
+# captured on the base, on the packages it needs (on ghcr from earlier
+# waves), by wad-gen's Containerfile; then labelled with what the capture
+# found (v1's labels) and pushed, if its files changed. It leaves
+# result-<id>.json (what it pushed, for the index) and inputs-<id>.json (what
+# it was built from) as artifacts.
+name: package
+
+on:
+  workflow_call:
+    inputs:
+      ids:
+        description: The wave's package ids, as a JSON array
+        type: string
+        required: true
+      abi:
+        description: The base's io.wadspaces.abi
+        type: string
+        required: true
+      base:
+        description: The base, by digest
+        type: string
+        required: true
+      built:
+        description: What each published package was built from (inputs.json's, for this ABI), as a JSON object
+        type: string
+        default: "{}"
+      force:
+        description: Build and push each even when nothing changed
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+    # podman 5, as images.yml (which says why this digest, and /mnt).
+    container:
+      image: quay.io/podman/stable:v5.8.7@sha256:2fb39ca923dd9e0ee33f9e319c3a107a2bfde022a6a31560cbd56a862821e7d3
+      options: --privileged
+      volumes:
+        - /mnt/wados-containers:/var/lib/containers
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        id: ${{ fromJSON(inputs.ids) }}
+    env:
+      ID: ${{ matrix.id }}
+      ABI: ${{ inputs.abi }}
+      BASE: ${{ inputs.base }}
+      BUILT: ${{ inputs.built }}
+      FORCE: ${{ inputs.force }}
+    steps:
+      - name: Tools
+        run: dnf -y -q install jq skopeo tar
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: wados-pkgs
+      - name: Sign in to ghcr
+        env:
+          TOKEN: ${{ github.token }}
+          ACTOR: ${{ github.actor }}
+        run: printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
+      # wad-gen's Containerfile, on the base and what it needs by digest:
+      # its sha256 is what the package is built from.
+      - id: file
+        name: Containerfile
+        run: |
+          chmod +x wados-pkgs
+          info=$(./wados-pkgs packages "$ID" | jq -c --arg id "$ID" '.[] | select(.id == $id)')
+          args=()
+          for n in $(jq -r '.needs[]' <<<"$info"); do
+            ref=$(./wados-pkgs remote-ref "$n" "$ABI")
+            if ! digest=$(skopeo inspect --format '{{.Digest}}' "docker://$ref"); then
+              echo "::error::$ID needs $n, and there's no $ref"
+              exit 1
+            fi
+            args+=(--need "$n=$ref@$digest")
+          done
+          ./wados-pkgs containerfile "$ID" --base "$BASE" --token "${args[@]}" >Containerfile
+          cat Containerfile
+          inputs=$(sha256sum Containerfile | cut -d' ' -f1)
+          remote=$(./wados-pkgs remote-ref "$ID" "$ABI")
+          {
+            echo "inputs=$inputs"
+            echo "remote=$remote"
+            echo "meta=$(jq -r .meta <<<"$info")"
+          } >>"$GITHUB_OUTPUT"
+          was=$(jq -r --arg id "$ID" '.[$id] // ""' <<<"$BUILT")
+          if [ "$FORCE" != true ] && [ "$was" = "$inputs" ] && skopeo inspect --raw "docker://$remote" >/dev/null 2>&1; then
+            echo "skip=true" >>"$GITHUB_OUTPUT"
+            echo "$ID: built from the same as $remote: not built again" >>"$GITHUB_STEP_SUMMARY"
+          fi
+      # The github_token secret only for a build that asks GitHub's API (its
+      # RUN mounts it: wad-gen's uses_github); no other build is handed it.
+      - name: Capture
+        if: steps.file.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          secret=()
+          grep -q 'id=github_token' Containerfile && secret=(--secret "id=github_token,env=GH_TOKEN")
+          mkdir -p ctx
+          podman build "${secret[@]}" -t "localhost/wados-pkg-$ID:capture" -f Containerfile ctx
+      - name: Label and push
+        if: steps.file.outputs.skip != 'true'
+        env:
+          INPUTS: ${{ steps.file.outputs.inputs }}
+          REMOTE: ${{ steps.file.outputs.remote }}
+          META: ${{ steps.file.outputs.meta }}
+        run: |
+          ctr=$(podman create "localhost/wados-pkg-$ID:capture" /none)
+          podman cp "$ctr:$META" - | tar -xO >meta.json
+          podman rm "$ctr" >/dev/null
+          jq -c 'del(.rpms)' meta.json
+          jq -n --arg id "$ID" --arg inputs "$INPUTS" '{id: $id, inputs: $inputs}' >"inputs-$ID.json"
+          version=$(jq -r '.version // ""' meta.json)
+          content=$(jq -r .content meta.json)
+          published=$(skopeo inspect "docker://$REMOTE" 2>/dev/null | jq -r '.Labels["io.wadspaces.pkg.content"] // ""' || true)
+          if [ "$published" = "$content" ] && [ "$FORCE" != true ]; then
+            echo "$ID: built again, its files unchanged ($content): not pushed" >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          {
+            echo "FROM localhost/wados-pkg-$ID:capture"
+            ./wados-pkgs labels "$ID" --meta meta.json --abi "$ABI"
+          } >Containerfile.labels
+          podman build -t "$REMOTE" -f Containerfile.labels ctx
+          podman push --digestfile digest "$REMOTE"
+          # A tag per version too, so a machine can stay on one.
+          v=$(printf '%s' "$version" | tr -c 'A-Za-z0-9._-' '-' | cut -c1-80 | sed 's/-*$//')
+          if [ -n "$v" ]; then
+            podman tag "$REMOTE" "$REMOTE-$v"
+            podman push "$REMOTE-$v"
+          fi
+          jq -n --arg id "$ID" --arg digest "$(cat digest)" --arg imageId "$(podman image inspect -f '{{.Id}}' "$REMOTE")" \
+            --arg version "$version" --argjson size "$(podman image inspect -f '{{.Size}}' "$REMOTE")" \
+            --argjson needs "$(jq -c '.needs // []' meta.json)" --arg content "$content" --arg built "$(date -u +%FT%TZ)" \
+            '{id: $id, digest: $digest, imageId: $imageId, version: $version, size: $size, needs: $needs, content: $content, built: $built}' \
+            >"result-$ID.json"
+          echo "$ID: pushed $REMOTE ($version)" >>"$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: result-${{ matrix.id }}
+          path: result-${{ matrix.id }}.json
+          if-no-files-found: ignore
+          retention-days: 7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: inputs-${{ matrix.id }}
+          path: inputs-${{ matrix.id }}.json
+          if-no-files-found: ignore
+          retention-days: 7

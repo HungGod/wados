@@ -1,0 +1,8 @@
+#%PAM-1.0
+# The lock screen's password check (wados-shell, apps/wados-shell/src/lock.rs
+# and pam.rs): the person's own password, checked as them. The shell isn't
+# root: pam_unix runs unix_chkpwd, which checks only the caller's own
+# password. system-auth waits two seconds after a wrong one (pam_faildelay).
+# There's no pam_faillock: its tally is root's to write.
+auth       substack     system-auth
+account    include      system-auth
