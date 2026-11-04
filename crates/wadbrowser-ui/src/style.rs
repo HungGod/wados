@@ -366,6 +366,33 @@ button.wb-back-to {
 }
 button.wb-back-to:hover { background-color: var(--surface-3); }
 
+/* A GitHub sign-in's code, under the header bar. */
+.wb-code { min-height: 44px; padding: 0 12px; background-color: var(--surface); border-bottom: 1px solid var(--line); }
+.wb-code-label { color: var(--muted); font-size: 13px; }
+.wb-code-value {
+  padding: 2px 10px;
+  border-radius: 8px;
+  background-color: var(--accent-soft);
+  color: var(--fg);
+  font-family: monospace;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 2px;
+}
+button.wb-code-copy {
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  background-color: var(--surface-2);
+  background-image: none;
+  box-shadow: none;
+  color: var(--fg);
+  font-size: 12.5px;
+}
+button.wb-code-copy:hover { background-color: var(--surface-3); }
+.wb-code-hint { color: var(--faint); font-size: 12px; }
+
 /* The address: shown, then typed in. */
 .wb-addr { border-radius: 10px; border: 1px solid var(--line); background-color: var(--bg-2); }
 .wb-addr.editing { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }

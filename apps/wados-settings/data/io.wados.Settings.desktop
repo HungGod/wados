@@ -1,0 +1,18 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Settings
+Comment=WadOS's settings: accounts, the tailnet and the devices that may manage this machine
+# --page: the panel it opens on (accounts, for now; the rest come in phase 8).
+Exec=wados-settings
+Icon=preferences-system
+Terminal=false
+Categories=Settings;System;
+StartupNotify=true
+StartupWMClass=io.wados.Settings
+Keywords=Accounts;GitHub;Tailscale;Tailnet;Devices;Trust;
+Actions=accounts;
+
+[Desktop Action accounts]
+Name=Accounts
+Exec=wados-settings --page accounts

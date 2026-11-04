@@ -338,16 +338,18 @@ pub fn setup_hash(setup: &str) -> String {
     Sha256::digest(setup.as_bytes()).iter().take(6).map(|b| format!("{b:02x}")).collect()
 }
 
-/// projects.json (version 2): each project at `~/Desktop/<its name>`. A
-/// GitHub one is cloned by the wadspace, a copy copied in from wadd's copy
-/// of its files (`/run/wadspaces-copies/<id>`), a mount is the machine's
-/// own folder or file, listed only when `mounts` found it here.
+/// projects.json (version 2): each project at `~/Desktop/<its name>`, listed
+/// only when `mounts` has it here. A GitHub one is wadd's clone, mounted
+/// there (the wadspace fetches it and runs its setup); a copy is copied in
+/// from wadd's copy of its files (`/run/wadspaces-copies/<id>`); a mount is
+/// the machine's own folder or file (or another machine's, over Taildrive).
 pub fn projects_json(ws: &Wadspace, mounts: &Mounts) -> String {
     let projects: Vec<ProjectEntry> = ws
         .look
         .projects
         .iter()
-        .filter_map(|p| {
+        .filter(|p| mounts.get(&p.id).is_some_and(|path| mountable(path, &p.as_name)))
+        .map(|p| {
             let e = ProjectEntry {
                 id: &p.id,
                 kind: "copy",
@@ -357,7 +359,7 @@ pub fn projects_json(ws: &Wadspace, mounts: &Mounts) -> String {
                 setup: None,
                 setup_hash: None,
             };
-            Some(match &p.kind {
+            match &p.kind {
                 ProjectKind::Github { repo, setup } => {
                     let setup = setup.as_deref().unwrap_or("");
                     ProjectEntry {
@@ -369,11 +371,8 @@ pub fn projects_json(ws: &Wadspace, mounts: &Mounts) -> String {
                     }
                 }
                 ProjectKind::Copy { .. } => e,
-                ProjectKind::Mount { .. } => {
-                    mounts.get(&p.id).filter(|path| mountable(path, &p.as_name))?;
-                    ProjectEntry { kind: "mount", ..e }
-                }
-            })
+                ProjectKind::Mount { .. } => ProjectEntry { kind: "mount", ..e },
+            }
         })
         .collect();
     pretty(&serde_json::json!({ "version": 2, "projects": projects }))

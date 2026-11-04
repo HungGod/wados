@@ -1,7 +1,8 @@
 //! What shows over everything, full-screen wadspaces included (OVERLAY
 //! layer): toasts, Super+Tab's switcher, Alt+Space's search, the reveal bar
-//! over a full-screen wadspace. And, since they're per display too, the
-//! other displays' own bars (bar::Displays, TOP layer).
+//! over a full-screen wadspace, and the dialogs (a device asking to be
+//! trusted, the shell's yes-or-no: [`confirm`]). And, since they're per
+//! display too, the other displays' own bars (bar::Displays, TOP layer).
 //!
 //! The interface main.rs uses: `Overlays::new(shell)`. Its `wadsctl`
 //! commands, registered with the shell:
@@ -15,13 +16,18 @@
 //! - `spaces`: a full-screen wadspace to the background, and the desktop
 //!   (what Ctrl+Alt+↓ should run);
 //! - `toast [info|ok|warn|error] <words>`, `toasts` (what's showing);
+//! - `dialog` (what's up), `dialog later|deny|trust|ok|cancel|close`;
 //! - `reveal [down|up] [display]`, `displays`;
 //! - `log`: what it was asked to show.
 
+mod dialog;
 mod reveal;
 mod search;
 mod switcher;
 mod toasts;
+
+pub use dialog::{Confirm, confirm, device_icon};
+pub use toasts::{expect_body, toast_with};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -35,7 +41,7 @@ use crate::shell::Shell;
 use crate::store::Change;
 
 const CSS: &str = r#"
-window.wados-toasts, window.wados-switcher, window.wados-reveal { background: transparent; }
+window.wados-toasts, window.wados-switcher, window.wados-reveal, window.wados-dialog { background: transparent; }
 window.wados-search { background-color: rgb(5 3 12 / 0.5); }
 
 /* Toasts. */
@@ -52,6 +58,24 @@ window.wados-search { background-color: rgb(5 3 12 / 0.5); }
 .ov-toast.wb-error .ov-tic { background-color: var(--danger-soft); color: var(--danger); }
 .ov-toast.wb-warn .ov-tic { background-color: var(--warn-soft); color: var(--warn); }
 .ov-toast-title { font-size: 13px; font-weight: 600; }
+.ov-toast-body { font-size: 12.5px; color: var(--muted); }
+
+/* A dialog (ui/Dialog.svelte): a card over the dimmed screen. */
+.ov-scrim { background-color: var(--dim); }
+.ov-dialog {
+  border-radius: 24px;
+  border: 1px solid var(--line-strong);
+  background-color: rgb(20 13 34 / 0.97);
+  box-shadow: 0 30px 80px -20px var(--shadow);
+}
+.ov-dialog-head { padding: 20px 20px 0; }
+.ov-dialog-badge { border-radius: 12px; }
+.ov-dialog-badge.warn { background-color: var(--warn-soft); color: var(--warn); }
+.ov-dialog-title { font-family: 'Space Grotesk', Inter, sans-serif; font-weight: 600; font-size: 18px; letter-spacing: -0.18px; }
+button.ov-dialog-x { min-width: 30px; min-height: 30px; padding: 0; border: none; border-radius: 8px; background: none; box-shadow: none; color: var(--muted); }
+button.ov-dialog-x:hover { background-color: var(--surface-2); color: var(--fg); }
+.ov-dialog-body { padding: 16px 20px 20px; color: var(--muted); }
+.ov-dialog-foot { padding: 0 20px 20px; }
 button.ov-act, button.ov-x, button.ov-r, button.ov-fs-b {
   background: none; border: none; box-shadow: none; outline: none; text-shadow: none;
   color: var(--fg); min-height: 0; min-width: 0; padding: 0;
@@ -114,6 +138,7 @@ button.ov-fs-b.ov-stop { color: var(--danger); }
 
 pub struct Overlays {
     toasts: Rc<toasts::Toasts>,
+    dialogs: Rc<dialog::Dialogs>,
     switcher: Rc<switcher::Switcher>,
     search: Rc<search::Search>,
     reveal: Rc<reveal::Reveal>,
@@ -127,10 +152,12 @@ pub struct Overlays {
 impl Overlays {
     pub fn new(shell: &Rc<Shell>) -> Rc<Self> {
         if let Some(d) = gtk::gdk::Display::default() {
+            wad_gtk::kit::install(&d);
             wad_gtk::theme::add_css(&d, CSS);
         }
         let me = Rc::new(Self {
             toasts: toasts::Toasts::new(shell),
+            dialogs: dialog::Dialogs::new(shell),
             switcher: switcher::Switcher::new(shell),
             search: search::Search::new(shell),
             reveal: Rc::new(reveal::Reveal::new(shell)),
@@ -303,9 +330,33 @@ impl Overlays {
             "ok".into()
         });
         let w = Rc::downgrade(self);
+        shell.on_ctl("dialog", move |args| {
+            let Some(m) = w.upgrade() else { return "error gone".into() };
+            match args {
+                [] => m.dialogs.state(),
+                [what @ ("later" | "deny" | "trust" | "ok" | "cancel" | "close")] => {
+                    if m.dialogs.press(what) {
+                        m.note(&format!("dialog {what}"));
+                        "ok".into()
+                    } else {
+                        format!("error no {what} here: {}", m.dialogs.state())
+                    }
+                }
+                _ => "error dialog [later|deny|trust|ok|cancel|close]".into(),
+            }
+        });
+        let w = Rc::downgrade(self);
         shell.on_ctl("toasts", move |_| match w.upgrade() {
             Some(m) => {
-                let t: Vec<String> = m.toasts.shown().into_iter().map(|t| t.title).collect();
+                let t: Vec<String> = m
+                    .toasts
+                    .shown()
+                    .into_iter()
+                    .map(|t| match t.body {
+                        Some(b) => format!("{}: {b}", t.title),
+                        None => t.title,
+                    })
+                    .collect();
                 let size = m.toasts.size().map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| "hidden".into());
                 format!("ok {size} {}", t.join(" | "))
             }

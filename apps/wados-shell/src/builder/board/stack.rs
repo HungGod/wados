@@ -10,6 +10,9 @@
 //! Its parts ([`Part`]) are what the board drags (its header: all of it; a
 //! section by its name; a key's box by its key; one thing), what it drops
 //! on (a key's box), and what `wadsctl stack` aims at, by id.
+//!
+//! Another machine's shows, and doesn't change here: a note on top says
+//! where it lives, with Copy here (`Builder.svelte`'s `.away`).
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -36,6 +39,23 @@ const BORDER: i32 = 1;
 /// A box's narrowest, side by side with others.
 const BOX_MIN: i32 = 250;
 const BOX_GAP: i32 = 8;
+
+/// The note on another machine's stack (`Builder.svelte`'s `.away`).
+const CSS: &str = r#"
+.stack-away { padding: 8px 8px 8px 10px; border-radius: 10px; background-color: color-mix(in srgb, var(--c-app) 10%, transparent); border: 1px solid color-mix(in srgb, var(--c-app) 30%, transparent); font-size: 12.5px; color: var(--c-app); }
+.stack-away label { color: var(--fg); }
+button.stack-away-copy { min-height: 26px; padding: 0 10px; border-radius: 8px; border: none; box-shadow: none; background: var(--c-app); color: var(--accent-fg); font-size: 12.5px; font-weight: 600; }
+button.stack-away-copy:hover { background: color-mix(in srgb, var(--c-app) 85%, white); }
+"#;
+
+thread_local! {
+    static CSS_ADDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Another machine's stack's note: where it lives, and what to do.
+pub fn away_text(machine: &str) -> String {
+    format!("It lives on {machine}: copy it here to change it.")
+}
 
 /// One of its parts: what it is (for wadsctl), and what it does under a drag.
 pub struct Part {
@@ -84,6 +104,11 @@ pub struct Stack {
 
 impl Stack {
     pub fn new(board: &Rc<Board>, id: &str) -> Rc<Self> {
+        if !CSS_ADDED.with(|c| c.replace(true))
+            && let Some(d) = gtk::gdk::Display::default()
+        {
+            wad_gtk::theme::add_css(&d, CSS);
+        }
         let root =
             gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(8).css_classes(["stack"]).build();
         root.set_valign(gtk::Align::Start);
@@ -170,11 +195,7 @@ impl Stack {
         }
         self.state.add_css_class(status.tone.class());
         self.state.set_widget_name(&status.label);
-        self.state.set_tooltip_text(
-            (!editable)
-                .then(|| format!("It lives on {}: it shows here, but doesn't change (Copy here comes with your other machines, phase 6)", status.label))
-                .as_deref(),
-        );
+        self.state.set_tooltip_text((!editable).then(|| away_text(&status.label)).as_deref());
 
         let made = Made { x: x.clone(), editable, col };
         if self.made.borrow().as_ref() == Some(&made) {
@@ -199,6 +220,9 @@ impl Stack {
                 button: Some(self.close.clone()),
             },
         ];
+        if !editable {
+            self.body.append(&self.away(board, x, &status.label, &mut parts));
+        }
         let mut f = Fill {
             board: Rc::downgrade(board),
             x,
@@ -212,6 +236,43 @@ impl Stack {
         self.body.append(&f.apps());
         *self.parts.borrow_mut() = parts;
         *self.made.borrow_mut() = Some(made);
+    }
+
+    /// Another machine's note: its glyph, where it lives, Copy here (part `copy-here`).
+    fn away(&self, board: &Rc<Board>, x: &Wadspace, machine: &str, parts: &mut Vec<Part>) -> gtk::Box {
+        let note = gtk::Box::builder().spacing(8).css_classes(["stack-away"]).build();
+        let icon = board.builder().map(|b| b.machine_icon(x)).unwrap_or("monitor");
+        let ic = wad_gtk::Icon::new(icon, 15);
+        ic.set_valign(gtk::Align::Center);
+        note.append(&ic);
+        let text = gtk::Label::builder()
+            .label(away_text(machine))
+            .xalign(0.0)
+            .hexpand(true)
+            .wrap(true)
+            .valign(gtk::Align::Center)
+            .build();
+        note.append(&text);
+        let copy = gtk::Button::builder()
+            .label("Copy here")
+            .css_classes(["stack-away-copy"])
+            .valign(gtk::Align::Center)
+            .build();
+        let (w, ws) = (Rc::downgrade(board), x.id.clone());
+        copy.connect_clicked(move |_| {
+            if let Some(b) = w.upgrade().and_then(|b| b.builder()) {
+                b.copy_here(&ws);
+            }
+        });
+        note.append(&copy);
+        parts.push(Part {
+            id: "copy-here".into(),
+            widget: copy.clone().upcast(),
+            drag: None,
+            key: None,
+            button: Some(copy),
+        });
+        note
     }
 
     /// Its part `id`.
@@ -665,4 +726,14 @@ fn star() -> gtk::Widget {
     i.set_valign(gtk::Align::Center);
     s.append(&i);
     s.upcast()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn another_machines_stack_says_where_it_lives() {
+        assert_eq!(away_text("Desk"), "It lives on Desk: copy it here to change it.");
+    }
 }

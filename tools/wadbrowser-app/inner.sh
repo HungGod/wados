@@ -30,6 +30,8 @@ ntitled() { tops | grep -cF "title=\"$1\""; }
 served() { grep -qF "GET $1" "$LOG" 2>/dev/null; }
 nserved() { grep -cF "GET $1" "$LOG" 2>/dev/null; }
 logged() { grep -qE "$1" "$LOG" 2>/dev/null; }
+# What the browser says it did (WADBROWSER_TEST_LOG).
+said() { grep -qE "$1" "$RUN/test.log" 2>/dev/null; }
 mine() { pgrep -P $$ -x wadbrowser | sort -n | tr '\n' ' ' | sed 's/ $//'; }
 nmine() { pgrep -P $$ -x wadbrowser | wc -l; }
 shot() { grim -o HEADLESS-1 "$SHOTS/$1.png" && echo "      shot $SHOTS/$1.png"; }
@@ -99,11 +101,13 @@ check "--signin github: its window" soon 15 titled "Sign in to GitHub"
 check "the sign-in page came first" soon 15 served "/login?return_to"
 check "split form: the code typed in, with input and change events" \
   soon 20 logged "GET /report\?form=split&value=WDJBMJHT&inputs=[1-9][0-9]*&changes=[1-9]"
+check "--signin github: its code shown under the header bar" soon 15 said $'^signin-code\tWDJB-MJHT$'
 shot 06-signin-split
 wb --signin github --url "$U/login/device?form=single" --code ABCD-1234
 check "--signin again: exits 0" is $? 0
 check "--signin again: reused, with the new code" \
   soon 20 logged "GET /report\?form=single&value=ABCD-1234&inputs=[1-9][0-9]*&changes=[1-9]"
+check "--signin again: the new code shown" soon 15 said $'^signin-code\tABCD-1234$'
 check "--signin again: still one sign-in window" is "$(ntitled "Sign in to GitHub")" 1
 shot 07-signin-single
 check "it never submitted" not logged /submitted
@@ -121,8 +125,10 @@ echo "      --show said: $out"
 check "--show after --done: exits 1" is "$code" 1
 check "--show after --done: says why" grep -q "no GitHub sign-in" <<<"$out"
 
+codes=$(grep -c '^signin-code' "$RUN/test.log" 2>/dev/null)
 wb --signin tailscale --url "$U/c.html?tailscale"
 check "--signin tailscale: its window" soon 15 titled "Sign in to Tailscale"
+check "--signin tailscale: no code shown" is "$(grep -c '^signin-code' "$RUN/test.log" 2>/dev/null)" "$codes"
 check "--signin tailscale: it loads" soon 15 served "/c.html?tailscale"
 sleep 1
 # Closed by hand (Alt+F4 closes the focused window in this labwc).

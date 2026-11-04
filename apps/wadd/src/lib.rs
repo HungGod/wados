@@ -8,8 +8,11 @@
 //! a socket of its own on the compositor, screen.rs), through podman and
 //! systemd behind a trait (backend.rs; fake.rs for tests).
 //!
+//! Phase 6: projects as a wadspace opens (projects.rs: GitHub clones,
+//! this machine's folders, copies, another machine's over Taildrive).
+//!
 //! Later phases: streams and the proxy, the tailnet and remote API,
-//! projects (clones, mounts, copies), Open-with files, runs of one time,
+//! Open-with files, runs of one time,
 //! keys' sign-in flows, devices, the network, updates, install, server mode,
 //! focus, and the tidy-up of images nothing needs (v1's tidy.rs).
 
@@ -19,19 +22,27 @@ pub mod api_phase6;
 pub mod backend;
 pub mod builds;
 pub mod clip;
+pub mod copies;
 pub mod events;
 pub mod fake;
 pub mod fake_phase6;
+pub mod github;
 pub mod jobs;
+pub mod keys;
 pub mod library;
 pub mod logbuf;
 pub mod mounts;
 pub mod packages;
+pub mod peers;
+pub mod projects;
+pub mod remote;
 pub mod runs;
 pub mod screen;
 pub mod selinux;
 pub mod store;
 pub mod systemd;
+pub mod taildrive;
+pub mod tailnet;
 pub mod tar;
 
 use std::os::unix::fs::PermissionsExt;
@@ -88,6 +99,8 @@ pub struct Server {
     bound: Option<PathBuf>,
     reconcile_every: Duration,
     pub state: Arc<AppState>,
+    /// The tailnet, peers and remote API (none with the sample): their loops start with `serve`.
+    tailnet: Option<Arc<peers::TailnetPeers>>,
 }
 
 impl Server {
@@ -163,6 +176,11 @@ impl Server {
         if config.display.enabled {
             std::fs::create_dir_all(&d.screen_dir)?;
         }
+        // The tailnet, my other machines and the remote API (the sample's instead, with it).
+        let tailnet = parts.sample.is_none().then(|| {
+            let person = person_of(screen.clone(), profile, d.projects_uid);
+            peers::TailnetPeers::new(&config, &machine, bus.clone(), jobs.clone(), docs.clone(), builds.clone(), person)
+        });
         let (net, accounts): (Arc<dyn api_phase6::Net>, Arc<dyn api_phase6::Accounts>) = match parts.sample {
             Some(step) => {
                 let hostname = machine.name.to_lowercase();
@@ -170,13 +188,42 @@ impl Server {
                     fake_phase6::Sample::new(&hostname, jobs.clone(), bus.clone(), docs.clone(), builds.clone(), step);
                 (Arc::new(s.clone()), Arc::new(s))
             }
-            None => (Arc::new(api_phase6::NotYet), Arc::new(api_phase6::NotYet)),
+            None => (
+                tailnet.clone().expect("made without the sample"),
+                Arc::new(github::GithubService::new(
+                    parts.backend.clone(),
+                    jobs.clone(),
+                    bus.clone(),
+                    github::Settings::new(&config),
+                )),
+            ),
         };
+        let keys = keys::MachineKeys::new(&config);
+        let projects = projects::Projects::new(
+            projects::Settings::new(&config, profile),
+            parts.backend.clone(),
+            jobs.clone(),
+            net.clone(),
+        );
         let runs =
             runs::Runs::new(parts.backend, docs.clone(), bus.clone(), screen.clone(), builds.clone(), run_settings);
-        let state =
-            Arc::new(AppState { machine, profile, policy, bus, docs, logs, jobs, builds, runs, screen, net, accounts });
-        Ok(Self { listener, bound, reconcile_every: Duration::from_secs(d.reconcile_s.max(1)), state })
+        runs.attach(Arc::new(projects));
+        let state = Arc::new(AppState {
+            machine,
+            profile,
+            policy,
+            bus,
+            docs,
+            logs,
+            jobs,
+            builds,
+            runs,
+            screen,
+            net,
+            accounts,
+            keys,
+        });
+        Ok(Self { listener, bound, reconcile_every: Duration::from_secs(d.reconcile_s.max(1)), state, tailnet })
     }
 
     /// Serves until SIGTERM or Ctrl+C.
@@ -195,11 +242,14 @@ impl Server {
     /// Serves until `shutdown` resolves.
     pub async fn serve_until(self, shutdown: impl Future<Output = ()> + Send + 'static) -> std::io::Result<()> {
         let app = self.state.clone();
-        let loops = [
+        let mut loops = vec![
             tokio::spawn(app.jobs.clone().run()),
             tokio::spawn(watch_machine(app.clone(), self.reconcile_every)),
             tokio::spawn(watch_screen(app.clone())),
         ];
+        if let Some(t) = &self.tailnet {
+            loops.extend(t.start(app.clone()));
+        }
         systemd::notify("READY=1");
         tracing::info!(machine = %self.state.machine.id, "serving /v1");
         let router = api::router(self.state.clone()).into_make_service_with_connect_info::<Peer>();
@@ -229,6 +279,20 @@ async fn watch_machine(app: Arc<AppState>, every: Duration) {
         app.builds.publish_all();
         tokio::time::sleep(every).await;
     }
+}
+
+/// The machine's person (whose home Taildrive shares, as them): the shell's
+/// session's user, else `projects_uid`; on a laptop, you.
+fn person_of(screen: Arc<screen::Screen>, profile: Profile, projects_uid: u32) -> tailnet::PersonFn {
+    let fallback = match profile {
+        Profile::System => projects_uid,
+        Profile::User => nix::unistd::getuid().as_raw(),
+    };
+    Arc::new(move || {
+        let uid = screen.info().uid.filter(|u| *u != 0).unwrap_or(fallback);
+        let u = nix::unistd::User::from_uid(uid.into()).ok().flatten()?;
+        Some(tailnet::Person { uid, name: u.name, home: u.dir })
+    })
 }
 
 /// The screen: sockets served to what's on it, every few seconds or when

@@ -1,0 +1,19 @@
+{
+  "Node": {
+    "ID": 105,
+    "StableID": "nDesk1CNTRL",
+    "Name": "desk.tail1234.ts.net.",
+    "User": 2001,
+    "Key": "nodekey:5555555555555555555555555555555555555555555555555555555555555555",
+    "KeyExpiry": "2027-04-15T09:00:00Z",
+    "Addresses": ["100.64.0.5/32", "fd7a:115c:a1e0::5/128"],
+    "Hostinfo": { "OS": "linux", "OSVersion": "Fedora Linux 44", "Hostname": "desk" },
+    "Created": "2026-10-17T09:00:00Z",
+    "Online": true,
+    "MachineAuthorized": true,
+    "ComputedName": "desk",
+    "ComputedNameWithHost": "desk"
+  },
+  "UserProfile": { "ID": 2001, "LoginName": "owner@example.com", "DisplayName": "Owner", "ProfilePicURL": "" },
+  "CapMap": null
+}

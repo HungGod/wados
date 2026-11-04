@@ -15,6 +15,15 @@
 #   tools/vm.sh check            boot → lock → unlock → a wadspace with sound → the
 #                                machine's session → Restart → Power off → suspend
 #                                (tools/vm/check.sh)
+#   tools/vm.sh tailnet-check [--plain]
+#                                two VMs, A and B, on a test tailnet (tools/tailnet.sh:
+#                                a local Headscale): they see each other, Taildrive,
+#                                the device that isn't trusted; then wadd's peers
+#                                (tools/vm/check-tailnet.sh; --plain: Tailscale only)
+#
+# VM_NAME=a (or --name a, before the command): a second VM of the same disk,
+# with its own layer, firmware variables, ports, QMP and serial log, in
+# .build/vm/a/. Without it, the VM is the one check uses, as before.
 #
 # **disk**, without root: bootc writes a disk only as root, so it runs in a
 # throwaway builder VM (Fedora Cloud Base 44, downloaded once into
@@ -36,9 +45,16 @@
 # It boots run.qcow2, a layer over wados.qcow2, so the installed disk stays
 # as it was installed; check always starts from a fresh one.
 #
-# One VM at a time (this laptop has 7 GB): disk stops the test VM first.
+# One VM at a time (this laptop has 7 GB), but for tailnet-check's two
+# (smaller: TAILNET_VM_MEM): disk stops every test VM first.
 # VM_MEM (MB), VM_CPUS, VM_RES (1920x1080), SECURE_BOOT=1, VM_KEEP=1 (check: leave it running).
 set -euo pipefail
+
+if [[ "${1:-}" == --name ]]; then
+    [[ $# -ge 2 ]] || { echo "vm.sh: --name NAME" >&2; exit 2; }
+    VM_NAME="$2"
+    shift 2
+fi
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 HERE="${ROOT}/tools/vm"
@@ -53,6 +69,11 @@ MEM="${VM_MEM:-2560}"
 CPUS="${VM_CPUS:-2}"
 RES="${VM_RES:-1920x1080}"
 KEY="${VM}/id_ed25519"
+# This VM's own files: the layer, its firmware variables, pid, QMP, serial,
+# sound and SSH port. The disk (wados.qcow2) and the key are shared.
+VM_NAME="${VM_NAME:-}"
+[[ -z "${VM_NAME}" || "${VM_NAME}" =~ ^[a-z0-9]+$ ]] || { echo "vm.sh: VM_NAME: letters and digits" >&2; exit 2; }
+RUN="${VM}${VM_NAME:+/${VM_NAME}}"
 REGISTRY=wados-vm-registry
 BASE_IMAGE=localhost/wados-base:44
 # sam's password on the test disk: a test user's, typed by QMP. Not a secret.
@@ -193,10 +214,14 @@ disk() {
     podman image exists "${image}" || die "no ${image} here: host/build.sh image (or name another, e.g. quay.io/fedora/fedora-bootc:44)"
     podman image exists "${BASE_IMAGE}" || die "no ${BASE_IMAGE} here: images/build.sh"
     [[ -w /dev/kvm ]] || die "no /dev/kvm"
-    if running "${VM}/qemu.pid"; then
-        echo "   the test VM is running: stopping it first (one VM at a time)"
-        stop
-    fi
+    local d
+    for d in "${VM}" "${VM}"/*/; do
+        d="${d%/}"
+        if running "${d}/qemu.pid"; then
+            echo "   the test VM$([[ "${d}" != "${VM}" ]] && echo " ${d##*/}") is running: stopping it first (one VM at a time)"
+            RUN="${d}" stop
+        fi
+    done
     running "${VM}/builder.pid" && die "a builder VM is running already (pid $(cat "${VM}/builder.pid"))"
     need_key
 
@@ -259,7 +284,7 @@ disk() {
     builder_stop
     registry_stop
     trap - EXIT
-    rm -f "${VM}/run.qcow2" "${VM}/vars.fd"
+    rm -f "${VM}/run.qcow2" "${VM}/vars.fd" "${VM}"/*/run.qcow2 "${VM}"/*/vars.fd
     mv -f "${VM}/wados-new.qcow2" "${VM}/wados.qcow2"
     echo "   ($(($(now) - t)) s)"
     echo
@@ -274,30 +299,31 @@ boot() {
     [[ "${1:-}" == --fresh ]] && fresh=1
     [[ -f "${VM}/wados.qcow2" ]] || die "no ${VM}/wados.qcow2: tools/vm.sh disk"
     running "${VM}/builder.pid" && die "the builder VM is running (one VM at a time)"
-    if running "${VM}/qemu.pid"; then
-        echo "running already (ssh on 127.0.0.1:$(cat "${VM}/ssh.port"))"
+    if running "${RUN}/qemu.pid"; then
+        echo "running already (ssh on 127.0.0.1:$(cat "${RUN}/ssh.port"))"
         return 0
     fi
     need_key
     firmware
-    if [[ -n "${fresh}" || ! -f "${VM}/run.qcow2" ]]; then
-        rm -f "${VM}/run.qcow2" "${VM}/vars.fd"
-        qemu-img create -q -f qcow2 -F qcow2 -b "${VM}/wados.qcow2" "${VM}/run.qcow2"
+    mkdir -p "${RUN}"
+    if [[ -n "${fresh}" || ! -f "${RUN}/run.qcow2" ]]; then
+        rm -f "${RUN}/run.qcow2" "${RUN}/vars.fd"
+        qemu-img create -q -f qcow2 -F qcow2 -b "${VM}/wados.qcow2" "${RUN}/run.qcow2"
     fi
-    [[ -f "${VM}/vars.fd" ]] || cp "${VARS}" "${VM}/vars.fd"
+    [[ -f "${RUN}/vars.fd" ]] || cp "${VARS}" "${RUN}/vars.fd"
     local port xres yres
     port="$(free_port)"
-    echo "${port}" > "${VM}/ssh.port"
+    echo "${port}" > "${RUN}/ssh.port"
     xres="${RES%x*}" yres="${RES#*x}"
     local args=(
-        -name wados-vm
+        -name "wados-vm${VM_NAME:+-${VM_NAME}}"
         -machine "q35,accel=kvm$([[ "${SECURE_BOOT:-0}" == 1 ]] && echo ,smm=on)" -cpu host -smp "${CPUS}" -m "${MEM}"
     )
     [[ "${SECURE_BOOT:-0}" == 1 ]] && args+=(-global driver=cfi.pflash01,property=secure,value=on)
     args+=(
         -drive "if=pflash,format=raw,unit=0,readonly=on,file=${CODE}"
-        -drive "if=pflash,format=raw,unit=1,file=${VM}/vars.fd"
-        -drive "if=none,id=disk,format=qcow2,file=${VM}/run.qcow2,discard=unmap"
+        -drive "if=pflash,format=raw,unit=1,file=${RUN}/vars.fd"
+        -drive "if=none,id=disk,format=qcow2,file=${RUN}/run.qcow2,discard=unmap"
         -device virtio-blk-pci,drive=disk,bootindex=1
         # A virtio GPU (KMS, no 3D): labwc and the shell draw in software.
         -device "virtio-vga,xres=${xres},yres=${yres}"
@@ -309,40 +335,50 @@ boot() {
         # idle instead (s2idle), and a key wakes it (check.sh).
         -global ICH9-LPC.disable_s3=1
         # What its sound card plays, recorded.
-        -audiodev "wav,id=snd0,path=${VM}/sound.wav"
+        -audiodev "wav,id=snd0,path=${RUN}/sound.wav"
         -device intel-hda -device hda-duplex,audiodev=snd0
-        -qmp "unix:${VM}/qmp.sock,server=on,wait=off"
-        -serial "file:${VM}/serial.log"
-        -pidfile "${VM}/qemu.pid" -daemonize
+        -qmp "unix:${RUN}/qmp.sock,server=on,wait=off"
+        -serial "file:${RUN}/serial.log"
+        -pidfile "${RUN}/qemu.pid" -daemonize
     )
+    # A named VM runs beside another (tailnet-check): what its Linux frees
+    # goes back to the laptop (free page reporting), not kept by QEMU.
+    [[ -n "${VM_NAME}" ]] && args+=(-device virtio-balloon-pci,free-page-reporting=on)
     # (hda-duplex's line in has nothing to record from: QEMU says so.)
     qemu-system-x86_64 "${args[@]}" 2> >(grep -v "backend for voice \`adc'" >&2)
-    echo "booting (pid $(cat "${VM}/qemu.pid")): ssh on 127.0.0.1:${port}, screen and keys on ${VM}/qmp.sock"
+    echo "booting${VM_NAME:+ ${VM_NAME}} (pid $(cat "${RUN}/qemu.pid")): ssh on 127.0.0.1:${port}, screen and keys on ${RUN}/qmp.sock"
 }
 
 stop() {
     local pid
-    if ! running "${VM}/qemu.pid"; then
-        rm -f "${VM}/qemu.pid" "${VM}/qmp.sock"
+    if ! running "${RUN}/qemu.pid"; then
+        rm -f "${RUN}/qemu.pid" "${RUN}/qmp.sock"
         echo "not running"
         return 0
     fi
-    pid="$(cat "${VM}/qemu.pid")"
-    python3 "${HERE}/qmp.py" "${VM}/qmp.sock" powerdown 2> /dev/null || true
+    pid="$(cat "${RUN}/qemu.pid")"
+    python3 "${HERE}/qmp.py" "${RUN}/qmp.sock" powerdown 2> /dev/null || true
     for _ in $(seq 60); do kill -0 "${pid}" 2> /dev/null || break; sleep 1; done
     if kill -0 "${pid}" 2> /dev/null; then
-        python3 "${HERE}/qmp.py" "${VM}/qmp.sock" quit 2> /dev/null || kill "${pid}" 2> /dev/null || true
+        python3 "${HERE}/qmp.py" "${RUN}/qmp.sock" quit 2> /dev/null || kill "${pid}" 2> /dev/null || true
         for _ in $(seq 10); do kill -0 "${pid}" 2> /dev/null || break; sleep 1; done
     fi
-    rm -f "${VM}/qemu.pid" "${VM}/qmp.sock"
+    rm -f "${RUN}/qemu.pid" "${RUN}/qmp.sock"
     echo "stopped"
 }
 
 status() {
-    if running "${VM}/qemu.pid"; then
-        echo "test VM: running (pid $(cat "${VM}/qemu.pid"), ssh on 127.0.0.1:$(cat "${VM}/ssh.port"), $(python3 "${HERE}/qmp.py" "${VM}/qmp.sock" status))"
+    if running "${RUN}/qemu.pid"; then
+        echo "test VM${VM_NAME:+ ${VM_NAME}}: running (pid $(cat "${RUN}/qemu.pid"), ssh on 127.0.0.1:$(cat "${RUN}/ssh.port"), $(python3 "${HERE}/qmp.py" "${RUN}/qmp.sock" status))"
     else
-        echo "test VM: not running"
+        echo "test VM${VM_NAME:+ ${VM_NAME}}: not running"
+    fi
+    local d
+    if [[ -z "${VM_NAME}" ]]; then
+        for d in "${VM}"/*/; do
+            d="${d%/}"
+            running "${d}/qemu.pid" && echo "test VM ${d##*/}: running (pid $(cat "${d}/qemu.pid"), ssh on 127.0.0.1:$(cat "${d}/ssh.port"))"
+        done
     fi
     running "${VM}/builder.pid" && echo "builder VM: running (pid $(cat "${VM}/builder.pid"))"
     podman container exists "${REGISTRY}" 2> /dev/null && echo "registry: running"
@@ -351,17 +387,17 @@ status() {
 }
 
 need_vm() {
-    running "${VM}/qemu.pid" || die "the VM isn't running: tools/vm.sh boot"
+    running "${RUN}/qemu.pid" || die "the VM${VM_NAME:+ ${VM_NAME}} isn't running: tools/vm.sh${VM_NAME:+ --name ${VM_NAME}} boot"
 }
 
 vm_ssh() {
     need_vm
-    ssh_to "$(cat "${VM}/ssh.port")" "${VM_USER:-root}" "$@"
+    ssh_to "$(cat "${RUN}/ssh.port")" "${VM_USER:-root}" "$@"
 }
 
 qmp() {
     need_vm
-    python3 "${HERE}/qmp.py" "${VM}/qmp.sock" "$@"
+    python3 "${HERE}/qmp.py" "${RUN}/qmp.sock" "$@"
 }
 
 # ------------------------------------------------------------------ check
@@ -380,6 +416,7 @@ case "${cmd}" in
     key) [[ $# -ge 1 ]] || die "key COMBO…"; qmp key "$@" ;;
     stop) stop ;;
     status) status ;;
-    check) . "${HERE}/check.sh"; check ;;
-    *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    check) [[ -z "${VM_NAME}" ]] || die "check is the unnamed VM's"; . "${HERE}/check.sh"; check ;;
+    tailnet-check) [[ -z "${VM_NAME}" ]] || die "tailnet-check names its own VMs"; . "${HERE}/check-tailnet.sh"; tailnet_check "$@" ;;
+    *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

@@ -378,16 +378,33 @@ pub fn navigate(view: &WebView, uri: &str) {
 }
 
 /// The profile a top-level page at `uri` should be in, if not `profile`:
-/// a key's whose sites have its host (in a wadspace). None: it stays.
+/// a key's whose sites have its host. None: it stays. The keys are a
+/// wadspace's (signins.json) or, on the machine, wadd's with their folders
+/// (`crate::session::set_machine_keys`), so a key's cookies are the same
+/// on the machine as in the wadspaces that use it.
 pub fn profile_for_uri(profile: &str, uri: &str) -> Option<String> {
     if !(uri.starts_with("http://") || uri.starts_with("https://")) {
         return None;
     }
     let host = wadbrowser_core::site::host_of(uri);
-    // HOOK(keys-on-machine): on the machine there's no signins.json; a key's
-    // sites come from wadd's library (wadbrowser_core::wadd::Wadd::web_keys),
-    // but its folder is root's: using its cookies here is phase 6's.
     profile_for(&host, profile, &signins().site_keys())
+}
+
+/// Every page now on a key's site moved into the key's profile, as its
+/// navigation would have moved it (the machine's keys came after it
+/// loaded, or a key has a new site).
+pub fn rehome() {
+    let Some(e) = engine() else { return };
+    for view in live_views() {
+        let Some(st) = state(&view) else { continue };
+        let uri = st.page_uri(&view);
+        if let Some(target) = profile_for_uri(&st.profile, &uri) {
+            tracing::info!(from = %st.profile, to = %target, %uri, "a key's site: into its profile");
+            testlog::line("moved", &[&st.profile, &target, &uri]);
+            let session = SessionBundle::for_profile(&e.paths, &target);
+            later(move |h| (h.move_view)(&view, &session, &uri));
+        }
+    }
 }
 
 /// Before a top-level page starts loading in `view`: its filters, the

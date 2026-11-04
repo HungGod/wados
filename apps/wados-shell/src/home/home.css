@@ -170,6 +170,14 @@ popover.home-menu > contents {
   background: var(--danger);
   color: #2a0610;
 }
+/* Another machine's: its name, in the apps' blue; its picture a little paler. */
+.home-badge.machine {
+  background: var(--c-app);
+  color: var(--accent-fg);
+}
+.home-card.remote {
+  filter: saturate(0.75);
+}
 .home-busy {
   background: rgb(10 6 20 / 0.5);
 }

@@ -31,9 +31,12 @@ struct Rest {
 impl Store {
     pub fn new(state_dir: &Path) -> std::io::Result<Self> {
         let dir = state_dir.to_path_buf();
-        for d in [dir.clone(), dir.join("wadspaces")] {
+        // The state folder can be passed through (0711: uid 1000 reaches its
+        // keys' and projects' folders in it by name, tmpfiles.d/wados.conf's),
+        // not listed; the documents are wadd's alone.
+        for (d, mode) in [(dir.clone(), 0o711), (dir.join("wadspaces"), 0o700)] {
             std::fs::create_dir_all(&d)?;
-            std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700))?;
+            std::fs::set_permissions(&d, std::fs::Permissions::from_mode(mode))?;
         }
         Ok(Self { dir })
     }

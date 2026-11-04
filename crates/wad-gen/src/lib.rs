@@ -64,8 +64,10 @@ pub mod units;
 pub use sets::{BASE_IMAGE, Set, SetBuild, SetFile, Stage};
 pub use units::{Machine, Run, Sidecar};
 
-/// A wadspace's mount projects found on this machine: project id → its
-/// folder or file here. One not found isn't mounted (nor listed inside).
+/// A wadspace's projects found or made on this machine: project id → its
+/// folder or file here (a mount's own folder or file, or its Taildrive
+/// mount; a GitHub project's clone; a copy's folder, `files/` and `done`).
+/// One not here isn't mounted (nor listed inside).
 pub type Mounts = BTreeMap<String, String>;
 
 /// Whether a mount can be: podman's `-v` reads a `:` in its path or its

@@ -1,0 +1,9 @@
+{
+	"AuthURL": "https://hs.test:8443/register/6CtCcbdJfP1KpU1y8zGtYa1T",
+	"QR": "data:image/png;base64,iVBORw0KGgo=",
+	"BackendState": "NeedsLogin"
+}
+Some peers are advertising routes but --accept-routes is false
+{
+  "BackendState": "Running"
+}

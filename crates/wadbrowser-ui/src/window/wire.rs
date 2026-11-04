@@ -1,7 +1,9 @@
 //! What the window's v2 widgets do: the ⋮ menu, the profile chip and its
 //! menu, the page menu (right-click), the shield, and the dialogs they open
-//! (Create app, New profile, Saved sign-ins, a permission). And what they
-//! show that isn't the window's: the machine's web apps and saved sign-ins.
+//! (Create app, New profile, Saved sign-ins, a permission), and a GitHub
+//! sign-in's code and its Copy. And what they show that isn't the window's:
+//! the machine's web apps and saved sign-ins (the machine's keys, which the
+//! engine uses too).
 //!
 //! On the machine those are wadd's (wadbrowser_webkit::wadd, off the main
 //! thread). In a wadspace there's no wadd: its web apps are
@@ -17,9 +19,10 @@ use serde::Deserialize;
 use wadbrowser_core::internal::{self, PageAction, Tile};
 use wadbrowser_core::modes::{AppSpec, Mode, WindowSpec};
 use wadbrowser_core::profiles::{self, ProfileKind};
+use wadbrowser_core::signin::Provider;
 use wadbrowser_core::{APP_ID, NEW_TAB_URI, site};
 use wadbrowser_webkit::wadd::{self, Failure};
-use wadbrowser_webkit::{Ask, shield};
+use wadbrowser_webkit::{Ask, shield, testlog};
 use webkit6::WebView;
 use webkit6::prelude::*;
 
@@ -79,10 +82,42 @@ pub(super) fn setup(ctx: &Rc<WindowCtx>) {
     });
     sync_chip(ctx);
     sync_shield(ctx);
+    let w = Rc::downgrade(ctx);
+    ctx.header.code.copy.connect_clicked(move |_| {
+        if let Some(ctx) = w.upgrade() {
+            copy_code(&ctx);
+        }
+    });
+    sync_code(ctx);
     if FETCHED.with(|f| f.set(()).is_ok()) {
         refresh_apps();
         refresh_keys();
     }
+}
+
+// ------------------------------------------------------------ a sign-in's code
+
+/// A GitHub sign-in window's code, under its header bar (`--signin github
+/// --code`; again when a later `--signin` brings a new one). No other
+/// window shows one.
+pub(super) fn sync_code(ctx: &WindowCtx) {
+    let code =
+        ctx.spec.borrow().signin.as_ref().filter(|s| s.provider == Provider::Github).and_then(|s| s.code.clone());
+    ctx.header.code.show(code.as_deref());
+    if let Some(c) = &code {
+        testlog::line("signin-code", &[c]);
+    }
+}
+
+/// Copy: the code on the clipboard, to paste on GitHub's page.
+fn copy_code(ctx: &WindowCtx) {
+    let code = ctx.header.code.code();
+    if code.is_empty() {
+        return;
+    }
+    ctx.window.clipboard().set_text(&code);
+    show_toast(ctx, "The code is copied");
+    testlog::line("signin-code-copied", &[&code]);
 }
 
 // ------------------------------------------------------------ the shield and the chip
@@ -642,18 +677,26 @@ fn refresh_apps() {
     }
 }
 
-/// The saved sign-ins again: wadd's web keys, or this wadspace's (signins.json).
+/// The saved sign-ins again: wadd's web keys, or this wadspace's
+/// (signins.json). On the machine they're the engine's keys too
+/// (`HOOK(keys-on-machine)`): a page on a key's site goes into the key's
+/// profile, its cookies in the key's folder, as in a wadspace.
 fn refresh_keys() {
     if machine() {
         wadd::call(
             |d| d.web_keys(),
             |r| match r {
-                Ok(keys) => KEYS.with_borrow_mut(|k| {
-                    *k = keys
-                        .into_iter()
-                        .map(|s| WebKey { id: s.id, name: s.name, sites: s.sites, used_by: s.used_by.len() as u32 })
-                        .collect();
-                }),
+                Ok(keys) => {
+                    if wadbrowser_webkit::set_machine_keys(profiles::SignIns::from_machine(&keys)) {
+                        wadbrowser_webkit::rehome();
+                    }
+                    KEYS.with_borrow_mut(|k| {
+                        *k = keys
+                            .into_iter()
+                            .map(|s| WebKey { id: s.id, name: s.name, sites: s.sites, used_by: s.used_by.len() as u32 })
+                            .collect();
+                    });
+                }
                 Err(e) if e.is_unreachable() => {}
                 Err(e) => tracing::warn!("wadd's keys: {e}"),
             },

@@ -1,0 +1,16 @@
+[package]
+name = "wad-git"
+description = "Projects' git for wadd: clone through a .part folder, and fetch + fast-forward only when nothing can be lost"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+nix.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

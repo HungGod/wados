@@ -3,6 +3,8 @@
 //! `shell/spaces/targets.ts`). A wadspace takes another's piece (a stack's
 //! section, one thing, a key's group): it's copied in. Its own pieces, and
 //! whole wadspaces, it doesn't take. Another machine's says where it lives.
+//! A repository (`repo:<owner/name>`) is cloned into it when it opens, unless
+//! it has it already. (Files from the desktop are kept in it: desktop/keep.rs.)
 //!
 //! And open desktop, or the Builder's slot (`offer_fresh`/`land_fresh`): a
 //! piece is a new wadspace of just that, Untitled; a whole stack, a copy.
@@ -28,6 +30,7 @@ pub fn offer_on(shell: &Shell, ws: &str, held: &Held) -> Option<Verdict> {
             Payload::Section { ws: from, .. } if *from == x.id => None,
             Payload::Section { .. } => Verdict::yes(format!("Into {}", x.name)),
             Payload::Piece { from, .. } if from.as_deref() == Some(x.id.as_str()) => None,
+            Payload::Piece { item, .. } if item.starts_with("repo:") => repo_offer(&x, item),
             Payload::Piece { .. } => Verdict::yes(format!("Add it to {}", x.name)),
             Payload::Folder { ws: from, .. } if *from == x.id => None,
             Payload::Folder { key, .. } => {
@@ -136,6 +139,22 @@ pub fn land_fresh(shell: &Rc<Shell>, held: &Held) {
     }
 }
 
+/// A repository let go on `x`: cloned into it, unless it has it.
+fn repo_offer(x: &Wadspace, item: &str) -> Option<Verdict> {
+    let repo = item.strip_prefix("repo:")?;
+    let has = x
+        .look
+        .projects
+        .iter()
+        .any(|p| matches!(&p.kind, wad_model::ProjectKind::Github { repo: r, .. } if r.eq_ignore_ascii_case(repo)));
+    let name = repo.rsplit('/').next().unwrap_or(repo);
+    if has {
+        Verdict::no(format!("{name} is already in {}", x.name))
+    } else {
+        Verdict::yes(format!("Clone {repo} into {}", x.name))
+    }
+}
+
 fn piece(section: Section, item: &str, from: &str) -> Payload {
     Payload::Piece { section, item: item.to_string(), from: Some(from.to_string()) }
 }
@@ -144,10 +163,9 @@ fn count(n: usize) -> String {
     if n == 1 { "it".into() } else { format!("these {n}") }
 }
 
+/// Where `x` lives, by name: one of my machines (`/v1/peers`), else "another machine".
 fn machine_name(shell: &Shell, x: &Wadspace) -> String {
-    let _ = shell;
-    // Peers (their names) come in phase 6.
-    if x.machine.is_empty() { "another machine".into() } else { x.machine.clone() }
+    shell.store.machine_name(&x.machine).unwrap_or_else(|| "another machine".into())
 }
 
 #[cfg(test)]
@@ -176,5 +194,24 @@ mod tests {
         };
         assert_eq!(ops_on("b", &pieces).len(), 2);
         assert!(ops_on("b", &Held::Space { ws: "a".into(), from: None }).is_empty());
+    }
+
+    #[test]
+    fn a_repository_is_cloned_in_unless_its_there() {
+        let mut x = wad_model::ops::blank("writing", "Writing", "m", 0, 1);
+        let v = repo_offer(&x, "repo:HungGod/Writing").unwrap();
+        assert!(v.ok);
+        x.look.projects.push(wad_model::Project {
+            id: "gh-writing".into(),
+            as_name: "Writing".into(),
+            kind: wad_model::ProjectKind::Github { repo: "HungGod/Writing".into(), setup: None },
+        });
+        let v = repo_offer(&x, "repo:hunggod/writing").unwrap();
+        assert!(!v.ok);
+        // The piece is the model's own: dropped on, it's an edit like any other.
+        let held = Held::Part {
+            payload: Payload::Piece { section: Section::Look, item: "repo:HungGod/Writing".into(), from: None },
+        };
+        assert!(matches!(&ops_on("b", &held)[..], [Op::DropOn { .. }]));
     }
 }

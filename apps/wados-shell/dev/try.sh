@@ -8,6 +8,10 @@
 #   TRY_OUTPUTS=2 …                              a second display (1920 x 1080 beside it)
 #   TRY_NAME=home …                              a session of its own (several can run at once)
 #   TRY_FULLSCREEN=1 …                           also open a wadspace full screen (needs the base image)
+#   TRY_SAMPLE=1 …                               wadd serve --sample: phase 6's tailnet, peers and GitHub
+#                                                as sample data (apps/wadd/src/fake_phase6.rs)
+#   TRY_THEN=script.sh …                         source it after the shots, before it stops (in_labwc,
+#                                                shot, wait_for, $tmp, $home and $shots are there)
 #
 # The shell runs with a home of its own (the spike's sample Desktop), never the
 # real one, and a session bus of its own with no desktop portals: a file dialog
@@ -19,8 +23,9 @@ root=$(cd "$(dirname "$0")/../../.." && pwd)
 cd "$root"
 shots=${1:-$root/.build/shell}
 mkdir -p "$shots"
-cargo build -q -p wadd -p wados-shell -p wadsctl
-export PATH="$root/target/debug:$PATH"
+cargo build -q -p wadd -p wados-shell -p wadsctl -p wados-settings -p wados-files
+# CARGO_TARGET_DIR: binaries built elsewhere (a build of its own, beside others').
+export PATH="${CARGO_TARGET_DIR:-$root/target}/debug:$PATH"
 export HL_NAME=${TRY_NAME:-try}
 . tools/headless.sh
 tmp=$(mktemp -d /tmp/wados-shell-try.XXXXXX)
@@ -33,6 +38,9 @@ cleanup() {
   set +e
   [[ -n "${TRY_KEEP:-}" ]] && return
   in_labwc wadsctl quit >/dev/null 2>&1
+  # labwc first: the apps the session opened (Settings, Files) follow wadd's
+  # events, and wadd waits for those to close before it stops.
+  stop_labwc
   [[ -n "${wadd_pid:-}" ]] && kill "$wadd_pid" 2>/dev/null && wait "$wadd_pid" 2>/dev/null
   # Only what this run opened (other sessions may be running theirs).
   for id in $opened; do
@@ -40,7 +48,6 @@ cleanup() {
     rm -f "${XDG_RUNTIME_DIR}/containers/systemd/wad-$id.container"
   done
   [[ -n "$opened" ]] && systemctl --user daemon-reload 2>/dev/null
-  stop_labwc
   rm -rf "$tmp"
 }
 trap cleanup EXIT
@@ -76,7 +83,8 @@ in_labwc wlr-randr --output HEADLESS-1 --pos 0,0 >/dev/null 2>&1 || true
 
 export WADD_SOCKET=$tmp/wadd.sock
 # wadd's ~ is the test's home too (photos, COPY sources), never the real one.
-HOME="$home" wadd serve --user --config "$tmp/wadd.toml" --socket "$WADD_SOCKET" --state-dir "$tmp/state" >"$tmp/wadd.log" 2>&1 &
+HOME="$home" wadd serve --user --config "$tmp/wadd.toml" --socket "$WADD_SOCKET" --state-dir "$tmp/state" \
+  ${TRY_SAMPLE:+--sample} >"$tmp/wadd.log" 2>&1 &
 wadd_pid=$!
 for _ in $(seq 50); do [[ -S "$WADD_SOCKET" ]] && break; sleep 0.1; done
 
@@ -115,6 +123,10 @@ if [[ -n "${TRY_FULLSCREEN:-}" ]] && podman image exists localhost/wados-base:44
   echo "windows: $(in_labwc wadsctl wm list)"
   sleep 1
   shot HEADLESS-1 "$shots/fullscreen.png"
+fi
+if [[ -n "${TRY_THEN:-}" ]]; then
+  # shellcheck disable=SC1090
+  . "$TRY_THEN"
 fi
 echo "shots in $shots"
 if [[ -n "${TRY_KEEP:-}" ]]; then

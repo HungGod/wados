@@ -6,7 +6,8 @@
 use serde_json::{Value, json};
 use wad_model::{Peer, PeerKind};
 use wad_proto::{
-    DeviceKind, Event, GithubAccount, PeerInfo, SignInProvider, Tailnet, TailnetAsk, TailnetDevice, TailnetState,
+    DeviceKind, DriveState, Event, GithubAccount, PeerInfo, SignInProvider, Tailnet, TailnetAsk, TailnetDevice,
+    TailnetState,
 };
 
 /// To JSON and back: the same event, tagged `kind`.
@@ -61,6 +62,8 @@ fn the_tailnet() {
             ip: "100.88.20.7".into(),
             at: 3,
         }],
+        drive: DriveState::Shared,
+        drive_error: None,
     });
     let v = round_trip(&e, "tailnet");
     // Flat: its own fields beside the tag; the devices' kinds stay theirs.

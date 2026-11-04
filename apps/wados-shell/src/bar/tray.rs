@@ -4,10 +4,13 @@
 //! network, the agents, the bell and the clock. Each opens its flyout by it:
 //! over the dock on the launcher, under the bar on the desktop.
 //!
-//! Real where the machine says: wadd's jobs (with Cancel), this session's
-//! notices (with Undo), the time, read-only the network, Bluetooth and the
-//! battery, and the volume and the brightness as their keys leave them.
-//! The rest says which phase brings it.
+//! Real where the machine says: wadd's jobs (with Cancel; a sign-in waiting
+//! in the browser, with Show the browser), this session's notices (with
+//! Undo), the time, the tailnet (More's Tailscale tile: how many machines,
+//! a pip with how many devices ask to be trusted, Settings ▸ Accounts on a
+//! click; the asks under it, with Deny and Trust), read-only the network,
+//! Bluetooth and the battery, and the volume and the brightness as their
+//! keys leave them. The rest says which phase brings it.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -15,16 +18,66 @@ use std::time::{Duration, Instant};
 
 use gtk::{glib, prelude::*};
 use wad_gtk::{Icon, Svg};
-use wad_model::JobStatus;
-use wad_proto::JobInfo;
+use wad_model::{JobKind, JobStatus};
+use wad_proto::{JobInfo, SignInProvider, Tailnet, TailnetAsk, TailnetState};
 
 use super::notices::{ago, level_class, level_icon};
 use super::shared::{Shared, Topic, now};
 use super::system::{self, NetState};
 use super::ui::{self, label, later, set_class};
 use crate::shell::Shell;
+use crate::store::Change;
+
+/// What the Tailscale tile says under its name: how many of my machines are
+/// online when it runs, else where it is (Settings' words).
+pub fn tailscale_sub(t: Option<&Tailnet>, online: usize) -> String {
+    match t.map(|t| t.state) {
+        Some(TailnetState::Running) => format!("{online} machine{}", if online == 1 { "" } else { "s" }),
+        Some(s) => state_word(s).into(),
+        None => "Not answering".into(),
+    }
+}
+
+/// A tailnet state as Settings words it (`panels/tailnet.ts`).
+pub fn state_word(s: TailnetState) -> &'static str {
+    match s {
+        TailnetState::Off => "Off",
+        TailnetState::NeedsLogin => "Not signed in",
+        TailnetState::LoggingIn => "Waiting for you to sign in",
+        TailnetState::NeedsApproval => "Waiting for approval",
+        TailnetState::Stopped => "Disconnected",
+        TailnetState::Starting => "Starting…",
+        TailnetState::Running => "Connected",
+    }
+}
+
+/// The sign-in a job waits on in the browser, while its stage is held.
+pub fn waiting_sign_in(j: &wad_model::Job) -> Option<SignInProvider> {
+    if j.status != JobStatus::Running {
+        return None;
+    }
+    let s = j.stages.get(j.cursor).filter(|s| s.held)?;
+    [SignInProvider::Github, SignInProvider::Tailscale].into_iter().find(|p| s.label == p.held_label()).or(
+        match j.kind {
+            JobKind::Github => Some(SignInProvider::Github),
+            JobKind::Tailnet => Some(SignInProvider::Tailscale),
+            _ => None,
+        },
+    )
+}
 
 const WIDTH: i32 = 332;
+
+/// The Tailscale tile's pip, and an ask (Flyout.svelte's `.pip`, `.ask`).
+const CSS: &str = r#"
+.wb-pip { min-width: 6px; min-height: 16px; padding: 0 5px; margin: 8px 8px 0 0; border-radius: 99px; background-color: var(--accent); color: var(--accent-fg); font-size: 10.5px; font-weight: 700; }
+.wb-ask { margin-top: 6px; padding: 10px; border-radius: 12px; background-color: var(--warn-soft); border: 1px solid rgb(232 195 106 / 0.3); font-size: 13px; }
+.wb-ask > wad-icon { color: var(--warn); }
+"#;
+
+thread_local! {
+    static CSS_ADDED: Cell<bool> = const { Cell::new(false) };
+}
 
 /// The flyouts, by name (what `wadsctl bar flyout <name>` opens).
 pub const FLYOUTS: [&str; 10] =
@@ -50,6 +103,7 @@ pub struct Tray {
     bt_icon: Icon,
     vol_icon: Icon,
     bell_badge: gtk::Box,
+    hidden_badge: gtk::Box,
     clock_t: gtk::Label,
     clock_d: gtk::Label,
     hidden_icon: Icon,
@@ -58,6 +112,12 @@ pub struct Tray {
 
 impl Tray {
     pub fn new(shell: &Rc<Shell>, shared: &Rc<Shared>, below: bool) -> Rc<Self> {
+        if !CSS_ADDED.with(|c| c.replace(true))
+            && let Some(d) = gtk::gdk::Display::default()
+        {
+            wad_gtk::kit::install(&d);
+            wad_gtk::theme::add_css(&d, CSS);
+        }
         let root = gtk::Box::builder().spacing(1).valign(gtk::Align::Center).build();
         let jobs_ring = Ring::new(18);
         let me = Rc::new(Self {
@@ -77,17 +137,23 @@ impl Tray {
                 .valign(gtk::Align::Start)
                 .visible(false)
                 .build(),
+            hidden_badge: gtk::Box::builder()
+                .css_classes(["wb-badge"])
+                .halign(gtk::Align::End)
+                .valign(gtk::Align::Start)
+                .visible(false)
+                .can_target(false)
+                .build(),
             clock_t: gtk::Label::builder().css_classes(["wb-clock-t"]).xalign(1.0).build(),
             clock_d: gtk::Label::builder().css_classes(["wb-clock-d"]).xalign(1.0).build(),
             hidden_icon: Icon::new(if below { "chevron-down" } else { "chevron-up" }, 16),
             resized: RefCell::default(),
         });
 
-        me.add(
-            "hidden",
-            me.hidden_icon.clone().upcast(),
-            "More: Tailscale, updates, activity, streams and the battery",
-        );
+        let hidden = gtk::Overlay::new();
+        hidden.set_child(Some(&me.hidden_icon));
+        hidden.add_overlay(&me.hidden_badge);
+        me.add("hidden", hidden.upcast(), "More: Tailscale, updates, activity, streams and the battery");
         let ring = gtk::Box::builder().halign(gtk::Align::Center).valign(gtk::Align::Center).build();
         ring.append(&me.jobs_ring.area);
         me.add("jobs", ring.upcast(), "Downloads and builds");
@@ -132,8 +198,20 @@ impl Tray {
                 m.refill_open("notifications");
             }
         });
+        let w = Rc::downgrade(&me);
+        shell.store.watch(move |c| {
+            let Some(m) = w.upgrade() else { return };
+            if matches!(c, Change::Tailnet | Change::Peers | Change::Connected(_)) {
+                m.tailnet_changed();
+            }
+            if matches!(c, Change::SignIn(_) | Change::PeerSpaces(_)) {
+                m.refill_open("jobs");
+                m.refill_open("hidden");
+            }
+        });
         me.jobs_changed();
         me.system_changed();
+        me.tailnet_changed();
         let w = Rc::downgrade(&me);
         let tick = move || {
             let Some(m) = w.upgrade() else { return glib::ControlFlow::Break };
@@ -298,6 +376,28 @@ impl Tray {
         self.refill_open("hidden");
     }
 
+    /// The asks: More's dot, and its flyout.
+    fn tailnet_changed(self: &Rc<Self>) {
+        let asks = self.asks().len();
+        self.hidden_badge.set_visible(asks > 0);
+        if let Some(b) = self.button("hidden") {
+            b.set_tooltip_text(Some(&if asks > 0 {
+                format!(
+                    "More: {asks} device{} asking to be trusted, Tailscale, updates, activity, streams and the battery",
+                    if asks == 1 { "" } else { "s" }
+                )
+            } else {
+                "More: Tailscale, updates, activity, streams and the battery".into()
+            }));
+        }
+        self.refill_open("hidden");
+    }
+
+    /// The devices asking to be trusted, while the tailnet runs.
+    fn asks(&self) -> Vec<TailnetAsk> {
+        self.shell.store.tailnet().filter(|t| t.state == TailnetState::Running).map(|t| t.asks).unwrap_or_default()
+    }
+
     fn system_changed(self: &Rc<Self>) {
         let st = self.shared.system.borrow().clone();
         self.net_icon.set(system::net_icon(st.network.as_ref()));
@@ -422,7 +522,7 @@ impl Tray {
             let b =
                 gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).css_classes(["wb-job"]).build();
             let t = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
-            let title = label(&job.title, &["wb-job-t"]);
+            let title = label(&crate::peers::job_title(&self.shell.store, &j), &["wb-job-t"]);
             title.set_wrap(true);
             t.append(&title);
             let (status, err) = match job.status {
@@ -440,6 +540,19 @@ impl Tray {
             t.append(&s);
             b.append(&t);
             if job.status == JobStatus::Running {
+                // Waiting for a sign-in in the browser: a way back to its window.
+                if let Some(p) = waiting_sign_in(job) {
+                    let s = self.shell.clone();
+                    let w = Rc::downgrade(self);
+                    let code = job.params.get("code").and_then(|c| c.as_str()).map(String::from);
+                    let code = code.or_else(|| self.shell.store.sign_in(p).and_then(|s| s.code));
+                    b.append(&wad_gtk::kit::in_browser(p.name(), code.as_deref(), move || {
+                        if let Some(m) = w.upgrade() {
+                            m.close_all();
+                        }
+                        crate::signin::show(&s, p);
+                    }));
+                }
                 let p = gtk::ProgressBar::builder()
                     .fraction(job.progress.clamp(0.0, 1.0))
                     .css_classes(["wb-progress"])
@@ -589,12 +702,31 @@ impl Tray {
         };
         let jobs = self.shared.running_jobs().len();
         let unread = self.shared.notices.borrow().unread();
+        let asks = self.asks();
+        let online = self.shell.store.peers().iter().filter(|p| p.peer.online).count();
+        let tailnet = self.shell.store.tailnet();
+        let tailscale =
+            tile(Svg::new(ui::TAILSCALE, 20, 20).upcast(), "Tailscale", &tailscale_sub(tailnet.as_ref(), online));
+        let tailscale_tile = gtk::Overlay::new();
+        tailscale_tile.set_child(Some(&tailscale));
+        if !asks.is_empty() {
+            let pip = label(&asks.len().to_string(), &["wb-pip"]);
+            pip.set_halign(gtk::Align::End);
+            pip.set_valign(gtk::Align::Start);
+            pip.set_xalign(0.5);
+            pip.set_can_target(false);
+            tailscale_tile.add_overlay(&pip);
+        }
+        tailscale.set_tooltip_text(Some("Tailscale: your tailnet, its machines and who wants in"));
+        let (w, s) = (Rc::downgrade(self), self.shell.clone());
+        tailscale.connect_clicked(move |_| {
+            if let Some(m) = w.upgrade() {
+                m.close_all();
+            }
+            crate::peers::open_app(&s, &["wados-settings", "--page", "accounts"]);
+        });
+        grid.attach(&tailscale_tile, 0, 0, 1, 1);
         let tiles = [
-            (
-                tile(Svg::new(ui::TAILSCALE, 20, 20).upcast(), "Tailscale", "Phase 6"),
-                None,
-                "Tailscale: your tailnet comes in phase 6",
-            ),
             (tile(Icon::new("download", 20).upcast(), "Updates", "Phase 8"), None, "Updates (bootc) come in phase 8"),
             (
                 tile(Icon::new("activity", 20).upcast(), "Activity", &format!("{jobs} running")),
@@ -618,6 +750,7 @@ impl Tray {
             ),
         ];
         for (i, (b, goes, tip)) in tiles.into_iter().enumerate() {
+            let i = i + 1;
             b.set_tooltip_text(Some(tip));
             match goes {
                 Some("jobs") => {
@@ -641,6 +774,45 @@ impl Tray {
             grid.attach(&b, (i % 3) as i32, (i / 3) as i32, 1, 1);
         }
         col.append(&grid);
+        // Who wants in: Deny, or Trust.
+        for a in asks {
+            col.append(&self.ask_row(&a));
+        }
+    }
+
+    /// A device asking to be trusted (Flyout.svelte's `.ask`).
+    fn ask_row(self: &Rc<Self>, a: &TailnetAsk) -> gtk::Box {
+        let r = gtk::Box::builder().spacing(10).css_classes(["wb-ask"]).build();
+        r.set_widget_name(&format!("ask-{}", a.id));
+        let ic = Icon::new(crate::overlays::device_icon(a.kind), 18);
+        ic.set_valign(gtk::Align::Center);
+        r.append(&ic);
+        let t = gtk::Box::builder().orientation(gtk::Orientation::Vertical).hexpand(true).build();
+        let what = gtk::Label::builder().xalign(0.0).wrap(true).build();
+        what.set_markup(&format!("<b>{}</b> wants to manage this machine", glib::markup_escape_text(&a.device)));
+        t.append(&what);
+        t.append(&label(&format!("{} · {}", wad_gtk::kit::os_name(&a.os), a.ip), &["wb-small-t"]));
+        r.append(&t);
+        let deny = wad_gtk::kit::button("Deny", wad_gtk::kit::Variant::Ghost, None, true);
+        let trust = wad_gtk::kit::button("Trust", wad_gtk::kit::Variant::Primary, None, true);
+        for (b, yes) in [(&deny, false), (&trust, true)] {
+            b.set_valign(gtk::Align::Center);
+            let (s, id) = (self.shell.clone(), a.id.clone());
+            b.connect_clicked(move |b| {
+                b.set_sensitive(false);
+                let (sh, id) = (s.clone(), id.clone());
+                s.link.call(
+                    move |w| async move { if yes { w.trust_device(&id).await } else { w.deny_ask(&id).await } },
+                    move |r| {
+                        if let Err(e) = r {
+                            sh.toast(wad_proto::Level::Error, &e.message, None);
+                        }
+                    },
+                );
+            });
+            r.append(b);
+        }
+        r
     }
 }
 
@@ -759,6 +931,52 @@ mod tests {
         assert_eq!(&c[..7], &[0, 0, 0, 0, 0, 0, 1]);
         assert_eq!(c.last(), Some(&30));
         assert_eq!(cells(0, 28)[0], 1);
+    }
+
+    #[test]
+    fn the_tailscale_tile_says_how_many_machines_or_where_it_is() {
+        let mut t = Tailnet { state: TailnetState::Running, ..Tailnet::default() };
+        assert_eq!(tailscale_sub(Some(&t), 1), "1 machine");
+        assert_eq!(tailscale_sub(Some(&t), 2), "2 machines");
+        t.state = TailnetState::NeedsLogin;
+        assert_eq!(tailscale_sub(Some(&t), 2), "Not signed in");
+        assert_eq!(tailscale_sub(None, 0), "Not answering");
+        assert_eq!(state_word(TailnetState::LoggingIn), "Waiting for you to sign in");
+    }
+
+    #[test]
+    fn a_held_sign_in_stage_offers_the_browser() {
+        use wad_model::{Job, JobStage, PartState};
+        let stage = |id: &str, label: String, held: bool| JobStage {
+            id: id.into(),
+            label,
+            state: PartState::Working,
+            bytes: 0,
+            done: 0,
+            lines: vec![],
+            held,
+            error: None,
+        };
+        let mut j: Job = serde_json::from_value(serde_json::json!({
+            "id": "j1", "kind": "github", "status": "running", "title": "Signing in to GitHub",
+            "progress": 0.3, "cursor": 1, "startedAt": 1, "source": "machine", "visible": true
+        }))
+        .unwrap();
+        j.stages = vec![
+            stage("code", "Asking GitHub for a code".into(), false),
+            stage("signin", SignInProvider::Github.held_label(), true),
+        ];
+        assert_eq!(waiting_sign_in(&j), Some(SignInProvider::Github));
+        // Not held (yet, or any more), or the job's over: nothing to show.
+        j.stages[1].held = false;
+        assert_eq!(waiting_sign_in(&j), None);
+        j.stages[1].held = true;
+        j.status = JobStatus::Done;
+        assert_eq!(waiting_sign_in(&j), None);
+        // A Tailnet job's own words.
+        j.status = JobStatus::Running;
+        j.stages[1].label = SignInProvider::Tailscale.held_label();
+        assert_eq!(waiting_sign_in(&j), Some(SignInProvider::Tailscale));
     }
 
     #[test]

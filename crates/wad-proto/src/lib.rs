@@ -16,8 +16,8 @@ pub use github::{GithubAccount, Repo, SignInRequest};
 pub use peers::PeerInfo;
 pub use signin::SignInProvider;
 pub use tailnet::{
-    Answer, DeviceKind, RemoteHello, RemoteMachine, RemoteTrust, Tailnet, TailnetAsk, TailnetDevice, TailnetState,
-    TrustAnswer, TrustBook,
+    Answer, DeviceKind, DriveState, RemoteHello, RemoteMachine, RemoteTrust, Tailnet, TailnetAsk, TailnetDevice,
+    TailnetState, TrustAnswer, TrustBook,
 };
 
 /// The edits themselves (wad_model's), for callers that only depend on wad-proto.

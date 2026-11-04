@@ -60,10 +60,15 @@ pub enum DeviceKind {
 #[serde(rename_all = "camelCase")]
 pub struct Tailnet {
     pub state: TailnetState,
-    /// The tailnet's name ('tail1234.ts.net'); empty until it's logged in.
+    /// The tailnet's name, as Tailscale has it (its `CurrentTailnet.Name`:
+    /// 'example.com', 'you@example.com', or a Headscale's server URL host,
+    /// not its MagicDNS base domain: found on the test tailnet); empty
+    /// until it's logged in. Taildrive's paths start with it: a peer's home is
+    /// `dav://100.100.100.100:8080/<tailnet>/<its hostname>/home`.
     #[serde(default)]
     pub tailnet: String,
-    /// This machine's name on it.
+    /// This machine's name on it (its MagicDNS name's first label: what
+    /// other devices and Taildrive's paths call it).
     #[serde(default)]
     pub hostname: String,
     /// This machine's tailnet address (IPv4); empty when it has none.
@@ -81,6 +86,30 @@ pub struct Tailnet {
     /// ones put off with Later this session.
     #[serde(default)]
     pub asks: Vec<TailnetAsk>,
+    /// Taildrive: this machine's person's home, shared on the tailnet as
+    /// theirs once it's running (what my other machines browse and mount).
+    #[serde(default)]
+    pub drive: DriveState,
+    /// Why it isn't shared, when sharing failed (Tailscale's words).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drive_error: Option<String>,
+}
+
+/// Whether this machine's person's home is shared on the tailnet (Taildrive).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum DriveState {
+    /// Not yet: the tailnet isn't running, or it's being shared.
+    #[default]
+    Off,
+    /// Shared as `home`: `dav://100.100.100.100:8080/<tailnet>/<hostname>/home`.
+    Shared,
+    /// The tailnet's policy doesn't let this machine share (it needs the
+    /// `drive:share` node attribute, and the machines that browse it
+    /// `drive:access`): Settings ▸ Accounts explains it.
+    NotAllowed,
+    /// It failed for another reason (`driveError` says why).
+    Failed,
 }
 
 /// A device on the tailnet.
@@ -231,6 +260,9 @@ mod tests {
         let back = serde_json::to_value(&t).unwrap();
         assert_eq!(back["loginUrl"], "https://login.tailscale.com/a/x");
         assert_eq!(serde_json::from_value::<Tailnet>(back).unwrap(), t);
+        assert_eq!(t.drive, DriveState::Off);
+        let shared: Tailnet = serde_json::from_value(json!({"state": "running", "drive": "notAllowed"})).unwrap();
+        assert_eq!(shared.drive, DriveState::NotAllowed);
         // Off, with nothing else: what a machine without tailscaled says.
         let off: Tailnet = serde_json::from_value(json!({"state": "off"})).unwrap();
         assert_eq!(off, Tailnet::default());

@@ -2,7 +2,9 @@
 //! title; its **tag** (the desktop's group it's in: General, loose on the
 //! desktop, or one of yours, each a chip in its colour; Work and Gaming
 //! suggested, dashed, until they're made, a click making one with it in; New
-//! tag for a name of your own); its projects; its background ([`photos`]:
+//! tag for a name of your own); its projects (each with its name and what
+//! it is, a repository's name, mounted or copied in, and an x to take it
+//! out; "A folder, file or repository" opens [`files`]' menu); its background ([`photos`]:
 //! Empty, your photos from ~/Pictures, WadSpaces' pictures, or Upload your
 //! own photo); and its **icon** ([`icon`]), always a picture. There's no
 //! password to open a wadspace, and no description.
@@ -14,6 +16,7 @@
 //! `wadsctl custom …` says what's shown, where things are on the screen,
 //! and clicks them (below, [`Panel::ctl`]).
 
+pub mod files;
 pub mod icon;
 pub mod photos;
 
@@ -29,6 +32,7 @@ use wad_model::types::ProjectKind;
 use wad_model::{Project, Tag, Wadspace};
 use wad_proto::Level;
 
+use super::kit;
 use crate::builder::Builder;
 use wad_gtk::Wrap;
 
@@ -37,9 +41,8 @@ const CSS: &str = include_str!("custom.css");
 /// Tags you might want, until there are: a click makes one, with it in.
 const SUGGESTED: [&str; 2] = ["Work", "Gaming"];
 
-/// What the projects button says it's waiting for.
-const FILES_LATER: &str =
-    "Folders, files and repositories from this machine, GitHub or another machine come in phase 6";
+/// What the projects button does.
+const FILES_TIP: &str = "A folder of this machine or another of yours (mounted), or a GitHub repository (cloned)";
 
 thread_local! {
     /// The panel `wadsctl custom` talks to (the open window's).
@@ -136,14 +139,13 @@ impl Panel {
         // Projects.
         root.append(&heading("Projects", false));
         let projects = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).build();
-        let add_files =
-            gtk::Button::builder().css_classes(["cz-add"]).sensitive(false).tooltip_text(FILES_LATER).build();
+        let add_files = gtk::Button::builder().css_classes(["cz-add"]).sensitive(false).tooltip_text(FILES_TIP).build();
         let row = gtk::Box::builder().spacing(6).halign(gtk::Align::Center).build();
         row.append(&wad_gtk::Icon::new("plus", 14));
         row.append(&gtk::Label::new(Some("A folder, file or repository")));
         add_files.set_child(Some(&row));
         // A disabled button's tooltip shows from what's around it.
-        let add_wrap = gtk::Box::builder().tooltip_text(FILES_LATER).build();
+        let add_wrap = gtk::Box::builder().tooltip_text(FILES_TIP).build();
         add_files.set_hexpand(true);
         add_wrap.append(&add_files);
         projects.append(&add_wrap);
@@ -244,6 +246,14 @@ impl Panel {
         });
         let a = self.ask.downgrade();
         ask_cancel.connect_clicked(move |_| a.upgrade().iter().for_each(|a| a.popdown()));
+
+        // A folder, file or repository: its menu.
+        let w = self.me.clone();
+        self.add_files.connect_clicked(move |_| {
+            if let Some(p) = w.upgrade() {
+                p.files_menu(false);
+            }
+        });
 
         // Where the pointer last moved over it (kept when it leaves: a
         // tooltip coming up under it is a leave).
@@ -389,7 +399,41 @@ impl Panel {
                 x.set_visible(editable);
             }
         }
-        self.add_files.set_sensitive(false);
+        self.add_files.set_sensitive(editable);
+    }
+
+    /// The projects button's menu ([`files`]): this machine's folders now,
+    /// the repositories and the other machines once wadd says (asked each
+    /// time it opens). `by_ctl`: wadsctl's (it doesn't grab).
+    fn files_menu(&self, by_ctl: bool) {
+        let Some(b) = self.builder.upgrade() else { return };
+        let Some(x) = self.ws.borrow().clone() else { return };
+        if !self.editable.get() {
+            return;
+        }
+        let folders = files::folders(&glib::home_dir(), files::MOST_FOLDERS);
+        let (bw, anchor) = (Rc::downgrade(&b), self.add_files.clone());
+        let known = b.shell.store.peers();
+        b.shell.link.call(
+            |w| async move { Ok((w.github_repos().await.map_err(|e| e.message), w.peers().await.ok())) },
+            move |r| {
+                let Some(b) = bw.upgrade() else { return };
+                let (repos, peers) = r.unwrap_or_else(|e| (Err(e.message), None));
+                let here = b.shell.store.machine_id();
+                let choices = files::choices(&x, &here, &folders, &repos, &peers.unwrap_or(known));
+                let open = || {
+                    let bw = Rc::downgrade(&b);
+                    let a: gtk::Widget = anchor.clone().upcast();
+                    let at = a.clone();
+                    kit::menu(&a, None, "add-files", choices, move |pick| {
+                        if let Some(b) = bw.upgrade() {
+                            kit::act(&b, &at, &pick.act);
+                        }
+                    });
+                };
+                if by_ctl { kit::by_ctl(open) } else { open() }
+            },
+        );
     }
 
     fn project_row(&self, p: &Project) -> gtk::Box {
@@ -546,7 +590,8 @@ impl Panel {
     /// - `pick <key>`, `icon-pick <key>`, `tag <id>` (`general`, a tag's id,
     ///   `suggest:Work`): clicked; `new-tag [name…]`: the dialog (and, with a
     ///   name, typed in and made); `icon-source background|own`;
-    ///   `zoom <1-3>`; `reset`; `remove-project <id>`;
+    ///   `zoom <1-3>`; `reset`; `remove-project <id>`; `add-files` (the
+    ///   projects button's menu, then `wadsctl side open` / `side choose <id>`);
     /// - `origin`: where the window's top left is taken to be;
     ///   `calibrate <x> <y>`: the pointer's at (x, y) over the panel: where
     ///   the window is, for `where` (otherwise it's where labwc's region
@@ -617,6 +662,10 @@ impl Panel {
                 self.icon.do_reset();
                 "ok".into()
             }
+            ["add-files"] if self.editable.get() => {
+                self.files_menu(true);
+                "ok".into()
+            }
             ["remove-project", id] => {
                 let row = self.project_rows.borrow().iter().find(|(p, _)| p.id == *id).map(|(_, r)| r.clone());
                 match row.and_then(|r| r.last_child()).and_downcast::<gtk::Button>() {
@@ -654,7 +703,7 @@ impl Panel {
                 }
                 "ok".into()
             }
-            _ => "error custom [where <id>|pick <key>|icon-pick <key>|tag <id>|new-tag [name]|icon-source background|own|zoom <z>|reset|remove-project <id>|upload <path> [icon]]".into(),
+            _ => "error custom [where <id>|pick <key>|icon-pick <key>|tag <id>|new-tag [name]|icon-source background|own|zoom <z>|reset|add-files|remove-project <id>|upload <path> [icon]]".into(),
         }
     }
 

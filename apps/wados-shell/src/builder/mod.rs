@@ -123,6 +123,8 @@ impl Builder {
                         | Change::Run(_)
                         | Change::Job(_)
                         | Change::Machine
+                        | Change::Peers
+                        | Change::PeerSpaces(_)
                 )
             {
                 b.queue_refresh();
@@ -156,9 +158,11 @@ impl Builder {
         self.win.borrow().is_some()
     }
 
-    /// A wadspace as it is now (none: gone, or in the Trash).
+    /// A wadspace as it is now (none: gone, or in the Trash): this
+    /// machine's by its id, or one of my other machines' as it last sent
+    /// them, by its key (`<peer>:<id>`: never taken for one of this machine's).
     pub fn wadspace(&self, id: &str) -> Option<Wadspace> {
-        self.shell.store.wadspace(id).filter(|x| !x.is_trashed())
+        self.shell.store.any_wadspace(id).filter(|x| !x.is_trashed())
     }
 
     /// The selected one, as it is now.
@@ -167,9 +171,31 @@ impl Builder {
     }
 
     /// It can be changed here: it lives on this machine (another's shows,
-    /// and Copy here comes with peers, phase 6).
+    /// with Copy here).
     pub fn editable(&self, x: &Wadspace) -> bool {
         x.machine == self.shell.store.machine_id()
+    }
+
+    /// The machine it lives on, by name ("Another machine" when it isn't known).
+    pub fn machine_name(&self, x: &Wadspace) -> String {
+        self.shell.store.machine_name(&x.machine).unwrap_or_else(|| "Another machine".into())
+    }
+
+    /// Its machine's glyph.
+    pub fn machine_icon(&self, x: &Wadspace) -> &'static str {
+        self.shell.store.peer(&x.machine).map(|p| crate::peers::kind_icon(p.peer.kind)).unwrap_or("monitor")
+    }
+
+    /// Copy here: another machine's wadspace (by its key, `<peer>:<id>`),
+    /// copied to this one from there.
+    pub fn copy_here(&self, ws: &str) {
+        match self.shell.store.peer_wadspace(ws) {
+            Some(_) => crate::peers::copy_here(&self.shell, ws),
+            None => {
+                let name = self.wadspace(ws).map(|x| self.machine_name(&x)).unwrap_or_else(|| "It".into());
+                self.shell.toast(Level::Info, &format!("{name} isn't online: a copy comes from there"), None);
+            }
+        }
     }
 
     /// The title's to be ready to type (once): the Customize tab asks when it shows.
@@ -184,7 +210,7 @@ impl Builder {
     pub fn open(&self, ws: &str, after: Option<&str>) {
         {
             let mut s = self.st.borrow_mut();
-            if self.shell.store.wadspace(ws).is_none() && !s.pending.iter().any(|x| x == ws) {
+            if self.shell.store.any_wadspace(ws).is_none() && !s.pending.iter().any(|x| x == ws) {
                 s.pending.push(ws.to_string());
             }
             if !s.stacks.iter().any(|x| x == ws) {
@@ -472,7 +498,7 @@ impl Builder {
         {
             let mut s = self.st.borrow_mut();
             let store = &self.shell.store;
-            s.pending.retain(|id| store.wadspace(id).is_none());
+            s.pending.retain(|id| store.any_wadspace(id).is_none());
             let pending = s.pending.clone();
             let live: Vec<String> =
                 s.stacks.iter().filter(|id| self.wadspace(id).is_some() || pending.contains(id)).cloned().collect();
@@ -506,6 +532,12 @@ impl Builder {
             }));
             w.trash.set_sensitive(editable);
             w.open_label.set_label(if store.is_running(&x.id) { "Show" } else { "Open" });
+            // Another machine's would stream from there (phase 7): copy it here to open it.
+            let away = (!editable).then(|| format!("It lives on {}: copy it here to open it", self.machine_name(x)));
+            for (b, tip) in [(&w.open, None), (&w.in_window, Some("Open it in a window"))] {
+                b.set_sensitive(editable);
+                b.set_tooltip_text(away.as_deref().or(tip));
+            }
         }
         w.new.set_sensitive(self.shell.store.connected());
         w.board.refresh();

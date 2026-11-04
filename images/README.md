@@ -18,6 +18,7 @@ images/build.sh pkg nodejs           # a feature's package (wadspaces-feature no
 images/build.sh pkg rpm-krita        # an RPM app's (wadspaces-dnf krita --desktop org.kde.krita.desktop krita)
 images/build.sh set rpm-krita nodejs # a set
 images/check.sh                      # all of it, checked, and the set's desktop on a headless labwc
+images/base/try-projects.sh          # the base's wadspaces-projects on this laptop: names, copies, launchers
 ```
 
 The features still to port are listed in `base/TODO-features.md`. The

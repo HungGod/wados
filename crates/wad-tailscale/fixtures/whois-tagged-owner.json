@@ -1,0 +1,18 @@
+{
+  "Node": {
+    "ID": 106,
+    "StableID": "nCi1CNTRL",
+    "Name": "ci-runner.tail1234.ts.net.",
+    "User": 2001,
+    "Key": "nodekey:6666666666666666666666666666666666666666666666666666666666666666",
+    "KeyExpiry": "0001-01-01T00:00:00Z",
+    "Addresses": ["100.64.0.13/32"],
+    "Hostinfo": { "OS": "linux", "Hostname": "ci-runner" },
+    "Created": "2026-10-03T00:00:00Z",
+    "Tags": ["tag:ci"],
+    "MachineAuthorized": true,
+    "ComputedName": "ci-runner"
+  },
+  "UserProfile": { "ID": 2001, "LoginName": "owner@example.com", "DisplayName": "Owner", "ProfilePicURL": "" },
+  "CapMap": null
+}

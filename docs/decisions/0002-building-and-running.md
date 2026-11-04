@@ -64,7 +64,10 @@ Phase 1. `apps/wadd/dev/try.sh` runs all of it rootless, on a headless patched l
 
 ## Known gaps (for later phases)
 
-- **Projects** (GitHub clones, mounts, copies) are left out of a run with a logged note. The units expect `<state>/copies/<id>` folders (phase 6).
+- **Projects** come in as a wadspace opens (phase 6, `apps/wadd/src/projects.rs`), each a stage of its open job. wadd clones a GitHub one into `<projects_dir>/<ws>/<id>` (as uid 1000, through the `github_token` secret) and the wadspace works in it where it is. A folder of this machine is mounted, when it's inside the person's home and isn't hidden. A file is copied into `<state>/copies/<ws>/<id>`. Another machine's come over Taildrive: a copy is fetched over WebDAV, a folder mounted with rclone. One that can't be here (its machine offline, a private repository without a sign-in) is left out, and the job says why. What's left:
+  - rclone's mount, the 0711 folders and SELinux on a clone are checked in the VM, not by the tests.
+
+  Inside, the image's `wadspaces-projects` takes any name wad-model allows ("My Notes", any script), but for `/`, a backslash, a leading dot and control characters. Its launchers quote the path for gio (`"`, `` ` ``, `$`, `\` escaped, `%` doubled). A copy of one file (its `done` names it) arrives as that file at `~/Desktop/<name>`. `images/base/try-projects.sh` checks this on a laptop, without a container, and runs each launcher's Exec through gio.
 - **CI hasn't run yet.** The workflows are checked with actionlint and shellcheck only. They don't build the stream sidecar yet (phase 7, a TODO in `images.yml`), nor the prebuilt WadOS starter set.
 - **Packages built by wadd lack the version and content labels**, because wad-podman can't copy a file out of an image yet.
 - **Not tested yet:** the clipboard's contents through the bridge as `wadspaces-clip` (it starts and connects; neither image has a tool to copy with). The other root paths run in the VM ("Booting it").

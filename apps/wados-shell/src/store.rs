@@ -2,6 +2,19 @@
 //! its event stream (wadd.rs). The shell's surfaces read it and watch it;
 //! they never change it themselves (every change goes to wadd, which tells
 //! everyone, this store included).
+//!
+//! Phase 6's: the tailnet (its devices and asks), my other machines
+//! (peers), the sign-ins waiting in the browser (the GitHub account is
+//! Settings' to show: here it's only told as a change), and
+//! each peer's wadspaces as it last sent them (asked for by `peers.rs`;
+//! they come from it, over the tailnet, not from events).
+//!
+//! A wadspace's id is only unique on its machine (every machine has its
+//! starter, `wadspaces`; a copy keeps its source's id), so a peer's are kept
+//! here under a key of their machine's: `<peer id>:<its id>` ([`peer_key`]).
+//! A wadspace's id never has a `:` (`wad_model::check::id`), so a key is
+//! never one of this machine's ids, and the two are never taken for each
+//! other. Calls to wadd take the id back off ([`split_key`]).
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -9,7 +22,9 @@ use std::rc::Rc;
 use indexmap::IndexMap;
 use wad_model::edit::Library;
 use wad_model::{Phase, SessionDisplay, Wadspace};
-use wad_proto::{Event, JobInfo, Level, MachineInfo, ScreenInfo, WadspaceBuild, WadspaceRun};
+use wad_proto::{
+    Event, JobInfo, Level, MachineInfo, PeerInfo, ScreenInfo, SignInProvider, Tailnet, WadspaceBuild, WadspaceRun,
+};
 
 /// What changed, for watchers.
 #[derive(Debug, Clone, PartialEq)]
@@ -31,6 +46,46 @@ pub enum Change {
         title: String,
         undo: Option<String>,
     },
+    /// The tailnet: its state, devices or asks.
+    Tailnet,
+    /// My other machines (the list, or one's online).
+    Peers,
+    /// The GitHub account (signed in or out).
+    Github,
+    /// A sign-in in the browser began (or loads elsewhere), or is done.
+    SignIn(SignInProvider),
+    /// A peer's wadspaces came (or couldn't).
+    PeerSpaces(String),
+}
+
+/// The key a peer's wadspace is kept under: `<peer id>:<its id there>`.
+pub fn peer_key(peer: &str, ws: &str) -> String {
+    format!("{peer}:{ws}")
+}
+
+/// A peer's wadspace's key, as its machine and its id there (none: one of this machine's ids).
+pub fn split_key(key: &str) -> Option<(&str, &str)> {
+    key.split_once(':').filter(|(p, w)| !p.is_empty() && !w.is_empty())
+}
+
+/// A sign-in waiting in the browser (wadd's `signIn`): where, and GitHub's code.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SignIn {
+    pub url: String,
+    pub code: Option<String>,
+}
+
+/// One of my machines' wadspaces, as it last sent them.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PeerSpaces {
+    /// Its live wadspaces, in its order, each under its key ([`peer_key`]).
+    pub list: Vec<Wadspace>,
+    /// Being asked for now.
+    pub loading: bool,
+    /// The last ask didn't work: why, in wadd's words.
+    pub error: Option<String>,
+    /// When they last came (ms; 0 never).
+    pub at: i64,
 }
 
 type Watcher = Box<dyn Fn(&Change)>;
@@ -44,6 +99,12 @@ pub struct Store {
     builds: RefCell<IndexMap<String, WadspaceBuild>>,
     jobs: RefCell<IndexMap<String, JobInfo>>,
     screen: RefCell<Option<ScreenInfo>>,
+    tailnet: RefCell<Option<Tailnet>>,
+    peers: RefCell<Vec<PeerInfo>>,
+    signins: RefCell<IndexMap<SignInProvider, SignIn>>,
+    peer_spaces: RefCell<IndexMap<String, PeerSpaces>>,
+    /// Copies this shell started: each job's wadspace's key.
+    copies: RefCell<IndexMap<String, String>>,
     watchers: RefCell<Vec<Watcher>>,
 }
 
@@ -121,12 +182,26 @@ impl Store {
                 Change::Screen
             }
             Event::Notice { level, title, undo } => Change::Notice { level, title, undo },
-            // Phase 6's: the tailnet, peers, GitHub and the sign-in driver (the UI's, still to come).
-            Event::Tailnet(_)
-            | Event::Peers { .. }
-            | Event::Github { .. }
-            | Event::SignIn { .. }
-            | Event::SignInDone { .. } => return,
+            Event::Tailnet(t) => {
+                *self.tailnet.borrow_mut() = Some(t);
+                Change::Tailnet
+            }
+            Event::Peers { peers } => {
+                // A machine that's gone keeps nothing here.
+                self.peer_spaces.borrow_mut().retain(|id, _| peers.iter().any(|p| &p.peer.id == id));
+                *self.peers.borrow_mut() = peers;
+                Change::Peers
+            }
+            // The shell shows no account: Settings does.
+            Event::Github { .. } => Change::Github,
+            Event::SignIn { provider, url, code } => {
+                self.signins.borrow_mut().insert(provider, SignIn { url, code });
+                Change::SignIn(provider)
+            }
+            Event::SignInDone { provider } => {
+                self.signins.borrow_mut().shift_remove(&provider);
+                Change::SignIn(provider)
+            }
         };
         self.tell(change);
     }
@@ -173,6 +248,123 @@ impl Store {
         self.screen.borrow().clone()
     }
 
+    // ------------------------------------------------------------ phase 6
+
+    /// The tailnet, once wadd has said (none: not yet).
+    pub fn tailnet(&self) -> Option<Tailnet> {
+        self.tailnet.borrow().clone()
+    }
+
+    /// My other machines.
+    pub fn peers(&self) -> Vec<PeerInfo> {
+        self.peers.borrow().clone()
+    }
+
+    pub fn peer(&self, id: &str) -> Option<PeerInfo> {
+        self.peers.borrow().iter().find(|p| p.peer.id == id).cloned()
+    }
+
+    /// A machine's name: this one's, a peer's, or none.
+    pub fn machine_name(&self, id: &str) -> Option<String> {
+        if let Some(m) = self.machine.borrow().as_ref().filter(|m| m.id == id) {
+            return Some(m.name.clone());
+        }
+        self.peers.borrow().iter().find(|p| p.peer.id == id).map(|p| p.peer.name.clone())
+    }
+
+    /// The sign-in waiting in the browser for `provider`, if one is.
+    pub fn sign_in(&self, provider: SignInProvider) -> Option<SignIn> {
+        self.signins.borrow().get(&provider).cloned()
+    }
+
+    /// A peer's wadspaces, as it last sent them (none: never asked).
+    pub fn peer_spaces(&self, peer: &str) -> Option<PeerSpaces> {
+        self.peer_spaces.borrow().get(peer).cloned()
+    }
+
+    /// Asking `peer` for its wadspaces (they're kept as they were meanwhile).
+    pub fn peer_spaces_asked(&self, peer: &str) {
+        self.peer_spaces.borrow_mut().entry(peer.to_string()).or_default().loading = true;
+        self.tell(Change::PeerSpaces(peer.to_string()));
+    }
+
+    /// `peer`'s wadspaces came (or why they didn't), at `now` (ms).
+    pub fn set_peer_spaces(&self, peer: &str, got: Result<Vec<Wadspace>, String>, now: i64) {
+        {
+            let mut all = self.peer_spaces.borrow_mut();
+            let e = all.entry(peer.to_string()).or_default();
+            e.loading = false;
+            match got {
+                Ok(mut list) => {
+                    list.retain(|x| !x.is_trashed());
+                    list.sort_by_key(|x| x.order);
+                    for x in &mut list {
+                        x.id = peer_key(peer, &x.id);
+                    }
+                    *e = PeerSpaces { list, loading: false, error: None, at: now };
+                }
+                Err(why) => e.error = Some(why),
+            }
+        }
+        self.tell(Change::PeerSpaces(peer.to_string()));
+    }
+
+    /// One of a peer's wadspaces, by its key ([`peer_key`]), and whose it is.
+    pub fn peer_wadspace(&self, key: &str) -> Option<(String, Wadspace)> {
+        let (peer, _) = split_key(key)?;
+        let all = self.peer_spaces.borrow();
+        all.get(peer)?.list.iter().find(|x| x.id == key).map(|x| (peer.to_string(), x.clone()))
+    }
+
+    /// A copy this shell started: its job copies the peer's wadspace `key`.
+    pub fn note_copy(&self, job: &str, key: &str) {
+        self.copies.borrow_mut().insert(job.to_string(), key.to_string());
+        self.tell(Change::Job(job.to_string()));
+    }
+
+    /// The key of the peer's wadspace a CopyWadspace job copies: the one
+    /// this shell asked for; else the machine its `peer` says (if wadd says);
+    /// else the one peer that has a wadspace by that id (none when several do).
+    pub fn copy_key(&self, j: &JobInfo) -> Option<String> {
+        if j.job.kind != wad_model::JobKind::CopyWadspace {
+            return None;
+        }
+        if let Some(k) = self.copies.borrow().get(&j.job.id) {
+            return Some(k.clone());
+        }
+        let ws = j.job.subject.as_deref()?;
+        if let Some(peer) = j.job.params.get("peer").and_then(|p| p.as_str()) {
+            return Some(peer_key(peer, ws));
+        }
+        let all = self.peer_spaces.borrow();
+        let mut has = all.iter().filter(|(p, s)| s.list.iter().any(|x| x.id == peer_key(p, ws)));
+        match (has.next(), has.next()) {
+            (Some((p, _)), None) => Some(peer_key(p, ws)),
+            _ => None,
+        }
+    }
+
+    /// How far a copy here of the peer's wadspace `key` has got, while one runs.
+    pub fn copying(&self, key: &str) -> Option<f64> {
+        split_key(key)?;
+        self.jobs
+            .borrow()
+            .values()
+            .find(|j| {
+                matches!(j.job.status, wad_model::JobStatus::Queued | wad_model::JobStatus::Running)
+                    && self.copy_key(j).as_deref() == Some(key)
+            })
+            .map(|j| j.job.progress)
+    }
+
+    /// A wadspace by this machine's id, or a peer's by its key: never one for the other.
+    pub fn any_wadspace(&self, id: &str) -> Option<Wadspace> {
+        match split_key(id) {
+            Some(_) => self.peer_wadspace(id).map(|(_, x)| x),
+            None => self.wadspace(id),
+        }
+    }
+
     /// It's running (or on its way up) on this machine.
     pub fn is_running(&self, id: &str) -> bool {
         self.run(id).is_some_and(|r| matches!(r.state.phase, Phase::Starting | Phase::Waiting | Phase::Ready))
@@ -205,5 +397,97 @@ impl Store {
             failed: run.is_some_and(|r| r.state.phase == Phase::Error),
             busy,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn job(id: &str, subject: &str, status: &str, progress: f64, peer: Option<&str>) -> Event {
+        let mut params = serde_json::Map::new();
+        if let Some(p) = peer {
+            params.insert("peer".into(), json!(p));
+        }
+        serde_json::from_value(json!({"kind": "job", "job": {
+            "id": id, "kind": "copyWadspace", "status": status, "title": "Copying WadOS to this machine",
+            "subject": subject, "progress": progress, "startedAt": 1, "source": "machine", "visible": true,
+            "lineCount": 0, "params": params
+        }}))
+        .unwrap()
+    }
+
+    fn ws(id: &str, name: &str, machine: &str) -> Wadspace {
+        wad_model::ops::blank(id, name, machine, 0, 1)
+    }
+
+    /// This machine (m-surface) and Desk both have their starter, `wadspaces`.
+    fn two_starters() -> Store {
+        let s = Store::default();
+        s.apply(Event::Machine(MachineInfo {
+            id: "m-surface".into(),
+            name: "Surface".into(),
+            version: "0".into(),
+            profile: wad_proto::Profile::System,
+        }));
+        let mut lib = Library::default();
+        lib.wadspaces.push(ws("wadspaces", "WadOS", "m-surface"));
+        s.apply(Event::Library(Box::new(lib)));
+        let desk = vec![ws("wadspaces", "WadOS", "m-desk"), ws("pixel-art", "Pixel Art", "m-desk")];
+        s.set_peer_spaces("m-desk", Ok(desk), 1);
+        s.set_peer_spaces("m-laptop", Ok(vec![ws("pixel-art", "Pixel Art", "m-laptop")]), 1);
+        s
+    }
+
+    #[test]
+    fn a_peers_wadspace_is_never_taken_for_this_machines_of_the_same_id() {
+        let s = two_starters();
+        // This machine's, by its id; Desk's, by its key: each its own.
+        assert_eq!(s.wadspace("wadspaces").map(|x| x.machine).as_deref(), Some("m-surface"));
+        assert_eq!(s.any_wadspace("wadspaces").map(|x| x.machine).as_deref(), Some("m-surface"));
+        let desks = s.any_wadspace("m-desk:wadspaces").unwrap();
+        assert_eq!((desks.id.as_str(), desks.machine.as_str()), ("m-desk:wadspaces", "m-desk"));
+        assert_eq!(s.peer_wadspace("m-desk:wadspaces").map(|(p, _)| p).as_deref(), Some("m-desk"));
+        // A bare id is never a peer's, and a key never this machine's.
+        assert!(s.peer_wadspace("wadspaces").is_none());
+        assert!(s.wadspace("m-desk:wadspaces").is_none());
+        assert!(s.any_wadspace("m-laptop:wadspaces").is_none());
+        // The live list is this machine's alone.
+        assert_eq!(s.live().len(), 1);
+        assert_eq!(split_key("m-desk:wadspaces"), Some(("m-desk", "wadspaces")));
+        assert_eq!(split_key("wadspaces"), None);
+    }
+
+    #[test]
+    fn a_copy_shows_on_the_card_it_copies_and_no_other() {
+        let s = two_starters();
+        // Only Desk has a `wadspaces` among my machines: a copy of one is Desk's,
+        // and this machine's starter of the same id never shows it.
+        s.apply(job("j1", "wadspaces", "running", 0.25, None));
+        assert_eq!(s.copying("m-desk:wadspaces"), Some(0.25));
+        assert_eq!(s.copying("wadspaces"), None);
+        // Desk and Laptop both have `pixel-art`: which one's isn't known…
+        s.apply(job("j2", "pixel-art", "running", 0.5, None));
+        assert_eq!(s.copy_key(&s.job("j2").unwrap()), None);
+        assert_eq!((s.copying("m-desk:pixel-art"), s.copying("m-laptop:pixel-art")), (None, None));
+        // …until this shell says it asked for Laptop's,
+        s.note_copy("j2", "m-laptop:pixel-art");
+        assert_eq!((s.copying("m-desk:pixel-art"), s.copying("m-laptop:pixel-art")), (None, Some(0.5)));
+        // or wadd names the machine.
+        s.apply(job("j3", "pixel-art", "running", 0.75, Some("m-desk")));
+        assert_eq!(s.copying("m-desk:pixel-art"), Some(0.75));
+        // Done: nothing shows.
+        s.apply(job("j1", "wadspaces", "done", 1.0, None));
+        assert_eq!(s.copying("m-desk:wadspaces"), None);
+    }
+
+    #[test]
+    fn sign_ins_come_and_go() {
+        let s = Store::default();
+        s.apply(Event::SignIn { provider: SignInProvider::Github, url: "u".into(), code: Some("C".into()) });
+        assert_eq!(s.sign_in(SignInProvider::Github).and_then(|x| x.code).as_deref(), Some("C"));
+        s.apply(Event::SignInDone { provider: SignInProvider::Github });
+        assert!(s.sign_in(SignInProvider::Github).is_none());
     }
 }

@@ -18,18 +18,25 @@ reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 tokio-stream.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 wad-config.workspace = true
 wad-gen.workspace = true
+wad-git.workspace = true
+wad-github.workspace = true
 wad-model.workspace = true
 wad-podman.workspace = true
 wad-proto.workspace = true
 wad-systemd.workspace = true
+wad-tailscale.workspace = true
 wad-wayland.workspace = true
 
 [dev-dependencies]
+# A fake tailscaled and tailscale CLI for the tailnet's tests.
+wad-tailscale = { workspace = true, features = ["fake"] }
 tempfile.workspace = true
 wad-wadd-client.workspace = true
+url.workspace = true
+wiremock.workspace = true

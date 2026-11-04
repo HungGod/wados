@@ -2,7 +2,8 @@
 //! `Browser.svelte`): the tab bar above the header bar, each tab its
 //! favicon, title and ×; the header bar's back, forward and reload, its
 //! middle (Full's address, Focus's page title, an app's offsite pill), the
-//! shield, the profile chip and ⋮, and the loading line under it.
+//! shield, the profile chip and ⋮, and the loading line under it; under
+//! that, a GitHub sign-in window's code.
 //!
 //! Only drawing: what the buttons do is `window.rs`'s and `wire.rs`'s.
 
@@ -366,6 +367,60 @@ impl Address {
     }
 }
 
+// ------------------------------------------------------------ a sign-in's code
+
+/// A GitHub sign-in window's code, in a bar under the header bar
+/// (`.wb-code`): "Your code: WADS-0601", and Copy. GitHub's device page is
+/// behind its sign-in and its form isn't documented, so the code is typed
+/// in for you where the page lets it be (signin::device_code_script) and
+/// shown here either way, to type in by hand. Hidden in every other window.
+pub(super) struct CodeBar {
+    pub root: gtk::Box,
+    code: gtk::Label,
+    pub copy: gtk::Button,
+}
+
+impl CodeBar {
+    pub fn new() -> CodeBar {
+        let row = gtk::Box::builder().spacing(10).halign(gtk::Align::Center).build();
+        row.append(&gtk::Label::builder().label("Your code:").css_classes(["wb-code-label"]).build());
+        let code = gtk::Label::builder().css_classes(["wb-code-value"]).selectable(true).build();
+        code.update_property(&[gtk::accessible::Property::Label("Your code")]);
+        row.append(&code);
+        let inner = gtk::Box::builder().spacing(6).build();
+        inner.append(&wad_gtk::Icon::new("copy", 14));
+        inner.append(&gtk::Label::new(Some("Copy")));
+        let copy = gtk::Button::builder()
+            .child(&inner)
+            .css_classes(["wb-code-copy"])
+            .valign(gtk::Align::Center)
+            .tooltip_text("Copy the code")
+            .build();
+        copy.update_property(&[gtk::accessible::Property::Label("Copy the code")]);
+        row.append(&copy);
+        let hint = gtk::Label::builder()
+            .label("Type it on GitHub's page if it isn't filled in")
+            .css_classes(["wb-code-hint"])
+            .build();
+        row.append(&hint);
+        let root = gtk::Box::builder().css_classes(["wb-code"]).visible(false).build();
+        row.set_hexpand(true);
+        root.append(&row);
+        CodeBar { root, code, copy }
+    }
+
+    /// Shows `code` (none: hidden).
+    pub fn show(&self, code: Option<&str>) {
+        self.code.set_label(code.unwrap_or_default());
+        self.root.set_visible(code.is_some_and(|c| !c.is_empty()));
+    }
+
+    /// The code shown ("" when it's hidden).
+    pub fn code(&self) -> String {
+        if self.root.is_visible() { self.code.label().to_string() } else { String::new() }
+    }
+}
+
 // ------------------------------------------------------------ the header bar
 
 /// The header bar (`.headerbar`) and what's on it.
@@ -381,6 +436,8 @@ pub(super) struct Header {
     pub loading: gtk::ProgressBar,
     /// The window's buttons, when the tab bar's hidden.
     pub controls: gtk::WindowControls,
+    /// A GitHub sign-in's code, under it.
+    pub code: CodeBar,
 }
 
 impl Header {
@@ -432,7 +489,11 @@ impl Header {
             .build();
         let overlay = gtk::Overlay::builder().child(&row).build();
         overlay.add_overlay(&loading);
-        let root = gtk::WindowHandle::builder().child(&overlay).build();
-        Header { root, back, forward, reload, address, shield, chip, menu, loading, controls }
+        let code = CodeBar::new();
+        let column = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
+        column.append(&overlay);
+        column.append(&code.root);
+        let root = gtk::WindowHandle::builder().child(&column).build();
+        Header { root, back, forward, reload, address, shield, chip, menu, loading, controls, code }
     }
 }

@@ -9,10 +9,13 @@
 //! whose app id is `io.wadspaces.<id>`: [`sandbox_app_id`]), and
 //! PulseAudio's folder (`pulse/`). Never the session's runtime dir.
 //!
-//! Its projects aren't in its image: a GitHub project is cloned and a copy
-//! copied in by the wadspace (from wadd's copy, read-only); a mount is the
-//! machine's own folder, read-write and never relabelled, so a wadspace
-//! with one runs without SELinux's separation. Its keys are mounted from
+//! Its projects aren't in its image, and only those wadd found or made on
+//! this machine are in it ([`Run::mounts`]): a GitHub project is wadd's
+//! clone, worked in where it is (labelled for containers when wadd made
+//! it); a copy is copied in once by the wadspace, from wadd's copy of the
+//! files (read-only); a mount is the machine's own folder (or another
+//! machine's, over Taildrive), read-write and never relabelled, so a
+//! wadspace with one runs without SELinux's separation. Its keys are mounted from
 //! their folders, shared with the other wadspaces that use them. Nothing
 //! in a unit is a secret: podman secrets are named, never written.
 
@@ -67,7 +70,7 @@ pub fn display_name(id: &str) -> String {
 /// What a wadspace's units get from the machine they're on.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Machine {
-    /// wadd's state folder: extra folders (`extra/<id>`) and copies (`copies/<project id>`).
+    /// wadd's state folder: extra folders (`extra/<id>`).
     pub state_dir: String,
     /// Keys' folders: `<signins_dir>/<key id>`.
     pub signins_dir: String,
@@ -99,7 +102,7 @@ pub struct Machine {
 pub struct Run<'a> {
     /// The image it runs (its set's, [`crate::sets::Set::image`], or the one it built last).
     pub image: &'a str,
-    /// Its mount projects found on this machine.
+    /// Its projects found or made on this machine (a mount's folder, a clone, a copy).
     pub mounts: &'a Mounts,
     /// A wallpaper of its own for this run (opened from an app or a variant with one), over its look's.
     pub wallpaper: Option<&'a Wallpaper>,
@@ -263,15 +266,20 @@ fn wadspace_unit(ws: &Wadspace, run: &Run, m: &Machine, display: Option<&str>) -
     lines.push(format!("Volume=wad-{id}-config:/config:z{idmap}"));
     let mut mounted = false;
     for p in &ws.look.projects {
+        // One not here (another machine's that's offline, a clone that failed) isn't in it.
+        let Some(path) = run.mounts.get(&p.id).filter(|path| mountable(path, &p.as_name)) else { continue };
         match &p.kind {
             ProjectKind::Mount { .. } => {
-                if let Some(path) = run.mounts.get(&p.id).filter(|path| mountable(path, &p.as_name)) {
-                    lines.push(format!("Volume={}:/config/Desktop/{}:rw", esc(path), esc(&p.as_name)));
-                    mounted = true;
-                }
+                lines.push(format!("Volume={}:/config/Desktop/{}:rw", esc(path), esc(&p.as_name)));
+                mounted = true;
             }
-            ProjectKind::Github { .. } | ProjectKind::Copy { .. } => {
-                lines.push(format!("Volume={}/copies/{}:{COPIES_ROOT}/{}:ro,z", esc(&m.state_dir), p.id, p.id));
+            // wadd's clone: labelled for containers when it was made, so no :z (a
+            // relabel would walk the whole tree at every start).
+            ProjectKind::Github { .. } => {
+                lines.push(format!("Volume={}:/config/Desktop/{}:rw", esc(path), esc(&p.as_name)));
+            }
+            ProjectKind::Copy { .. } => {
+                lines.push(format!("Volume={}:{COPIES_ROOT}/{}:ro,z", esc(path), p.id));
             }
         }
     }

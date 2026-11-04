@@ -1,6 +1,7 @@
-//! wadd, from the browser on the machine: the library's keys and web apps,
-//! and the edits the browser makes to them (a site's saved sign-in, "Create
-//! app from this page"). It's wad-wadd-client's (the socket, its
+//! wadd, from the browser on the machine: the library's keys (with their
+//! folders, which the browser's profile for a key keeps its data in) and web
+//! apps, and the edits the browser makes to them (a site's saved sign-in,
+//! "Create app from this page"). It's wad-wadd-client's (the socket, its
 //! `WADD_SOCKET` override, wad-proto's types), made blocking: every call
 //! waits for wadd's answer, so call it off the main thread
 //! (wadbrowser-webkit's `wadd::call` does, and brings the answer back).
@@ -9,7 +10,8 @@
 //! that can't reach it is an `Err` whose `is_unreachable()` says so; the
 //! browser carries on without it.
 
-use wad_model::{BrowserApp, Library, Op, Secret, SecretKind};
+use wad_model::{BrowserApp, Library, Op};
+use wad_proto::signin::WebKey;
 pub use wad_wadd_client::Failure;
 
 /// wadd's API, blocking.
@@ -45,9 +47,10 @@ impl Wadd {
         self.block(self.client.get("/v1/library"))
     }
 
-    /// Its web keys (saved sign-ins for sites), with their sites.
-    pub fn web_keys(&self) -> Result<Vec<Secret>, Failure> {
-        Ok(self.library()?.keys.into_iter().filter(|k| k.kind == SecretKind::Web).collect())
+    /// Its web keys (saved sign-ins for sites), with their sites and their
+    /// folders (`GET /v1/keys/web`: wadd makes a new one's).
+    pub fn web_keys(&self) -> Result<Vec<WebKey>, Failure> {
+        self.block(self.client.get("/v1/keys/web"))
     }
 
     /// The web apps made from pages.
@@ -128,17 +131,23 @@ mod tests {
             {"id": "hunggod", "name": "hunggod", "kind": "web", "createdAt": 1, "sites": ["github.com"]},
             {"id": "vs", "name": "VS Code", "kind": "vscode", "createdAt": 1}
         ], "webApps": [{"id": "calendar", "name": "Calendar", "url": "https://calendar.google.com", "profile": "default"}]}"#;
-        let (dir, t) = fake(vec![lib, r#"{"changed": [], "created": "work", "needsBuild": false}"#]);
+        let keys = r#"[{"id": "hunggod", "name": "hunggod", "sites": ["github.com"], "usedBy": ["dev"],
+            "dir": "/var/lib/wados/keys/hunggod"}]"#;
+        let (dir, t) = fake(vec![lib, keys, r#"{"changed": [], "created": "work", "needsBuild": false}"#]);
         let w = Wadd::at(dir.path().join("wadd.sock"));
+        let apps = w.web_apps().expect("web apps");
+        assert_eq!(apps[0].id, "calendar");
         let keys = w.web_keys().expect("keys");
         assert_eq!(keys.len(), 1);
         assert_eq!(keys[0].sites, ["github.com"]);
+        assert_eq!(keys[0].dir, "/var/lib/wados/keys/hunggod");
         assert_eq!(w.save_web_key("Work", "gitlab.com", None).expect("saved"), "work");
         let asked = t.join().unwrap();
         assert!(asked[0].starts_with("GET /v1/library HTTP/1.1"), "{}", asked[0]);
-        assert!(asked[1].starts_with("POST /v1/ops HTTP/1.1"), "{}", asked[1]);
+        assert!(asked[1].starts_with("GET /v1/keys/web HTTP/1.1"), "{}", asked[1]);
+        assert!(asked[2].starts_with("POST /v1/ops HTTP/1.1"), "{}", asked[2]);
         let body: serde_json::Value =
-            serde_json::from_str(asked[1].split_once(' ').unwrap().1.rsplit_once("HTTP/1.1 ").unwrap().1).unwrap();
+            serde_json::from_str(asked[2].split_once(' ').unwrap().1.rsplit_once("HTTP/1.1 ").unwrap().1).unwrap();
         assert_eq!(
             body,
             serde_json::json!({"op": {"op": "secrets.saveWeb", "name": "Work", "site": "gitlab.com", "existing": null}})

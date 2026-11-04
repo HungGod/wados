@@ -144,6 +144,8 @@ pub enum ActId {
     /// Check for updates (or build it).
     Update,
     Trash,
+    /// Another machine's: copy it to this one.
+    Copy,
 }
 
 /// One of the round buttons under the card in focus (named in its tooltip).
@@ -166,6 +168,47 @@ pub struct Action {
 pub const FOCUS_LATER: &str = "Focus comes in a later phase";
 /// When streams come, for their tooltips.
 pub const STREAMS_LATER: &str = "streams come in phase 7";
+
+/// Another machine's card's buttons (`peer` its name): Launch (it streams
+/// from there: phase 7, so it shows, dimmed), Focus (which runs here: it
+/// asks to copy it first) and Copy here.
+pub fn peer_actions(name: &str, peer: &str) -> Vec<Action> {
+    let act =
+        |id, label, hint: String, icon| Action { id, label, hint, icon, primary: false, danger: false, enabled: true };
+    vec![
+        Action {
+            primary: true,
+            enabled: false,
+            ..act(ActId::Launch, "Launch", format!("Stream {name} here from {peer} ({STREAMS_LATER})"), "play")
+        },
+        act(ActId::Focus, "Focus", format!("Focus runs here: copy {name} to this machine first"), "timer"),
+        act(ActId::Copy, "Copy here", "Copy it to this machine".into(), "download"),
+    ]
+}
+
+/// What a tab with nothing in it says: its title and what to do. `on`:
+/// another machine's name (none: this one's).
+pub fn empty_text(view: &Tab, tags: &[Tag], on: Option<&str>) -> (String, &'static str) {
+    match (view, on) {
+        (Tab::Running, None) => ("Nothing’s running".into(), "Launch one from Recent or a tag."),
+        (Tab::Running, Some(m)) => (format!("Nothing’s running from {m}"), "Launch one from Recent or a tag."),
+        (Tab::Recent, None) => ("Nothing launched yet".into(), "The ones you launch show here."),
+        (Tab::Recent, Some(m)) => (format!("Nothing launched from {m} yet"), "The ones you launch show here."),
+        (t, None) => {
+            (format!("No {} wadspaces yet", t.label(tags)), "Make one on the desktop: right-click it, or Ctrl+N.")
+        }
+        (t, Some(m)) => (format!("No {} wadspaces on {m}", t.label(tags)), "Pick another tag, or this machine."),
+    }
+}
+
+/// What the launcher says while another machine's wadspaces haven't come:
+/// asking it, or why it didn't answer.
+pub fn peer_wait_text(peer: &str, error: Option<&str>) -> (String, String) {
+    match error {
+        None => (format!("Asking {peer} for its wadspaces"), "Over your tailnet.".into()),
+        Some(why) => (format!("{peer} didn’t answer"), format!("{why}. Pick this machine, or try again later.")),
+    }
+}
 
 /// The card's buttons: Launch (or Show), Focus, the two streams, an update
 /// check (or a build) and the Trash. `built`: its image here (none: not said yet).
@@ -340,6 +383,39 @@ mod tests {
         assert_eq!(shown(&Tab::Tag("play".into()), &t), Tab::Tag("play".into()));
         assert_eq!(shown(&Tab::Tag("gone".into()), &t), Tab::Work);
         assert_eq!(shown(&Tab::Running, &t), Tab::Running);
+    }
+
+    #[test]
+    fn another_machines_card_copies_here_and_streams_later() {
+        let a = peer_actions("Pixel Art", "Desk");
+        let names = a.iter().map(|x| x.label).collect::<Vec<_>>();
+        assert_eq!(names, ["Launch", "Focus", "Copy here"]);
+        assert_eq!(a[0].hint, "Stream Pixel Art here from Desk (streams come in phase 7)");
+        assert!(a[0].primary && !a[0].enabled);
+        assert_eq!(a[1].hint, "Focus runs here: copy Pixel Art to this machine first");
+        assert!(a[1].enabled && a[2].enabled);
+        assert_eq!((a[2].id, a[2].hint.as_str(), a[2].icon), (ActId::Copy, "Copy it to this machine", "download"));
+    }
+
+    #[test]
+    fn an_empty_tab_says_whose_it_is() {
+        let t = tags();
+        assert_eq!(empty_text(&Tab::Running, &t, None).0, "Nothing’s running");
+        assert_eq!(empty_text(&Tab::Running, &t, Some("Desk")).0, "Nothing’s running from Desk");
+        assert_eq!(empty_text(&Tab::Recent, &t, Some("Desk")).0, "Nothing launched from Desk yet");
+        assert_eq!(
+            empty_text(&Tab::Work, &t, None),
+            ("No Work wadspaces yet".into(), "Make one on the desktop: right-click it, or Ctrl+N.")
+        );
+        assert_eq!(
+            empty_text(&Tab::Tag("studio".into()), &t, Some("Desk")),
+            ("No Studio wadspaces on Desk".into(), "Pick another tag, or this machine.")
+        );
+        assert_eq!(peer_wait_text("Desk", None).0, "Asking Desk for its wadspaces");
+        assert_eq!(
+            peer_wait_text("Desk", Some("Desk is offline")).1,
+            "Desk is offline. Pick this machine, or try again later."
+        );
     }
 
     #[test]

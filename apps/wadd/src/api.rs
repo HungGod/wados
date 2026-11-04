@@ -72,6 +72,8 @@ pub struct AppState {
     pub net: Arc<dyn Net>,
     /// GitHub ([`crate::api_phase6`]).
     pub accounts: Arc<dyn Accounts>,
+    /// The web keys, for the machine's own browser ([`crate::keys`]).
+    pub keys: crate::keys::MachineKeys,
 }
 
 /// An ApiError as an HTTP response.

@@ -10,13 +10,19 @@ wadd lists them in /run/wadspaces-extra/projects.json (version 2):
     {"version": 2, "projects": [
         {"id": "<id>", "kind": "github", "mount": "Writing", "name": "Writing",
          "repo": "owner/name", "ref": "main", "setup": "npm install", "setupHash": "<hash>"},
-        {"id": "<id>", "kind": "copy", "mount": "Notes", "name": "Notes"},
+        {"id": "<id>", "kind": "copy", "mount": "My Notes", "name": "My Notes"},
         {"id": "<id>", "kind": "mount", "mount": "Thesis", "name": "Thesis"}]}
 
 Each lives at <desktop-dir>/<mount>, inside the wadspace's own /config, so it
 outlasts the container like the rest of its home. A mount is the exception:
 the machine's own folder or file, which wadd mounts there read-write (listed
-only when it's on this machine); nothing here makes, owns or fills it.
+only when it's on this machine); nothing here makes, owns or fills it. So is
+a GitHub project wadd cloned on the machine: its clone, mounted there.
+
+A project's name is any file's name wad-model allows (spaces and any
+script included, at most 255 bytes), but for /, a backslash, a leading dot and
+control characters. An id is wad-model's: a letter or digit, then letters,
+digits, '.', '_' and '-'.
 
 --init (init-wadspaces-workspace, before the desktop): makes each project's
 folder (empty until it's cloned or copied in; a mount is there already) and
@@ -35,8 +41,15 @@ mounted, which goes).
     safe: no uncommitted changes and no commits of its own. Its one-time
     setup command runs once per setupHash.
   - a copy is copied in once from /run/wadspaces-copies/<id> (wadd's copy of
-    the files, read-only), when wadd has it here. A folder that has files
-    already is never copied over.
+    the files, read-only: files/, and done once it's whole), when wadd has it
+    here. A folder that has files already is never copied over. A copy of
+    one file (done's "file" names it) arrives as that file, at
+    <desktop-dir>/<mount>; one there already is never copied over.
+
+For trying it outside a wadspace, these are read from the environment:
+WADSPACES_PROJECTS_MANIFEST, WADSPACES_COPIES, WADSPACES_LAYOUT,
+WADSPACES_APPS, WADSPACES_OPEN (what a launcher runs) and
+WADSPACES_PROJECTS_USER (who owns what --init makes, as root).
 """
 import json
 import os
@@ -45,14 +58,19 @@ import shutil
 import subprocess
 import sys
 import time
+import unicodedata
 
-MANIFEST = "/run/wadspaces-extra/projects.json"
-COPIES = "/run/wadspaces-copies"
-LAYOUT = "/etc/wadspaces/layout.json"
-APPS = "/usr/share/applications"
+MANIFEST = os.environ.get("WADSPACES_PROJECTS_MANIFEST", "/run/wadspaces-extra/projects.json")
+COPIES = os.environ.get("WADSPACES_COPIES", "/run/wadspaces-copies")
+LAYOUT = os.environ.get("WADSPACES_LAYOUT", "/etc/wadspaces/layout.json")
+APPS = os.environ.get("WADSPACES_APPS", "/usr/share/applications")
+OPEN = os.environ.get("WADSPACES_OPEN", "/usr/local/bin/wadspaces-open")
+USER = os.environ.get("WADSPACES_PROJECTS_USER", "abc")
 ICON = "/usr/share/wadspaces/icons/folder.svg"
-MOUNT_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
-ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+# wad-model's check::id (MAX_ID 128).
+ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+# wad-model's check::file_name (MAX_FILE_NAME), in bytes.
+MAX_NAME = 255
 REPO_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}/[A-Za-z0-9._-]{1,100}$")
 REF_RE = re.compile(r"^[\w./-]{1,200}$")
 # git never asks for anything: no terminal here.
@@ -61,6 +79,21 @@ GIT_ENV = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "/bin/false"
 
 def log(msg: str) -> None:
     print(f"[wadspaces-projects] {msg}", file=sys.stderr, flush=True)
+
+
+def good_name(s) -> bool:
+    """A project's name, as a file's in <desktop-dir>: wad-model's check::file_name
+    (no /, no \\, no control characters, at most 255 bytes), and no leading dot
+    (nothing hidden, no . or ..)."""
+    return (
+        isinstance(s, str)
+        and s != ""
+        and len(s.encode("utf-8", "surrogatepass")) <= MAX_NAME
+        and not s.startswith(".")
+        and "/" not in s
+        and "\\" not in s
+        and not any(unicodedata.category(c) == "Cc" for c in s)
+    )
 
 
 def projects() -> list[dict]:
@@ -77,7 +110,7 @@ def projects() -> list[dict]:
         return []
     out = []
     for p in data.get("projects", []):
-        ok = ID_RE.match(str(p.get("id", ""))) and MOUNT_RE.match(str(p.get("mount", ""))) and p["mount"] not in (".", "..")
+        ok = isinstance(p, dict) and ID_RE.match(str(p.get("id", ""))) and good_name(p.get("mount"))
         if p.get("kind") == "github":
             ok = ok and REPO_RE.match(str(p.get("repo", ""))) and (not p.get("ref") or REF_RE.match(str(p["ref"])))
         elif p.get("kind") not in ("copy", "mount"):
@@ -133,12 +166,27 @@ def opens_folders() -> bool:
     return False
 
 
+def exec_arg(arg: str) -> str:
+    """One argument of a desktop entry's Exec, quoted as the spec (and gio,
+    which the desktop launches with) reads it: in double quotes, with ", `, $
+    and \\ escaped by a backslash; every backslash doubled again, as the key
+    file's string escapes it first; % doubled (a field code otherwise)."""
+    quoted = "".join("\\" + c if c in '"`$\\' else c for c in arg)
+    return '"' + quoted.replace("\\", "\\\\").replace("%", "%%") + '"'
+
+
+def entry_text(s: str) -> str:
+    """A desktop entry's string value (Name): a backslash is its escape."""
+    return s.replace("\\", "\\\\")
+
+
 def launcher(project: dict, path: str) -> str:
+    name = project.get("name") if good_name(project.get("name")) else project["mount"]
     return (
         "[Desktop Entry]\n"
         "Type=Application\n"
-        f"Name={project.get('name') or project['mount']}\n"
-        f'Exec=/usr/local/bin/wadspaces-open "{path}"\n'
+        f"Name={entry_text(name)}\n"
+        f"Exec={exec_arg(OPEN)} {exec_arg(path)}\n"
         f"Icon={ICON}\n"
         "Terminal=false\n"
     )
@@ -173,9 +221,12 @@ def init(desktop: str, state: str) -> int:
             if not os.path.exists(path):
                 log(f"{p['mount']} isn't mounted; no launcher")
                 continue
+        elif p["kind"] == "copy" and copied_file(p["id"]):
+            pass  # one file: --sync puts it there, as it is
         elif not os.path.exists(path):
             os.makedirs(path)
-            shutil.chown(path, "abc", "abc")
+            if os.geteuid() == 0:
+                shutil.chown(path, USER, USER)
         if not icons:
             continue
         n = pos.get(p["id"])
@@ -199,7 +250,7 @@ def init(desktop: str, state: str) -> int:
     # Where a mount was: the empty folder its mount point left behind goes.
     mounted = {p["mount"] for p in listed if p["kind"] == "mount"}
     for name in mounted_before - mounted - {p["mount"] for p in listed}:
-        if MOUNT_RE.match(name) and name not in (".", ".."):
+        if good_name(name):
             try:
                 os.rmdir(os.path.join(desktop, name))
             except OSError:
@@ -239,6 +290,41 @@ def ready_copy(pid: str) -> str | None:
     """wadd's copy of a project's files, when it's here whole."""
     src = os.path.join(COPIES, pid)
     return os.path.join(src, "files") if os.path.isfile(os.path.join(src, "done")) else None
+
+
+def copied_file(pid: str) -> str | None:
+    """wadd's copy of one file, when that's what it is: its done names it
+    ({"file": "<its name in files/>"}). A folder's copy names none."""
+    files = ready_copy(pid)
+    if not files:
+        return None
+    try:
+        with open(os.path.join(COPIES, pid, "done")) as f:
+            done = json.load(f)
+    except (OSError, ValueError):
+        return None
+    name = done.get("file") if isinstance(done, dict) else None
+    if not isinstance(name, str) or name in ("", ".", "..") or "/" in name:
+        return None
+    path = os.path.join(files, name)
+    return path if os.path.isfile(path) else None
+
+
+def place_file(src: str, dest: str) -> None:
+    """src (a file) at dest (missing, or an empty folder an older --init
+    made there): copied beside it, then put in place."""
+    tmp = os.path.join(os.path.dirname(dest), f".{os.path.basename(dest)}.copying")
+    shutil.rmtree(tmp, ignore_errors=True)
+    if os.path.lexists(tmp):
+        os.remove(tmp)
+    r = subprocess.run(["cp", "-a", "--no-preserve=ownership", "--", src, tmp], capture_output=True, text=True)
+    if r.returncode != 0:
+        if os.path.lexists(tmp):
+            os.remove(tmp)
+        raise OSError(r.stderr.strip() or "cp failed")
+    if os.path.isdir(dest) and not os.path.islink(dest):
+        os.rmdir(dest)
+    os.rename(tmp, dest)
 
 
 def clone(p: dict, path: str) -> bool:
@@ -335,7 +421,14 @@ def sync(desktop: str, state: str) -> int:
                 if not src:
                     log(f"{p['mount']}: its files aren't on this machine yet")
                     continue
-                if empty(path):
+                one = copied_file(p["id"])
+                if one:
+                    if not os.path.lexists(path) or (os.path.isdir(path) and not os.path.islink(path) and empty(path)):
+                        place_file(one, path)
+                        log(f"{p['mount']}: copied in")
+                    else:
+                        log(f"{p['mount']} is there already; not copied over")
+                elif empty(path):
                     copy_in(src, path)
                     log(f"{p['mount']}: copied in")
                 else:

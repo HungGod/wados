@@ -78,9 +78,9 @@ if [[ -r "${GITHUB_TOKEN_FILE}" ]]; then
 elif [[ -n "${GITHUB_TOKEN:-}" ]]; then
     log "github token available from \$GITHUB_TOKEN"
 else
-    log "no github token at ${GITHUB_TOKEN_FILE} and \$GITHUB_TOKEN is empty —"
-    log "git push to private repos will fail. Create the secret with:"
-    log "  printf '%s' '<fine-grained PAT>' | podman secret create github_token -"
+    log "no github token at ${GITHUB_TOKEN_FILE} and \$GITHUB_TOKEN is empty:"
+    log "git push to private repos will fail. Sign in to GitHub on the machine"
+    log "(Settings ▸ Accounts ▸ GitHub), then open this wadspace again."
 fi
 
 asabc git config --global credential.https://github.com.helper "${CRED_HELPER}"

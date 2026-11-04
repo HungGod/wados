@@ -11,6 +11,12 @@
 //! menu: Open (Show), Open in window, Stream, Edit in the Builder (on the
 //! desktop, with its group), Duplicate, Move to Trash.
 //!
+//! The machine at the bar's start picks whose wadspaces show: this one's,
+//! or another of mine that's online (`peers.rs`; they come from it, over the
+//! tailnet). Another machine's cards say whose they are, and their buttons
+//! are Launch (it streams from there: phase 7), Focus (it runs here, so it
+//! asks to copy it first) and Copy here; their menu copies it too.
+//!
 //! The keys (nav.rs): ←/→ the cards; ↑ the bar (←/→ along it, a tab shows
 //! at once; ← past the first is the machine); ↓ the buttons, ↓ again the
 //! desktop; Tab/⇧Tab the next or last tab; PageDown (machine.rs's) the
@@ -25,13 +31,13 @@
 //!
 //! `wadsctl home` says where things are (and `moving=` while the row or the
 //! picture behind is still moving); `wadsctl home key <key>…`, `tab <id>`,
-//! `focus <id>` and `menu <id>` (a card's, as a right-click) drive it;
-//! `wadsctl home layout` gives its pieces' bounds, in points.
+//! `focus <id>`, `menu <id>` (a card's, as a right-click), `machine` (its
+//! list) and `machine <id>` drive it; `wadsctl home layout` gives its
+//! pieces' bounds, in points.
 //!
-//! Not here yet: other machines (phase 6: the picker has only this one),
-//! streams (phase 7) and Focus (later), whose buttons show, dimmed, their
-//! tooltips saying when (and Stream in a card's right-click menu); drops
-//! on a card.
+//! Not here yet: streams (phase 7) and Focus (later), whose buttons show,
+//! dimmed, their tooltips saying when (and Stream in a card's right-click
+//! menu); drops on a card.
 
 mod backdrop;
 mod bar;
@@ -55,6 +61,7 @@ use wad_model::{Built, SessionDisplay, Wadspace, Wallpaper};
 use wad_proto::Level;
 
 use crate::machine::Page;
+use crate::peers::{self, Choice};
 use crate::shell::Shell;
 use crate::store::{Change, Store};
 
@@ -102,6 +109,8 @@ pub struct Launcher {
 struct State {
     /// The tab picked (none yet: the one it opens on, worked out afresh).
     view: Option<Tab>,
+    /// Another machine picked (none: this one).
+    machine: Option<String>,
     /// The card in focus, and its place (kept when it goes: the next one takes it).
     focus: Option<String>,
     focus_at: usize,
@@ -121,7 +130,11 @@ struct Shown {
     at: usize,
     actions: Vec<Action>,
     layout: Option<Layout>,
+    /// The machine shown: its name, and its id.
     machine: String,
+    machine_id: String,
+    /// The machines it can show (this one first).
+    machines: Vec<Choice>,
 }
 
 impl Shown {
@@ -217,11 +230,23 @@ impl Launcher {
         self.press(k)
     }
 
-    /// Each time the page is entered: the keys are on the cards.
+    /// Each time the page is entered: the keys are on the cards (another
+    /// machine's wadspaces are asked for again, if they're old).
     pub fn shown(&self) {
         self.st.borrow_mut().nav.shown();
         self.hold_focus();
         self.refresh();
+        let peer = self.peer_shown();
+        if let Some(p) = peer {
+            peers::refresh(&self.shell, &p);
+        }
+    }
+
+    /// Another machine, if it's the one shown.
+    fn peer_shown(&self) -> Option<String> {
+        let st = self.st.borrow();
+        let s = &st.shown;
+        s.machines.iter().find(|c| c.id == s.machine_id && !c.here).map(|c| c.id.clone())
     }
 
     /// The chrome's keyboard focus on the launcher, and back on it whenever
@@ -347,13 +372,27 @@ impl Launcher {
     fn refresh(&self) {
         self.queued.set(false);
         let store = &self.shell.store;
-        let live = store.live();
+        let this_id = store.machine_id();
+        let this_name = store.machine().map(|m| m.name).unwrap_or_else(|| "This machine".into());
+        let machines = peers::machines(&this_id, &this_name, &store.peers());
+        // Another machine picked shows while it's online; then this one again.
+        let picked = self.st.borrow().machine.clone();
+        let choice =
+            picked.and_then(|p| machines.iter().find(|c| c.id == p).cloned()).unwrap_or_else(|| machines[0].clone());
+        let (live, waiting) = if choice.here {
+            (store.live(), None)
+        } else {
+            let got = store.peer_spaces(&choice.id).unwrap_or_default();
+            let waiting = (got.at == 0).then(|| model::peer_wait_text(&choice.name, got.error.as_deref()));
+            (got.list, waiting)
+        };
         let tags = store.library().tags.clone();
-        let spaces: Vec<Space> = live.iter().map(|x| space_of(store, x, &tags)).collect();
+        let spaces: Vec<Space> = live.iter().map(|x| space_of(store, x, &tags, choice.here)).collect();
         let tabs = model::tabs(&tags);
         let (w, h) = self.shell.size();
         let layout = Layout::new(w as f64, h as f64);
-        let machine = store.machine().map(|m| m.name).unwrap_or_else(|| "This machine".into());
+        let machine = choice.name.clone();
+        let machine_id = choice.id.clone();
 
         let (was, shown, nav) = {
             let mut st = self.st.borrow_mut();
@@ -370,11 +409,28 @@ impl Launcher {
                 .focus
                 .as_ref()
                 .and_then(|f| live.iter().find(|x| &x.id == f))
-                .map(|x| model::actions(&x.name, store.is_running(&x.id), store.build(&x.id).map(|b| b.state.built)))
+                .map(|x| {
+                    if choice.here {
+                        model::actions(&x.name, store.is_running(&x.id), store.build(&x.id).map(|b| b.state.built))
+                    } else {
+                        model::peer_actions(&x.name, &choice.name)
+                    }
+                })
                 .unwrap_or_default();
             st.nav.settle(actions.len());
             let counts = tabs.iter().map(|t| model::spaces_of(t, &spaces).len()).collect();
-            let shown = Shown { tabs, counts, view: Some(view), list, at, actions, layout: Some(layout), machine };
+            let shown = Shown {
+                tabs,
+                counts,
+                view: Some(view),
+                list,
+                at,
+                actions,
+                layout: Some(layout),
+                machine,
+                machine_id,
+                machines: machines.clone(),
+            };
             let was = std::mem::replace(&mut st.shown, shown.clone());
             (was, shown, st.nav)
         };
@@ -392,15 +448,21 @@ impl Launcher {
             .map(|(t, &count)| TabView { tab: t.clone(), label: t.label(&tags), count })
             .collect();
         let view = shown.view.clone().unwrap_or(Tab::Work);
-        self.bar.set(&shown.machine, &views, &view, (nav.zone == Zone::Top).then_some(nav.top), &self.on_tab());
+        self.bar.set_machine(&shown.machine, choice.icon, machines.len() > 1);
+        self.bar.set(&views, &view, (nav.zone == Zone::Top).then_some(nav.top), &self.on_tab());
 
         // The cards, the buttons, the picture behind.
-        self.sync_cards(&was, &shown, &live, nav);
+        let badge = (!choice.here).then(|| {
+            let kind = store.peer(&choice.id).map(|p| p.peer.kind).unwrap_or(wad_model::PeerKind::Desktop);
+            (peers::kind_icon(kind), choice.name.clone())
+        });
+        self.sync_cards(&was, &shown, &live, nav, badge);
         self.buttons.set(&shown.actions, (nav.zone == Zone::Actions).then_some(nav.act), &self.on_act());
         let focused = shown.list.get(shown.at).and_then(|id| live.iter().find(|x| &x.id == id));
         let picture = focused.map(|x| x.look.wallpaper.clone()).unwrap_or_else(wad_model::wallpapers::default_desktop);
         self.backdrop.set(&picture, layout.w, layout.h);
-        self.empty.set(&view, &tags, shown.list.is_empty());
+        let on = (!choice.here).then_some(choice.name.as_str());
+        self.empty.set(&view, &tags, shown.list.is_empty(), on, waiting);
 
         // Where the pieces go.
         let l = layout;
@@ -413,7 +475,7 @@ impl Launcher {
         let spring = self.pos.borrow().clone();
         if let Some(s) = spring {
             let at = shown.at as f64;
-            if was.view != shown.view || was.layout != shown.layout {
+            if was.view != shown.view || was.layout != shown.layout || was.machine_id != shown.machine_id {
                 s.jump(at);
             } else if s.target() != at {
                 s.to(at);
@@ -423,7 +485,14 @@ impl Launcher {
         }
     }
 
-    fn sync_cards(&self, was: &Shown, shown: &Shown, live: &[Wadspace], nav: Nav) {
+    fn sync_cards(
+        &self,
+        was: &Shown,
+        shown: &Shown,
+        live: &[Wadspace],
+        nav: Nav,
+        machine: Option<(&'static str, String)>,
+    ) {
         let side = shown.layout.map(|l| l.side as i32).unwrap_or(380);
         let mut cards = self.cards.borrow_mut();
         let mut old: HashMap<String, Rc<Card>> = cards.drain(..).collect();
@@ -434,7 +503,7 @@ impl Launcher {
                 Some(c) => c,
                 None => self.make_card(id, side),
             };
-            card.set(&card_data(&self.shell.store, x));
+            card.set(&card_data(&self.shell.store, x, machine.clone()));
             card.set_side(side);
             next.push((id.clone(), card));
         }
@@ -549,7 +618,19 @@ impl Launcher {
         tracing::debug!(?k, ?done, "launcher key");
         let Some(done) = done else { return false };
         match done {
-            Do::Moved | Do::NextMachine => self.refresh(),
+            Do::Moved => self.refresh(),
+            Do::NextMachine => {
+                let next = {
+                    let st = self.st.borrow();
+                    let m = &st.shown.machines;
+                    let i = m.iter().position(|c| c.id == st.shown.machine_id).unwrap_or(0);
+                    m.get((i + 1) % m.len().max(1)).map(|c| c.id.clone())
+                };
+                match next {
+                    Some(id) => self.pick_machine(&id),
+                    None => self.refresh(),
+                }
+            }
             Do::Pick(i) => {
                 let tab = self.st.borrow().shown.tabs.get(i).cloned();
                 if let Some(t) = tab {
@@ -576,6 +657,27 @@ impl Launcher {
             Do::Desktop => self.shell.go(Page::Desktop),
         }
         true
+    }
+
+    /// Shows `id`'s wadspaces (of the tab picked), from its first; another
+    /// machine's are asked for again if they're old.
+    fn pick_machine(&self, id: &str) {
+        let peer = {
+            let mut st = self.st.borrow_mut();
+            let here = st.shown.machines.iter().find(|c| c.id == id).is_none_or(|c| c.here);
+            let want = (!here).then(|| id.to_string());
+            if st.machine != want {
+                st.machine = want.clone();
+                st.focus = None;
+                st.focus_at = 0;
+                st.nav.act = 0;
+            }
+            want
+        };
+        self.refresh();
+        if let Some(p) = peer {
+            peers::refresh(&self.shell, &p);
+        }
     }
 
     /// Shows `tab`'s wadspaces, from its first.
@@ -614,8 +716,19 @@ impl Launcher {
         self.st.borrow().focus.clone()
     }
 
-    /// Opens it full screen (built first, if it has to be); one running is shown so.
+    /// Opens it full screen (built first, if it has to be); one running is
+    /// shown so. Another machine's would stream from there (phase 7).
     fn open(&self, id: &str) {
+        if let Some(p) = self.peer_shown() {
+            let name = self.shell.store.peer_wadspace(id).map(|(_, x)| x.name).unwrap_or_else(|| id.to_string());
+            let from = self.shell.store.machine_name(&p).unwrap_or_default();
+            self.shell.toast(
+                Level::Info,
+                &format!("Streaming {name} here from {from} comes in phase 7: Copy here opens it on this machine"),
+                None,
+            );
+            return;
+        }
         self.shell.open(id, SessionDisplay::Screen);
     }
 
@@ -637,8 +750,37 @@ impl Launcher {
                 }
             }
             ActId::Trash => self.shell.op(Op::Trash { ws: id }, |_| {}),
-            ActId::Focus | ActId::Stream | ActId::Private => {}
+            // Another machine's cards are its wadspaces' keys (`<peer>:<id>`).
+            ActId::Copy => {
+                if self.peer_shown().is_some() {
+                    peers::copy_here(&self.shell, &id);
+                }
+            }
+            ActId::Focus => {
+                if let Some(p) = self.peer_shown() {
+                    self.focus_elsewhere(&p, &id);
+                }
+            }
+            ActId::Stream | ActId::Private => {}
         }
+    }
+
+    /// Focus on another machine's (`id`: its key): it runs here, so it asks
+    /// to copy it first (the spike's).
+    fn focus_elsewhere(&self, peer: &str, id: &str) {
+        let store = &self.shell.store;
+        let name = store.peer_wadspace(id).map(|(_, x)| x.name).unwrap_or_else(|| id.to_string());
+        let from = store.machine_name(peer).unwrap_or_else(|| "another machine".into());
+        let (shell, key) = (self.shell.clone(), id.to_string());
+        crate::overlays::confirm(crate::overlays::Confirm {
+            title: format!("Focus in {name}?"),
+            icon: "timer",
+            body: format!(
+                "Focus runs a wadspace on this machine, and {name} lives on {from}. Copy it here, then focus in the copy."
+            ),
+            ok: "Copy it here".into(),
+            run: Rc::new(move || peers::copy_here(&shell, &key)),
+        });
     }
 
     /// Built: a build of what it's made of now, which says it's up to date when there's nothing to do.
@@ -678,14 +820,23 @@ impl Launcher {
         }
     }
 
-    /// The machine's list: only this one until peers come (phase 6).
+    /// The machines' list: this one, and my others that are online.
     fn open_menu(&self) {
         let m = &self.bar.machine;
-        let name = self.st.borrow().shown.machine.clone();
-        let items = vec![
-            Item::Heading("Wadspaces on".into()),
-            Item::Row(Row::new("house", format!("{name} (this one)"), || {}).checked()),
-        ];
+        let (machines, at) = {
+            let st = self.st.borrow();
+            (st.shown.machines.clone(), st.shown.machine_id.clone())
+        };
+        let mut items = vec![Item::Heading("Wadspaces on".into())];
+        for c in machines {
+            let (w, id) = (self.weak(), c.id.clone());
+            let row = Row::new(c.icon, peers::choice_label(&c), move || {
+                if let Some(m) = w.upgrade() {
+                    m.pick_machine(&id);
+                }
+            });
+            items.push(Item::Row(if c.id == at { row.checked() } else { row }));
+        }
         let rect = gdk::Rectangle::new(0, 0, m.width(), m.height());
         m.add_css_class("open");
         let machine = m.clone();
@@ -694,6 +845,9 @@ impl Launcher {
 
     /// A card's right-click menu (the spike's wadspaceMenu, what works today), at (`x`, `y`) on it.
     fn card_menu(&self, id: &str, card: &Rc<Card>, x: f64, y: f64) {
+        if let Some(p) = self.peer_shown() {
+            return self.peer_card_menu(&p, id, card, x, y);
+        }
         let Some(ws) = self.shell.store.wadspace(id) else { return };
         let running = self.shell.store.is_running(id);
         let shell = &self.shell;
@@ -738,6 +892,49 @@ impl Launcher {
             Item::Line,
             Item::Row(Row::new("trash", "Move to Trash", trash).danger()),
         ]);
+        let p = card
+            .root
+            .compute_point(&self.stage, &gtk::graphene::Point::new(x as f32, y as f32))
+            .unwrap_or_else(|| gtk::graphene::Point::new(x as f32, y as f32));
+        card.root.add_css_class("menu-for");
+        let root = card.root.clone();
+        self.show_menu(
+            menu::popover(&self.stage, items),
+            gdk::Rectangle::new(p.x() as i32, p.y() as i32, 1, 1),
+            move || root.remove_css_class("menu-for"),
+        );
+    }
+
+    /// Another machine's card's menu (the spike's wadspaceMenu, not here):
+    /// streams from there (phase 7), the Builder (to see what's in it), Copy to
+    /// this machine (from there: it has to be online).
+    fn peer_card_menu(&self, peer: &str, id: &str, card: &Rc<Card>, x: f64, y: f64) {
+        let Some((_, ws)) = self.shell.store.peer_wadspace(id) else { return };
+        let shell = &self.shell;
+        let at = shell.store.machine_name(peer).unwrap_or_else(|| "another machine".into());
+        let later = format!("Privately, over your tailnet: {}", model::STREAMS_LATER);
+        let show = {
+            let (shell, id) = (shell.clone(), id.to_string());
+            move || {
+                shell.go(Page::Desktop);
+                if let Some(b) = shell.builder() {
+                    b.open(&id, None);
+                }
+            }
+        };
+        let copy = {
+            let (shell, key) = (shell.clone(), id.to_string());
+            move || peers::copy_here(&shell, &key)
+        };
+        let items = vec![
+            Item::Heading(format!("{} · on {at}", ws.name)),
+            Item::Row(Row::new("monitor-play", format!("Stream from {at}"), || {}).later(later.clone())),
+            Item::Row(Row::new("app-window", "Stream in a window", || {}).later(later)),
+            Item::Row(Row::new("blocks", "Show in the Builder", show).hint("What’s in it: copy it here to change it")),
+            Item::Row(Row::new("download", "Copy to this machine", copy).hint(format!("From {at}, while it’s online"))),
+            Item::Line,
+            Item::Row(Row::new("trash", "Move to Trash", || {}).later(format!("It lives on {at}"))),
+        ];
         let p = card
             .root
             .compute_point(&self.stage, &gtk::graphene::Point::new(x as f32, y as f32))
@@ -817,6 +1014,12 @@ impl Launcher {
                 }
             }
             ["layout"] => self.layout(),
+            ["menu", "close"] => {
+                if let Some(m) = self.menu.borrow().clone() {
+                    m.popdown();
+                }
+                "ok".into()
+            }
             ["menu", id] => {
                 let card = self.cards.borrow().iter().find(|(x, _)| x == id).map(|(_, c)| c.clone());
                 match card {
@@ -832,7 +1035,31 @@ impl Launcher {
                 let open = self.menu.borrow().as_ref().is_some_and(|m| m.is_visible());
                 format!("ok {}", if open { "open" } else { "closed" })
             }
-            _ => "error home [state] | key <left|right|up|down|enter|space|esc|tab|backtab>… | tab <id> | focus <id> | layout | menu [<id>: its card's, as a right-click]".into(),
+            ["machine"] => {
+                self.open_menu();
+                "ok".into()
+            }
+            ["machine", id] => {
+                if !self.st.borrow().shown.machines.iter().any(|c| c.id == *id) {
+                    return format!("error {id:?} isn't one to pick (this machine, or mine online)");
+                }
+                self.pick_machine(id);
+                self.state()
+            }
+            ["act", n] => match n.parse::<usize>() {
+                Ok(i) if i < self.st.borrow().shown.actions.len() => {
+                    {
+                        let mut st = self.st.borrow_mut();
+                        st.nav.zone = Zone::Actions;
+                        st.nav.act = i;
+                    }
+                    self.refresh();
+                    self.act(i);
+                    self.state()
+                }
+                _ => format!("error no button {n}"),
+            },
+            _ => "error home [state] | key <left|right|up|down|enter|space|esc|tab|backtab>… | tab <id> | focus <id> | layout | menu [<id>: its card's, as a right-click | close] | machine [<id>] | act <n>".into(),
         }
     }
 
@@ -844,7 +1071,9 @@ impl Launcher {
         let actions: Vec<String> = s
             .actions
             .iter()
-            .map(|a| if a.enabled { a.label.to_lowercase() } else { format!("{}(off)", a.label.to_lowercase()) })
+            .map(|a| a.label.to_lowercase().replace(' ', "-"))
+            .zip(s.actions.iter())
+            .map(|(l, a)| if a.enabled { l } else { format!("{l}(off)") })
             .collect();
         let backdrop = match self.backdrop.wallpaper() {
             Some(Wallpaper::Image { value }) => value,
@@ -852,14 +1081,22 @@ impl Launcher {
             _ => "none".into(),
         };
         format!(
-            "ok tab={} zone={} top={} act={} at={} focus={} machine={:?} tabs={} cards={} actions={} backdrop={} moving={}",
+            "ok tab={} zone={} top={} act={} at={} focus={} busy={} machine={:?} machine_id={} machines={} tabs={} cards={} actions={} backdrop={} moving={}",
             s.view.as_ref().map(|v| v.id()).unwrap_or_default(),
             st.nav.zone.id(),
             st.nav.top,
             st.nav.act,
             s.at,
             st.focus.as_deref().unwrap_or("none"),
+            self.cards
+                .borrow()
+                .get(s.at)
+                .and_then(|(_, c)| c.busy())
+                .map(|b| format!("{b:.2}"))
+                .unwrap_or_else(|| "none".into()),
             s.machine,
+            s.machine_id,
+            s.machines.iter().map(|c| c.id.as_str()).collect::<Vec<_>>().join(","),
             tabs.join(","),
             s.list.join(","),
             actions.join(","),
@@ -894,9 +1131,10 @@ impl Launcher {
     }
 }
 
-/// One of the machine's wadspaces, for the tabs.
-fn space_of(store: &Store, x: &Wadspace, tags: &[wad_model::Tag]) -> Space {
-    let running = store.is_running(&x.id);
+/// One of the machine's wadspaces, for the tabs (`here`: this machine's;
+/// another's runs aren't known here).
+fn space_of(store: &Store, x: &Wadspace, tags: &[wad_model::Tag], here: bool) -> Space {
+    let running = here && store.is_running(&x.id);
     // A run's start is a launch too (wadd doesn't set lastLaunched yet).
     let since = store.run(&x.id).filter(|_| running).map(|r| r.state.since).unwrap_or(0);
     Space {
@@ -908,7 +1146,22 @@ fn space_of(store: &Store, x: &Wadspace, tags: &[wad_model::Tag]) -> Space {
     }
 }
 
-fn card_data(store: &Store, x: &Wadspace) -> CardData {
+fn card_data(store: &Store, x: &Wadspace, machine: Option<(&'static str, String)>) -> CardData {
+    if machine.is_some() {
+        // Another machine's: what it's made of, and a ring while it copies here.
+        let copying = store_copying(store, &x.id);
+        return CardData {
+            name: x.name.clone(),
+            picture: wad_model::look::icon_picture_of(x).clone(),
+            icon: wad_model::look::icon_of(x),
+            apps: apps_of(x),
+            running: false,
+            built: None,
+            failed: false,
+            busy: copying,
+            machine,
+        };
+    }
     let state = store.tile_state(&x.id);
     CardData {
         name: x.name.clone(),
@@ -919,7 +1172,13 @@ fn card_data(store: &Store, x: &Wadspace) -> CardData {
         built: store.build(&x.id).map(|b| b.state.built),
         failed: state.failed,
         busy: state.busy,
+        machine: None,
     }
+}
+
+/// How far a copy of another machine's `ws` here has got, while one runs.
+fn store_copying(store: &Store, ws: &str) -> Option<f64> {
+    store.copying(ws)
 }
 
 /// What a tab with nothing in it says.
@@ -949,18 +1208,29 @@ impl Empty {
         Self { root, title, body, recent }
     }
 
-    fn set(&self, view: &Tab, tags: &[wad_model::Tag], empty: bool) {
+    /// `on`: another machine's name (none: this one's); `waiting`: its
+    /// wadspaces haven't come (what it says meanwhile).
+    fn set(
+        &self,
+        view: &Tab,
+        tags: &[wad_model::Tag],
+        empty: bool,
+        on: Option<&str>,
+        waiting: Option<(String, String)>,
+    ) {
         self.root.set_visible(empty);
         if !empty {
             return;
         }
-        let (title, body) = match view {
-            Tab::Running => ("Nothing’s running".to_string(), "Launch one from Recent or a tag."),
-            Tab::Recent => ("Nothing launched yet".to_string(), "The ones you launch show here."),
-            t => (format!("No {} wadspaces yet", t.label(tags)), "Make one on the desktop: right-click it, or Ctrl+N."),
+        let (title, body, recent) = match waiting {
+            Some((t, b)) => (t, b, false),
+            None => {
+                let (t, b) = model::empty_text(view, tags, on);
+                (t, b.to_string(), *view == Tab::Running)
+            }
         };
         self.title.set_label(&title);
-        self.body.set_label(body);
-        self.recent.set_visible(*view == Tab::Running);
+        self.body.set_label(&body);
+        self.recent.set_visible(recent);
     }
 }

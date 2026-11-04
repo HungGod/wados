@@ -15,7 +15,10 @@
 #   popup     a popup keeps window.opener: it posts to its opener and closes,
 #             and its tab goes
 #   key       a page on a key's site moves into the key's session, shown by
-#             a cookie only that session has (WADBROWSER_SIGNINS)
+#             a cookie only that session has (WADBROWSER_SIGNINS); on the
+#             machine (no signins.json) the keys and their folders are wadd's
+#             (a fake wadd on WADD_SOCKET: tools/wadbrowser-e2e-wadd.py), and
+#             a tab on the key's site uses that folder's cookies
 #   headers   DNT and Sec-GPC on a load the browser starts
 #   download  saved under WebKit's suggested name; no error page for the
 #             load it interrupted
@@ -67,9 +70,14 @@ fi
 
 python3 "$W/tools/wadbrowser-e2e-server.py" "$PORT" "$OUT/server.log" &
 http_pid=$!
+wadd_pid=
 cleanup() {
   kill "$http_pid" 2>/dev/null
   wait "$http_pid" 2>/dev/null
+  if [ -n "$wadd_pid" ]; then
+    kill "$wadd_pid" 2>/dev/null
+    wait "$wadd_pid" 2>/dev/null
+  fi
   # What the runs' buses started (portals) and left: found by their HOME.
   for d in /proc/[0-9]*; do
     if tr '\0' '\n' <"$d/environ" 2>/dev/null | grep -q "^HOME=$OUT/"; then
@@ -241,6 +249,36 @@ else
   fail "key: /show didn't load without keys"
 fi
 quit
+# On the machine: no signins.json, and wadd (a fake one) has k1 for
+# localhost, its folder the same one (`HOOK(keys-on-machine)`).
+# (Its socket in the session's runtime dir: OUT may be too long a path for one.)
+WADD=$hl_rt/e2e-wadd.sock
+printf '[{"id": "k1", "name": "Key one", "sites": ["localhost"], "usedBy": [], "dir": "%s"}]\n' "$KEY" >"$OUT/wadd-keys.json"
+python3 -I "$W/tools/wadbrowser-e2e-wadd.py" "$WADD" "$OUT/wadd-keys.json" "$OUT/wadd.log" &
+wadd_pid=$!
+for _ in $(seq 50); do [ -S "$WADD" ] && break; sleep 0.1; done
+# Run 4: a default tab goes to the key's site by a page's own navigation.
+run key-4 keyhome WADD_SOCKET="$WADD" -- "$S/go?to=$L/show"
+if wait_for $'^moved\tdefault\tsignin-k1\t' "$T"; then pass "key (machine): the tab moved into wadd's key"; else fail "key (machine): the tab didn't move"; fi
+if wait_for $'^title\tsignin-k1\tcookies: .*keycookie=k1' "$T"; then
+  pass "key (machine): the key's folder's cookie is there"
+else
+  fail "key (machine): no key cookie ($(grep $'^title' "$LOG" | tail -2 | tr '\n' ' '))"
+fi
+quit
+# Run 5: the key's site is the first page, maybe before wadd's keys come: it moves once they do.
+run key-5 keyhome WADD_SOCKET="$WADD" -- "$L/show"
+if wait_for $'^title\tsignin-k1\tcookies: .*keycookie=k1' "$T"; then
+  pass "key (machine): a first page on the key's site is in the key's profile"
+else
+  fail "key (machine): the first page isn't in the key's profile ($(grep -E $'^(title|moved)' "$LOG" | tail -3 | tr '\n' ' '))"
+fi
+quit
+grep -q '^GET /v1/keys/web' "$OUT/wadd.log" && pass "key (machine): the keys came from wadd" || fail "key (machine): wadd wasn't asked for its keys"
+kill "$wadd_pid" 2>/dev/null
+wait "$wadd_pid" 2>/dev/null
+wadd_pid=
+rm -f "$WADD"
 
 fi
 

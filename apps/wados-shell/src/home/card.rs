@@ -1,8 +1,9 @@
 //! One of the carousel's square cards (Home.svelte's `.card`): the
 //! wadspace's picture, cut out as its icon says (glass when it has none),
 //! shaded toward the bottom, its badges at the top left (Running, Not built
-//! yet, Rebuilds, Didn't open), a ring while it builds or starts, and at the
-//! bottom its apps and its name. The launcher scales it (62% beside the one
+//! yet, Rebuilds, Didn't open; another machine's, its machine), a ring
+//! while it builds, starts or copies here, and at the bottom its apps and
+//! its name. The launcher scales it (62% beside the one
 //! in focus) and rings the one in focus.
 
 use std::cell::{Cell, RefCell};
@@ -52,6 +53,8 @@ pub struct CardData {
     pub failed: bool,
     /// Building or starting: how far (0–1).
     pub busy: Option<f64>,
+    /// Another machine's: its glyph and name.
+    pub machine: Option<(&'static str, String)>,
 }
 
 pub struct Card {
@@ -61,6 +64,9 @@ pub struct Card {
     unbuilt: gtk::Box,
     unbuilt_label: gtk::Label,
     failed: gtk::Label,
+    machine: gtk::Box,
+    machine_icon: wad_gtk::Icon,
+    machine_name: gtk::Label,
     busy: gtk::Box,
     ring: gtk::DrawingArea,
     ring_value: Rc<Cell<f64>>,
@@ -97,9 +103,16 @@ impl Card {
         unbuilt.append(&unbuilt_label);
         let failed =
             gtk::Label::builder().label("Didn’t open").css_classes(["home-badge", "failed"]).visible(false).build();
+        let machine = gtk::Box::builder().spacing(4).css_classes(["home-badge", "machine"]).visible(false).build();
+        let machine_icon = wad_gtk::Icon::new("monitor", 11);
+        machine_icon.set_valign(gtk::Align::Center);
+        machine.append(&machine_icon);
+        let machine_name = gtk::Label::new(None);
+        machine.append(&machine_name);
         badges.append(&running);
         badges.append(&unbuilt);
         badges.append(&failed);
+        badges.append(&machine);
         root.add_overlay(&badges);
 
         let ring_value = Rc::new(Cell::new(0.0));
@@ -144,6 +157,9 @@ impl Card {
             unbuilt,
             unbuilt_label,
             failed,
+            machine,
+            machine_icon,
+            machine_name,
             busy,
             ring,
             ring_value,
@@ -204,10 +220,27 @@ impl Card {
         self.unbuilt_label.set_label(unbuilt.unwrap_or(""));
         self.unbuilt.set_visible(unbuilt.is_some() && !d.failed);
         self.failed.set_visible(d.failed);
+        match &d.machine {
+            Some((icon, name)) => {
+                self.machine_icon.set(icon);
+                self.machine_name.set_label(name);
+                self.machine.set_visible(true);
+                self.root.add_css_class("remote");
+            }
+            None => {
+                self.machine.set_visible(false);
+                self.root.remove_css_class("remote");
+            }
+        }
         self.busy.set_visible(d.busy.is_some());
         self.ring_value.set(d.busy.unwrap_or(0.0));
         self.ring.queue_draw();
         *self.data.borrow_mut() = Some(d.clone());
+    }
+
+    /// How far what it's busy with has got (building, starting, copying here), if it is.
+    pub fn busy(&self) -> Option<f64> {
+        self.data.borrow().as_ref().and_then(|d| d.busy)
     }
 
     /// The one in focus (`keys`: and the keys are on the cards).

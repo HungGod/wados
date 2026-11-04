@@ -20,6 +20,9 @@ wad-proto = { path = "crates/wad-proto" }
 wad-wadd-client = { path = "crates/wad-wadd-client" }
 wad-podman = { path = "crates/wad-podman" }
 wad-systemd = { path = "crates/wad-systemd" }
+wad-tailscale = { path = "crates/wad-tailscale" }
+wad-github = { path = "crates/wad-github" }
+wad-git = { path = "crates/wad-git" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
@@ -34,6 +37,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 clap = { version = "4", features = ["derive"] }
 libc = "0.2"
 tempfile = "3"
+# A mock GitHub for wad-github's and wadd's tests (never the real one).
+wiremock = "0.6"
 async-channel = "2"
 reqwest = { version = "0.13", default-features = false, features = ["json", "form", "query", "rustls"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "tower-log"] }

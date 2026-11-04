@@ -1,6 +1,6 @@
 //! Phase 6's routes (the tailnet, peers, GitHub: api_phase6.rs) through the
 //! socket (wad-wadd-client's typed calls): each answers on the sample
-//! (fake_phase6.rs), and the machine's answer 501 until they're made.
+//! (fake_phase6.rs); and the machine's tailnet when Tailscale is off.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -219,28 +219,23 @@ async fn a_new_watcher_gets_the_tailnet_peers_and_github_first() {
 }
 
 #[tokio::test]
-async fn the_machines_answer_501_until_theyre_made() {
+async fn a_machine_with_tailscale_off() {
+    // A laptop's wadd: [tailnet] is off unless it's turned on (tests/tailnet.rs has it on).
     let up = up(None).await;
     let w = &up.w;
-    let codes = [
-        w.tailnet().await.map(drop),
-        w.tailnet_login().await.map(drop),
-        w.tailnet_logout().await.map(drop),
+    assert_eq!(w.tailnet().await.unwrap().state, TailnetState::Off);
+    assert!(w.peers().await.unwrap().is_empty());
+    let e = w.tailnet_login().await.unwrap_err();
+    assert_eq!((e.status, e.code.as_str()), (503, "offline"), "{}", e.message);
+    assert_eq!(w.tailnet_logout().await.unwrap_err().status, 503);
+    for e in [
         w.trust_device("n1").await.map(drop),
         w.untrust_device("n1").await.map(drop),
         w.deny_ask("n1").await.map(drop),
         w.later_ask("n1").await.map(drop),
-        w.peers().await.map(drop),
         w.peer_wadspaces("m-desk").await.map(drop),
         w.copy_from_peer("m-desk", "x").await.map(drop),
-        w.github().await.map(drop),
-        w.github_signin(&SignInRequest::default()).await.map(drop),
-        w.github_signout().await,
-        w.github_repos().await.map(drop),
-    ];
-    for c in codes {
-        let e = c.unwrap_err();
-        assert_eq!((e.status, e.code.as_str()), (501, "not_implemented"), "{}", e.message);
-        assert!(e.message.ends_with("comes in phase 6"), "{}", e.message);
+    ] {
+        assert_eq!(e.unwrap_err().status, 404);
     }
 }

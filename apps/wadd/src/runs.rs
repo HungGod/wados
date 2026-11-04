@@ -7,13 +7,17 @@
 //!
 //! 1. its image: the one it built last, or the base (builds.rs); one never
 //!    built doesn't open;
-//! 2. its extra folder (`wad_gen::extras::files`, plus `display` and
+//! 2. its projects (projects.rs), each a stage of its open job (Opening
+//!    {name}): GitHub's cloned, this machine's folders found, files copied
+//!    in, another machine's fetched or mounted over Taildrive. One that
+//!    can't be here leaves it without that project, and the job says why;
+//! 3. its extra folder (`wad_gen::extras::files`, plus `display` and
 //!    `screens`, and its wallpaper's picture), its keys' folders (empty
 //!    until something signs in);
-//! 3. its screen folder, with the socket the compositor serves it alone (screen.rs);
-//! 4. its unit (`wad_gen::units::units`) in `units_dir`, systemd reloaded;
+//! 4. its screen folder, with the socket the compositor serves it alone (screen.rs);
+//! 5. its unit (`wad_gen::units::units`) in `units_dir`, systemd reloaded;
 //!    then `wad-<id>.service` started;
-//! 5. **ready** once its desktop is up: its container runs and its nested
+//! 6. **ready** once its desktop is up: its container runs and its nested
 //!    labwc answers on its own socket, which it makes only once it has
 //!    connected to the socket wadd served it, just before its window
 //!    appears ([`Backend::desktop_up`], polled).
@@ -27,21 +31,24 @@
 //! its desktop halts it) goes idle; one found running that wadd didn't
 //! start (wadd restarted) is taken on, as it was shown before.
 //!
-//! Not yet (later phases): projects (a wadspace opens without them, and
-//! the log says so), streams, devices, ~/Drives, Open-with files, runs of
-//! one time, focus.
+//! Once it's stopped, its Taildrive mounts go, and what wadd made for
+//! projects it doesn't have any more (projects.rs's tidy); all of it when
+//! it's gone for good.
+//!
+//! Not yet (later phases): streams, devices, ~/Drives, Open-with files,
+//! runs of one time, focus.
 
 use std::collections::{BTreeMap, HashMap};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use tokio::task::JoinHandle;
 use wad_gen::units::{self, container_name, service};
 use wad_gen::{Machine, Mounts, Run, extras};
-use wad_model::{Phase, RunState, SessionDisplay, Wadspace, Wallpaper};
-use wad_proto::{ApiError, ErrorCode, Event, WadspaceRun};
+use wad_model::{PartState, Phase, RunState, SessionDisplay, Wadspace, Wallpaper};
+use wad_proto::{ApiError, ErrorCode, Event, Level, WadspaceRun};
 
 use crate::backend::{Backend, RUNNING, Res};
 use crate::builds::Builds;
@@ -49,6 +56,7 @@ use crate::events::Bus;
 use crate::jobs::now_ms;
 use crate::library::Docs;
 use crate::packages::GITHUB_SECRET;
+use crate::projects::{Opening, Projects};
 use crate::screen::Screen;
 
 /// There when NVIDIA's own kernel driver runs the machine's card.
@@ -169,6 +177,8 @@ pub struct Runs {
     shown: Mutex<BTreeMap<String, SessionDisplay>>,
     locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
+    /// Its projects, made here as it opens ([`Runs::attach`]); none: it opens without them.
+    projects: OnceLock<Arc<Projects>>,
     me: Weak<Self>,
 }
 
@@ -204,8 +214,14 @@ impl Runs {
             shown: Mutex::new(shown),
             locks: Mutex::default(),
             tasks: Mutex::default(),
+            projects: OnceLock::new(),
             me: me.clone(),
         })
+    }
+
+    /// Wadspaces open with their projects from now on.
+    pub fn attach(&self, projects: Arc<Projects>) {
+        let _ = self.projects.set(projects);
     }
 
     fn lock_for(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -249,6 +265,10 @@ impl Runs {
                 }
                 if !busy(st.state.phase) {
                     st.state.message = None;
+                }
+                // Its open job, while it opens (and when it failed: why).
+                if matches!(st.state.phase, Phase::Ready | Phase::Idle) {
+                    st.state.job = None;
                 }
             }
             (*st != before).then(|| st.clone())
@@ -339,6 +359,7 @@ impl Runs {
             s.state.phase = Phase::Starting;
             s.state.message = Some("getting it ready".into());
             s.state.error = None;
+            s.state.job = None;
             s.display = Some(display);
         });
         let (i, img) = (id.to_string(), image);
@@ -361,6 +382,15 @@ impl Runs {
         let _held = lock.lock().await;
         if let Err(e) = self.bring_up_locked(&id, &image).await {
             tracing::warn!("{id}: it didn't open: {e}");
+            if let Some(p) = self.projects.get() {
+                if let Some(job) = self.state(&id).state.job {
+                    p.jobs().finish(&job, Err(e.clone()));
+                }
+                // Not running: its Taildrive mounts go.
+                if self.backend.container_status(&container_name(&id)).await.is_ok_and(|s| s != RUNNING) {
+                    p.release(&id).await;
+                }
+            }
             self.update(&id, |s| {
                 s.state.phase = Phase::Error;
                 s.state.error = Some(e);
@@ -368,13 +398,47 @@ impl Runs {
         }
     }
 
+    /// Its projects, here (and what it no longer has, gone): what its unit
+    /// mounts, and its open job (a wadspace with no projects has none).
+    async fn prepare_projects(&self, ws: &Wadspace) -> (Mounts, Option<Opening>) {
+        let Some(p) = self.projects.get() else {
+            if !ws.look.projects.is_empty() {
+                let names: Vec<&str> = ws.look.projects.iter().map(|p| p.as_name.as_str()).collect();
+                tracing::info!("{}: projects ({}) aren't made here: it opens without them", ws.id, names.join(", "));
+            }
+            return (Mounts::new(), None);
+        };
+        p.tidy(ws).await;
+        if ws.look.projects.is_empty() {
+            return (Mounts::new(), None);
+        }
+        let opening = p.open_job(ws).await;
+        self.update(&ws.id, |s| s.state.job = Some(opening.job.clone()));
+        let id = ws.id.clone();
+        let say = |m: &str| self.update(&id, |s| s.state.message = Some(m.to_string()));
+        let prepared = p.prepare(ws, &opening, &say).await;
+        for l in &prepared.left_out {
+            let title = if l.why.contains(&l.name) { l.why.clone() } else { format!("{}: {}", l.name, l.why) };
+            self.bus.publish(Event::Notice { level: Level::Warn, title, undo: None });
+        }
+        (prepared.mounts, Some(opening))
+    }
+
     async fn bring_up_locked(&self, id: &str, image: &str) -> Res<()> {
         let ws = self.docs.wadspace(id).ok_or("it's gone")?;
         let name = container_name(id);
         let status = self.backend.container_status(&name).await?;
+        let mut job: Option<Opening> = None;
         if status != RUNNING {
-            let ws = for_now(ws);
-            let wallpaper = self.write_extras(&ws)?;
+            let (mounts, opening) = self.prepare_projects(&ws).await;
+            job = opening;
+            let stage = |stage: &str, state: PartState| {
+                if let (Some(p), Some(o)) = (self.projects.get(), job.as_ref()) {
+                    p.stage(&o.job, stage, state);
+                }
+            };
+            stage("container", PartState::Working);
+            let wallpaper = self.write_extras(&ws, &mounts)?;
             self.make_key_folders(&ws)?;
             let screen = self.screen.clone();
             let i = id.to_string();
@@ -389,19 +453,27 @@ impl Runs {
                 .into_iter()
                 .filter(|n| n == GITHUB_SECRET)
                 .collect();
-            let mounts = Mounts::new();
             let run = Run { image, mounts: &mounts, wallpaper: wallpaper.as_ref() };
             let files = units::units(&ws, &run, &machine, None);
             self.backend.write_units(&files, &[]).await?;
             self.update(id, |s| s.state.message = Some("starting its container".into()));
             tracing::info!("{id}: starting {} on {image}", service(id));
             self.backend.start(&service(id)).await?;
+            stage("container", PartState::Done);
+        }
+        let jobs = self.projects.get().map(|p| p.jobs().clone());
+        let open_job = job.as_ref().map(|o| o.job.clone());
+        if let (Some(jobs), Some(j)) = (&jobs, &open_job) {
+            jobs.stage(j, "desktop", PartState::Working, None);
         }
         self.update(id, |s| {
             s.state.phase = Phase::Waiting;
             s.state.message = Some("waiting for its desktop".into());
         });
         self.wait_desktop(&ws_name(&self.docs, id), &name).await?;
+        if let (Some(jobs), Some(j)) = (&jobs, &open_job) {
+            jobs.finish(j, Ok(()));
+        }
         self.update(id, |s| s.state.phase = Phase::Ready);
         tracing::info!("{id}: ready");
         Ok(())
@@ -434,14 +506,14 @@ impl Runs {
 
     /// Its extra folder as it is now; the wallpaper the unit should use
     /// instead of its look's, if its picture isn't here.
-    fn write_extras(&self, ws: &Wadspace) -> Res<Option<Wallpaper>> {
+    fn write_extras(&self, ws: &Wadspace, mounts: &Mounts) -> Res<Option<Wallpaper>> {
         let dir = PathBuf::from(extras::dir(&self.settings.state_dir.to_string_lossy(), &ws.id));
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("{}: {e}", dir.display()))?;
         let keys = self.docs.snapshot().keys;
         let mut files: Vec<(String, Option<String>)> =
-            extras::files(ws, &keys, &Mounts::new()).into_iter().map(|(n, t)| (n.to_string(), t)).collect();
+            extras::files(ws, &keys, mounts).into_iter().map(|(n, t)| (n.to_string(), t)).collect();
         // Where its desktop draws (svc-de), and on how many screens.
         files.push(("display".into(), Some("screen\n".into())));
         files.push(("screens".into(), Some(format!("{}\n", self.settings.machine.screens.max(1)))));
@@ -524,11 +596,16 @@ impl Runs {
         if let Some(t) = self.tasks.lock().unwrap().remove(id) {
             t.abort();
         }
+        // Its open job, if it was opening.
+        if let (Some(p), Some(job)) = (self.projects.get(), self.state(id).state.job) {
+            let _ = p.jobs().cancel(&job);
+        }
         let lock = self.lock_for(id);
         let _held = lock.lock().await;
         let running = self.backend.container_status(&container_name(id)).await.map_or(true, |s| s == RUNNING);
         if !running && matches!(self.state(id).state.phase, Phase::Idle | Phase::Error) {
             // Nothing to stop.
+            self.stopped(id).await;
             self.screen.take(id);
             self.update(id, |s| {
                 s.state.phase = Phase::Idle;
@@ -548,6 +625,7 @@ impl Runs {
         self.screen.take(id);
         match stopped {
             Ok(()) => {
+                self.stopped(id).await;
                 tracing::info!("{id}: stopped");
                 self.update(id, |s| {
                     s.state.phase = Phase::Idle;
@@ -565,15 +643,32 @@ impl Runs {
         }
     }
 
+    /// It stopped: its Taildrive mounts go, and what it no longer has.
+    async fn stopped(&self, id: &str) {
+        let Some(p) = self.projects.get() else { return };
+        match self.docs.wadspace(id) {
+            Some(ws) => p.tidy(&ws).await,
+            None => p.release(id).await,
+        }
+    }
+
     /// After an edit: a wadspace put in the Trash stops; one gone for good
     /// is stopped, and what wadd kept for it goes (its unit, extra folder,
-    /// screen folder, state).
+    /// screen folder, state, what it had of its projects). One that isn't
+    /// running loses what wadd made for projects it doesn't have any more.
     pub async fn edited(&self, changed: &[String]) {
         for id in changed {
             if let Some(ws) = self.docs.wadspace(id) {
                 if ws.is_trashed() && self.state(id).state.phase != Phase::Idle {
                     tracing::info!("{id}: in the Trash, so it stops");
                     let _ = self.stop(id).await;
+                } else if self.state(id).state.phase == Phase::Idle
+                    && let Some(p) = self.projects.get()
+                {
+                    let lock = self.lock_for(id);
+                    if let Ok(_held) = lock.try_lock() {
+                        p.tidy(&ws).await;
+                    }
                 }
                 continue;
             }
@@ -583,6 +678,9 @@ impl Runs {
             let _ = self.backend.write_units(&[], &[format!("{}.container", container_name(id))]).await;
             if crate::store::safe_id(id) {
                 let _ = std::fs::remove_dir_all(extras::dir(&self.settings.state_dir.to_string_lossy(), id));
+            }
+            if let Some(p) = self.projects.get() {
+                p.forget(id).await;
             }
             self.screen.forget(id);
             self.states.lock().unwrap().remove(id);
@@ -638,6 +736,7 @@ impl Runs {
                     s.state.phase = Phase::Idle;
                     s.display = None;
                 });
+                self.stopped(&id).await;
             }
         }
     }
@@ -645,16 +744,6 @@ impl Runs {
 
 fn ws_name(docs: &Docs, id: &str) -> String {
     docs.wadspace(id).map_or_else(|| id.to_string(), |w| w.name)
-}
-
-/// A wadspace as phase 1 runs it: its projects come in a later phase.
-fn for_now(mut ws: Wadspace) -> Wadspace {
-    if !ws.look.projects.is_empty() {
-        let names: Vec<&str> = ws.look.projects.iter().map(|p| p.as_name.as_str()).collect();
-        tracing::info!("{}: projects ({}) come in a later phase: it opens without them", ws.id, names.join(", "));
-        ws.look.projects.clear();
-    }
-    ws
 }
 
 /// Writes a file whole, readable inside.

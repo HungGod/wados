@@ -29,8 +29,10 @@ pub use downloads::{
 pub use engine::{Engine, Hooks, engine, init, set_hooks};
 pub use permissions::Ask;
 pub use scheme::{Page, PageRequest, set_page_source};
-pub use session::{SessionBundle, ephemeral_run, forget, network_session, set_ephemeral_run, signins};
+pub use session::{
+    SessionBundle, ephemeral_run, forget, network_session, set_ephemeral_run, set_machine_keys, signins,
+};
 pub use view::{
     PAGE_HANDLER, ViewState, add_user_script, apply_privacy_headers, create_related_view, create_web_view,
-    inject_cosmetic_css, live_views, load_html, navigate, profile_for_uri, state, webkit_version_string,
+    inject_cosmetic_css, live_views, load_html, navigate, profile_for_uri, rehome, state, webkit_version_string,
 };

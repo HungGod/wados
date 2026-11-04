@@ -58,6 +58,11 @@ pub trait Backend: Send + Sync + 'static {
     async fn secret_names(&self) -> Res<Vec<String>>;
     /// A secret's value, for wadd's own use (signing in to a registry).
     async fn secret_value(&self, name: &str) -> Res<Option<String>>;
+    /// Makes a secret, replacing one of that name (the GitHub sign-in's
+    /// token). The value only ever goes to podman.
+    async fn create_secret(&self, name: &str, value: &[u8]) -> Res<()>;
+    /// Deletes a secret. False if there was none.
+    async fn delete_secret(&self, name: &str) -> Res<bool>;
     /// A document from the network (`https://`) or a file (`file://`): CI's package index.
     async fn fetch(&self, url: &str) -> Res<Vec<u8>>;
 
@@ -198,6 +203,14 @@ impl Backend for Real {
 
     async fn secret_value(&self, name: &str) -> Res<Option<String>> {
         self.podman.secret_value(name).await.map_err(s)
+    }
+
+    async fn create_secret(&self, name: &str, value: &[u8]) -> Res<()> {
+        self.podman.create_secret(name, value).await.map_err(s)
+    }
+
+    async fn delete_secret(&self, name: &str) -> Res<bool> {
+        self.podman.delete_secret(name).await.map_err(s)
     }
 
     async fn fetch(&self, url: &str) -> Res<Vec<u8>> {

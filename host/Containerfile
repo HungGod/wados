@@ -9,8 +9,9 @@
 #
 # Built by host/build.sh image, with host/ as the context and three more:
 #   bin     .build/host/bin: wadd, wados-shell, wadsctl, wadspaces-clipboard,
-#           wadbrowser (release builds for Fedora 44, from host/builder)
-#   share   .build/host/share: WadBrowser's launcher and icon
+#           wadbrowser, wados-settings, wados-files (release builds for
+#           Fedora 44, from host/builder)
+#   share   .build/host/share: WadBrowser's launcher and icon, Settings' and Files' launchers
 #   assets  assets/: WadSpaces' pictures and fonts
 # No secret is in any of them: the image is the same for everyone.
 
@@ -96,6 +97,14 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
       NetworkManager-wifi NetworkManager-tui bluez \
     && dnf clean all
 
+# rclone: another machine's folder in a wadspace, mounted over Taildrive's WebDAV (wadd's taildrive.rs).
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs rclone fuse3 && dnf clean all
+
+# git: wadd clones a wadspace's GitHub projects itself, as uid 1000 (wad-git
+# runs `git` from PATH; the base has none). Found by tools/vm/check-tailnet.sh.
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs git-core && dnf clean all \
+    && git --version
+
 # Firmware: the GPUs' (Intel, AMD, NVIDIA's GSP for nouveau), sound's, and
 # the Wi-Fi cards' (the base lacks Intel's: setup and a new machine's first
 # start need the internet, on whatever card). The Surface's Marvell Wi-Fi
@@ -160,9 +169,10 @@ RUN kver="$(ls /usr/lib/modules)" \
 COPY etc/ /etc/
 COPY usr/ /usr/
 COPY --from=cursors /out/WadOS /usr/share/icons/WadOS
-COPY --from=bin --chmod=755 wadd wados-shell wadsctl wadbrowser /usr/bin/
+COPY --from=bin --chmod=755 wadd wados-shell wadsctl wadbrowser wados-settings wados-files /usr/bin/
 COPY --from=bin --chmod=755 wadspaces-clipboard /usr/libexec/wados/
-COPY --from=share --chmod=644 applications/io.wados.Browser.desktop /usr/share/applications/
+COPY --from=share --chmod=644 applications/io.wados.Browser.desktop applications/io.wados.Settings.desktop \
+     applications/io.wados.Files.desktop /usr/share/applications/
 COPY --from=share --chmod=644 icons/hicolor/scalable/apps/io.wados.Browser.svg /usr/share/icons/hicolor/scalable/apps/
 COPY --from=assets / /usr/share/wados/assets/
 RUN mkdir -p /usr/share/fonts/wados \
@@ -206,7 +216,7 @@ RUN systemctl enable greetd.service podman.socket wadd.socket wadd.service \
 # for a machine with its person and one without.
 RUN set -e; \
     for b in /usr/bin/wadd /usr/bin/wados-shell /usr/bin/wadsctl /usr/libexec/wados/wadspaces-clipboard \
-             /usr/bin/wadbrowser /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \
+             /usr/bin/wadbrowser /usr/bin/wados-settings /usr/bin/wados-files /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \
         out="$(ldd -r "${b}" 2>&1)"; \
         if grep -E 'not found|undefined symbol' <<< "${out}"; then echo "${b} doesn't load" >&2; exit 1; fi; \
     done; \
@@ -214,6 +224,9 @@ RUN set -e; \
     wadsctl --help 2>&1 | grep -q usage; \
     wadbrowser --version; \
     grep -qx 'Exec=wadbrowser --default %U' /usr/share/applications/io.wados.Browser.desktop; \
+    wados-settings --version; wados-files --version; \
+    grep -qx 'Exec=wados-settings' /usr/share/applications/io.wados.Settings.desktop; \
+    grep -qx 'Exec=wados-files --machines' /usr/share/applications/io.wados.Files.desktop; \
     test -s /usr/share/icons/hicolor/scalable/apps/io.wados.Browser.svg; \
     if command -v gtk-update-icon-cache > /dev/null; then gtk-update-icon-cache -q -f /usr/share/icons/hicolor; fi; \
     labwc --version; \
@@ -260,7 +273,9 @@ for top in ("etc", "usr"):
     for d, _, fs in os.walk(os.path.join("/ctx", top)):
         ours += ["/" + os.path.relpath(os.path.join(d, f), "/ctx") for f in fs]
 ours += ["/usr/bin/wadd", "/usr/bin/wados-shell", "/usr/bin/wadsctl", "/usr/bin/wadbrowser",
+         "/usr/bin/wados-settings", "/usr/bin/wados-files",
          "/usr/share/applications/io.wados.Browser.desktop",
+         "/usr/share/applications/io.wados.Settings.desktop", "/usr/share/applications/io.wados.Files.desktop",
          "/usr/share/icons/hicolor/scalable/apps/io.wados.Browser.svg"]
 for top in ("/usr/libexec/wados", "/usr/lib/wados", "/usr/share/wados", "/usr/share/fonts/wados",
             "/usr/share/icons/WadOS", "/usr/share/themes/WadOS", "/usr/share/selinux/packages/wados"):

@@ -39,6 +39,30 @@ pub struct Config {
     pub streaming: Streaming,
     pub tailnet: Tailnet,
     pub packages: Packages,
+    pub github: Github,
+}
+
+/// GitHub: wadd's sign-in (the OAuth device flow) and the calls it makes
+/// with the machine's token (the podman secret `github_token`).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Github {
+    /// The OAuth app: its client ID and the first sign-in's scopes.
+    pub app: PathBuf,
+    /// GitHub's sign-in (the device flow's endpoints).
+    pub web: String,
+    /// GitHub's REST API.
+    pub api: String,
+}
+
+impl Default for Github {
+    fn default() -> Self {
+        Self {
+            app: "/usr/lib/wados/github.toml".into(),
+            web: "https://github.com".into(),
+            api: "https://api.github.com".into(),
+        }
+    }
 }
 
 /// The machine.
@@ -152,6 +176,14 @@ pub struct Tailnet {
     pub hostname: String,
     /// How often tailscaled's status is read.
     pub poll_s: u64,
+    /// The control server a login uses (a Headscale's: `tailscale up
+    /// --login-server`). Empty: the one tailscaled has (Tailscale's, unless
+    /// it was pointed elsewhere).
+    pub login_server: String,
+    /// Share the person's home on the tailnet (Taildrive, as them) once it's running.
+    pub drive: bool,
+    /// What runs Taildrive's commands as the person.
+    pub runuser: PathBuf,
 }
 
 impl Tailnet {
@@ -166,6 +198,9 @@ impl Tailnet {
             bind_device: "tailscale0".into(),
             hostname: String::new(),
             poll_s: 10,
+            login_server: String::new(),
+            drive: true,
+            runuser: "/usr/sbin/runuser".into(),
         }
     }
 }
@@ -338,6 +373,7 @@ impl Config {
             streaming: Streaming::default(),
             tailnet: Tailnet::for_profile(profile),
             packages: Packages::default(),
+            github: Github::default(),
         }
     }
 

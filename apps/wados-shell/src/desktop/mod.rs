@@ -36,6 +36,7 @@ mod arrange;
 mod files;
 mod grid;
 mod icons;
+mod keep;
 mod menu;
 mod select;
 
@@ -1054,7 +1055,8 @@ impl Desktop {
                     },
                 );
             }
-            Target::Keep(_) => self.toast(Level::Info, "Keeping files in a wadspace comes with projects, in phase 6"),
+            // Kept in it: a folder mounted, a file copied in (a picture asks first).
+            Target::Keep(k) => self.keep_in(&k, self.file_paths(&d.keys)),
             // Only what's held from elsewhere (held_target's).
             Target::Put(_) => {}
             Target::Spot(to) if d.from_folder => {
@@ -1083,12 +1085,8 @@ impl Desktop {
             Target::Spot(s) => (self.desk_dir.clone(), Some(*s)),
             _ => (self.desk_dir.clone(), None),
         };
-        if matches!(target, Target::Keep(_)) {
-            self.toast(
-                Level::Info,
-                "Keeping files in a wadspace comes with projects, in phase 6: they're on the desktop for now",
-            );
-        }
+        // On a wadspace: kept in it, where they are (not copied onto the desktop).
+        let keep = if let Target::Keep(k) = &target { Some(k.clone()) } else { None };
         let (w, drop) = (self.weak(), drop.clone());
         glib::spawn_future_local(async move {
             let got = drop.read_value_future(gdk::FileList::static_type(), glib::Priority::DEFAULT).await;
@@ -1099,6 +1097,10 @@ impl Desktop {
             };
             drop.finish(gdk::DragAction::COPY);
             let Some(m) = w.upgrade() else { return };
+            if let Some(k) = keep {
+                m.keep_in(&k, paths);
+                return;
+            }
             m.off_thread(
                 move || files::copy_into(&paths, &dir),
                 move |m, r| match r {
@@ -1365,7 +1367,8 @@ impl Desktop {
         } else if key == "trash" {
             self.launch("trash:///", "the Trash");
         } else if key == "machines" {
-            self.toast(Level::Info, "Machines comes with your tailnet: your other machines' files and wadspaces");
+            // Files, at Machines: my other machines on the tailnet, their homes and wadspaces.
+            crate::peers::open_app(&self.shell, &["wados-files", "--machines"]);
         }
     }
 
@@ -1586,7 +1589,7 @@ impl Desktop {
             _ if ctrl && lower == gdk::Key::n => self.new_wadspace(),
             _ if ctrl && lower == gdk::Key::c && !self.file_paths(&sel).is_empty() => self.copy(&sel, false),
             _ if ctrl && lower == gdk::Key::x && !self.file_paths(&sel).is_empty() => self.copy(&sel, true),
-            _ if ctrl && lower == gdk::Key::v => self.paste(self.desk_dir.clone()),
+            _ if ctrl && lower == gdk::Key::v => self.paste_here(),
             _ => return false,
         }
         true
@@ -1738,6 +1741,7 @@ impl Desktop {
             .checked(x.agents)
             .entry(),
         );
+        out.push(self.keep_paste_item(id));
         out.push(Entry::Sep);
         out.push(
             MenuItem::new("trash", "Move to Trash", "trash", self.on(move |m| m.trash(&ids)))
@@ -1826,9 +1830,11 @@ impl Desktop {
     fn machines_menu(&self) -> Vec<Entry> {
         vec![
             MenuItem::new("open", "Open", "folder-open", self.on(|m| m.open_key("machines"))).entry(),
-            MenuItem::new("tailscale", "Tailscale settings", "network", || {})
-                .off(Some("Comes with your tailnet"))
-                .entry(),
+            MenuItem::new("tailscale", "Tailscale settings", "network", {
+                let s = self.shell.clone();
+                move || crate::peers::open_app(&s, &["wados-settings", "--page", "accounts"])
+            })
+            .entry(),
         ]
     }
 

@@ -14,7 +14,9 @@
 //!   folder, its cache in this wadspace's own. A web app signs in with its
 //!   key, and the browser's own windows with the key whose `apps` lists
 //!   `@browser`. A page on one of a key's `sites` opens in its profile
-//!   ([`profile_for`]).
+//!   ([`profile_for`]). On the machine there's no signins.json: its web keys
+//!   are wadd's ([`SignIns::from_machine`]), each keeping its data in its
+//!   folder there (`/var/lib/wados/keys/<id>`), the one wadspaces mount.
 //! - `ephemeral-…` keeps nothing at all (a web app with a key that isn't
 //!   here, "Don't save"), nor does `private-…` (a private window's).
 //! - In an ephemeral run every profile keeps nothing, but a key's: its
@@ -184,8 +186,47 @@ impl SignIns {
     /// This wadspace's: `WADBROWSER_SIGNINS`'s file, else wadd's. None
     /// (on the machine, say) is no keys.
     pub fn here() -> Self {
-        let path = std::env::var_os(SIGNINS_ENV).map(PathBuf::from).unwrap_or_else(|| SIGNINS_FILE.into());
-        Self::load(&path)
+        Self::load(&Self::path())
+    }
+
+    /// Where this wadspace's would be (`WADBROWSER_SIGNINS`, else wadd's).
+    pub fn path() -> PathBuf {
+        std::env::var_os(SIGNINS_ENV).map(PathBuf::from).unwrap_or_else(|| SIGNINS_FILE.into())
+    }
+
+    /// There's a signins.json: this is a wadspace, whose keys are its
+    /// file's. Without one, the machine's are wadd's ([`Self::from_machine`]).
+    pub fn file_here() -> bool {
+        Self::path().exists()
+    }
+
+    /// The machine's web keys (wadd's `GET /v1/keys/web`), as a wadspace's
+    /// signins.json lists the ones it mounts: each key's profile keeps its
+    /// data in the key's folder (`/var/lib/wados/keys/<id>`, this user's,
+    /// reached by name), its cache in the browser's own. Only the ones whose
+    /// folder is there for this user; none signs in a web app or the
+    /// browser's own windows on the machine (they're the default profile's).
+    pub fn from_machine(keys: &[wad_proto::signin::WebKey]) -> Self {
+        let signins = keys
+            .iter()
+            .map(|k| SignIn {
+                id: k.id.clone(),
+                name: k.name.clone(),
+                web: true,
+                apps: vec![],
+                dir: PathBuf::from(&k.dir),
+                paths: vec![],
+                sites: k.sites.clone(),
+            })
+            .filter(|s| {
+                let there = s.dir.is_dir();
+                if !there {
+                    tracing::warn!("key {}: its folder {} isn't there for this user", s.id, s.dir.display());
+                }
+                there
+            })
+            .collect();
+        Self { version: 2, signins }
     }
 
     pub fn load(path: &Path) -> Self {
@@ -459,6 +500,36 @@ mod tests {
         let all = SignIns::load(&file);
         assert_eq!(all.signins.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["k1"]);
         assert_eq!(SignIns::load(&dir.path().join("none.json")), SignIns::default());
+    }
+
+    #[test]
+    fn the_machines_keys_are_its_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let there = dir.path().join("keys/gh");
+        std::fs::create_dir_all(&there).unwrap();
+        let key = |id: &str, dir: &Path, sites: &[&str]| wad_proto::signin::WebKey {
+            id: id.into(),
+            name: id.to_uppercase(),
+            sites: sites.iter().map(|s| s.to_string()).collect(),
+            used_by: vec![],
+            dir: dir.to_string_lossy().into_owned(),
+        };
+        let all = SignIns::from_machine(&[
+            key("gh", &there, &["github.com"]),
+            key("gone", &dir.path().join("keys/gone"), &["gitlab.com"]),
+        ]);
+        assert_eq!(all.version, 2);
+        assert_eq!(all.signins.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(), ["gh"]);
+        assert_eq!(all.site_keys(), [SiteKey { profile: "signin-gh".into(), sites: vec!["github.com".into()] }]);
+        // The browser's own windows and web apps stay the default profile's.
+        assert_eq!(all.browser_profile(), "default");
+        // As in a wadspace: its data the key's folder, its cache the browser's.
+        let p = paths(Path::new("/h"));
+        assert_eq!(
+            resolve("signin-gh", &p, &all.signins, false),
+            Storage::Disk { data: there.clone(), cache: "/h/cache/profiles/signin-gh".into() }
+        );
+        assert_eq!(resolve("signin-gh", &p, &all.signins, false).cookies(), Some(there.join("cookies.sqlite")));
     }
 
     #[test]

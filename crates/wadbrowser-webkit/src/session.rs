@@ -32,10 +32,36 @@ pub fn ephemeral_run() -> bool {
     EPHEMERAL_RUN.get()
 }
 
-/// This wadspace's keys (signins.json, read once; `WADBROWSER_SIGNINS`
-/// names another file). None on the machine.
+/// The keys: this wadspace's (signins.json, read once; `WADBROWSER_SIGNINS`
+/// names another file), or on the machine wadd's, once they've come
+/// ([`set_machine_keys`]; none until then).
 pub fn signins() -> Rc<SignIns> {
     SIGNINS.with_borrow_mut(|s| s.get_or_insert_with(|| Rc::new(SignIns::here())).clone())
+}
+
+/// The machine's keys, from wadd (`HOOK(keys-on-machine)`: the UI fetches
+/// them off the main thread). Ignored in a wadspace (its signins.json's
+/// are its keys). True if they changed: pages on a key's site then go into
+/// it (`crate::view::rehome`).
+pub fn set_machine_keys(keys: SignIns) -> bool {
+    if SignIns::file_here() {
+        return false;
+    }
+    let changed = SIGNINS.with_borrow_mut(|s| {
+        if s.as_deref() == Some(&keys) {
+            return false;
+        }
+        *s = Some(Rc::new(keys));
+        true
+    });
+    if changed {
+        // A key's session made before its folder was known keeps nothing: the next is its folder's.
+        SESSIONS.with_borrow_mut(|all| {
+            all.retain(|id, s| !(id.starts_with(profiles::SIGNIN) && s.is_ephemeral()));
+        });
+        tracing::info!(keys = signins().signins.len(), "the machine's keys");
+    }
+    changed
 }
 
 /// Profile `id`'s session, made the first time it's asked for.

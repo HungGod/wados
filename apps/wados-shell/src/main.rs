@@ -22,9 +22,11 @@ mod lock;
 mod machine;
 mod overlays;
 mod pam;
+mod peers;
 mod placer;
 mod session;
 mod shell;
+mod signin;
 mod store;
 mod surface;
 mod wadd;
@@ -115,6 +117,9 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     shell.set_builder(&builder);
     let machine = Machine::new(&shell);
     let _overlays = overlays::Overlays::new(&shell);
+    // Phase 6: my other machines' wadspaces and copies; sign-ins in WadBrowser.
+    peers::start(&shell);
+    signin::start(&shell);
     let session = session::Session::new(&shell, &lock);
     dnd_probe::install(&shell);
     if with_builder {

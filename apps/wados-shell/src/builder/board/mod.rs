@@ -316,8 +316,7 @@ impl Board {
             let s = old.remove(&id).unwrap_or_else(|| Stack::new(&me, &id));
             let editable = b.editable(&x);
             let facts = pieces::Facts {
-                away: (!editable)
-                    .then(|| if x.machine.is_empty() { "Another machine".into() } else { x.machine.clone() }),
+                away: (!editable).then(|| b.machine_name(&x)),
                 building: store.build(&id).is_some_and(|b| b.job.is_some()),
                 phase: store.run(&id).map(|r| r.state.phase),
                 built: store.build(&id).map(|b| b.state.built),

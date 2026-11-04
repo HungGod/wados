@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Files
+Comment=WadOS's files: your other machines on the tailnet, their homes and their wadspaces
+# --machines: Machines; --machine <id>: one of them.
+Exec=wados-files --machines
+Icon=system-file-manager
+Terminal=false
+Categories=System;FileManager;
+StartupNotify=true
+StartupWMClass=io.wados.Files
+Keywords=Machines;Tailnet;Taildrive;Peers;

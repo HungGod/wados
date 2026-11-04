@@ -385,6 +385,27 @@ impl Backend for Fake {
         Ok(self.state.lock().unwrap().secrets.get(name).cloned())
     }
 
+    async fn create_secret(&self, name: &str, value: &[u8]) -> Res<()> {
+        // Its name only: a value never goes in the calls.
+        self.call(format!("secret create {name}"));
+        let mut st = self.state.lock().unwrap();
+        if st.down {
+            return Err("podman isn't answering".into());
+        }
+        let value = String::from_utf8(value.to_vec()).map_err(|_| "a secret here is text".to_string())?;
+        st.secrets.insert(name.to_string(), value);
+        Ok(())
+    }
+
+    async fn delete_secret(&self, name: &str) -> Res<bool> {
+        self.call(format!("secret delete {name}"));
+        let mut st = self.state.lock().unwrap();
+        if st.down {
+            return Err("podman isn't answering".into());
+        }
+        Ok(st.secrets.remove(name).is_some())
+    }
+
     async fn fetch(&self, url: &str) -> Res<Vec<u8>> {
         self.call(format!("fetch {url}"));
         let st = self.state.lock().unwrap();

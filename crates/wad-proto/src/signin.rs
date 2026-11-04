@@ -11,6 +11,9 @@
 //! [`SignInProvider::held_label`] meanwhile. Who emits them: wadd's GitHub
 //! sign-in (`POST /v1/github/signin`) and its tailnet login (`POST
 //! /v1/tailnet/login`), both on **the socket**'s event stream.
+//!
+//! And sign-ins kept: [`WebKey`], a saved sign-in for sites as the
+//! machine's own WadBrowser uses it (`GET /v1/keys/web`).
 
 use std::fmt;
 
@@ -53,6 +56,27 @@ impl fmt::Display for SignInProvider {
     }
 }
 
+/// A web key (a saved sign-in for sites) as the machine's own WadBrowser
+/// uses it: `GET /v1/keys/web` on **the socket** (wadd's `keys.rs`). A tab
+/// on one of its sites moves into the key's profile, whose data is the key's
+/// folder (its cookies there, its cache the browser's own), as a
+/// wadspace's WadBrowser does with the folder it mounts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebKey {
+    pub id: String,
+    pub name: String,
+    /// The sites it signs in to (wad_model's `Secret::sites`).
+    #[serde(default)]
+    pub sites: Vec<String>,
+    /// The wadspaces that use it.
+    #[serde(default)]
+    pub used_by: Vec<String>,
+    /// Its folder on the machine (`<state>/keys/<id>`, made if it was new):
+    /// uid 1000's, which reaches it by name.
+    pub dir: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -63,5 +87,16 @@ mod tests {
             assert_eq!(serde_json::to_value(p).unwrap(), p.as_str());
         }
         assert_eq!(SignInProvider::Github.held_label(), "Signing in to GitHub in the browser");
+    }
+
+    #[test]
+    fn a_web_key_and_its_folder() {
+        let k: WebKey = serde_json::from_value(serde_json::json!({
+            "id": "hunggod", "name": "hunggod", "sites": ["github.com"], "dir": "/var/lib/wados/keys/hunggod"
+        }))
+        .unwrap();
+        assert!(k.used_by.is_empty());
+        assert_eq!(serde_json::to_value(&k).unwrap()["usedBy"], serde_json::json!([]));
+        assert_eq!(serde_json::from_value::<WebKey>(serde_json::to_value(&k).unwrap()).unwrap(), k);
     }
 }

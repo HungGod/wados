@@ -42,3 +42,9 @@ socket = "/run/tailscale/tailscaled.sock"
 cli = "/usr/bin/tailscale"
 port = 8087
 bind_device = "tailscale0"
+# The person's home is shared on the tailnet (Taildrive), as them, through runuser.
+drive = true
+runuser = "/usr/sbin/runuser"
+# A login goes to the control server tailscaled has (Tailscale's, unless it
+# was pointed elsewhere); a Headscale's is set in /etc/wados/wadd.toml:
+# login_server = "https://headscale.example:8443"

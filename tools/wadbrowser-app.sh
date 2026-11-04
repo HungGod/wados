@@ -61,7 +61,7 @@ mock_pid=$!
 cp "$A/inner.sh" "$RUN/inner.sh"
 in_labwc env HOME="$RUN/home" XDG_CONFIG_HOME="$RUN/config" XDG_DATA_HOME="$RUN/data" XDG_CACHE_HOME="$RUN/cache" \
   XDG_STATE_HOME="$RUN/home/.local/state" GSK_RENDERER=cairo GTK_A11Y=none NO_AT_BRIDGE=1 GDK_DEBUG=no-portals \
-  WB="$WB" RUN="$RUN" PORT=$PORT TOPS="$W/target/debug/examples/toplevels" \
+  WADBROWSER_TEST_LOG="$RUN/test.log" WB="$WB" RUN="$RUN" PORT=$PORT TOPS="$W/target/debug/examples/toplevels" \
   dbus-run-session -- bash "$RUN/inner.sh" >"$RUN/inner.log" 2>&1
 grep -E "^(PASS|FAIL|---|      )" "$RUN/inner.log"
 

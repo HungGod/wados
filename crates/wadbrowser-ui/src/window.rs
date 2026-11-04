@@ -952,6 +952,7 @@ pub(crate) fn reuse_signin(id: u64, url: &str, code: Option<String>) -> Option<W
     for view in views(&ctx) {
         add_signin_script(&ctx, &view);
     }
+    wire::sync_code(&ctx);
     ctx.chrome.kept.borrow_mut().clear();
     open_uri(&ctx, url, false);
     let spec = ctx.spec.borrow().clone();

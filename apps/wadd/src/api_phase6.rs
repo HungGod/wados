@@ -21,6 +21,7 @@
 //! | `POST /v1/github/signin` | signs in ([`SignInRequest`], optional): a Github job → [`JobInfo`] | accounts |
 //! | `DELETE /v1/github` | signs out → null | accounts |
 //! | `GET /v1/github/repos` | its repositories ([`Repo`]) | accounts |
+//! | `GET /v1/keys/web` | the web keys and their folders, for the machine's browser ([`WebKey`]) | accounts |
 //!
 //! Whose: the phase 6 agent that replaces [`NotYet`] for that group (the
 //! tailnet & peers agent: [`Net`]; the accounts agent: [`Accounts`]).
@@ -33,6 +34,7 @@ use axum::extract::{Path, State};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use wad_model::Wadspace;
+use wad_proto::signin::WebKey;
 use wad_proto::{ApiError, GithubAccount, JobInfo, PeerInfo, Repo, SignInRequest, Tailnet};
 
 use crate::api::{AppState, Failure};
@@ -140,6 +142,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/github", get(github).delete(github_signout))
         .route("/v1/github/signin", post(github_signin))
         .route("/v1/github/repos", get(github_repos))
+        .route("/v1/keys/web", get(web_keys))
 }
 
 type Answer<T> = Result<Json<T>, Failure>;
@@ -200,4 +203,15 @@ async fn github_signout(State(app): State<Arc<AppState>>) -> Answer<Option<Githu
 
 async fn github_repos(State(app): State<Arc<AppState>>) -> Answer<Vec<Repo>> {
     Ok(Json(app.accounts.github_repos().await?))
+}
+
+/// The library's web keys, each with its folder (made if it's new): the
+/// machine's WadBrowser keeps a key's cookies there (crate::keys).
+async fn web_keys(State(app): State<Arc<AppState>>) -> Answer<Vec<WebKey>> {
+    let keys = app.docs.snapshot().keys;
+    let app = app.clone();
+    let web = tokio::task::spawn_blocking(move || app.keys.web(&keys))
+        .await
+        .map_err(|e| ApiError::internal(format!("the keys' folders: {e}")))?;
+    Ok(Json(web))
 }

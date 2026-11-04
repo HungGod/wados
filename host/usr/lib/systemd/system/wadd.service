@@ -16,8 +16,9 @@ Restart=always
 RestartSec=2
 TimeoutStopSec=10
 # /var/lib/wados: the library, its keys and projects (tmpfiles makes them).
+# 0711: uid 1000 reaches its own folders in it by name, and can't list it.
 StateDirectory=wados
-StateDirectoryMode=0700
+StateDirectoryMode=0711
 # /run/wados/screen: the wadspaces' screen folders ([daemon] screen_dir).
 # Kept when wadd restarts: the wadspaces running have them mounted.
 RuntimeDirectory=wados/screen

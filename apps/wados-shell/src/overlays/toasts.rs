@@ -1,11 +1,13 @@
 //! Toasts (`ui/Toasts.svelte`): wadd's notices and the shell's, top right
 //! over everything (a full-screen wadspace too), the newest four; each goes
 //! after six seconds (nine for an error), or on its ×. One that took
-//! something out has Undo.
+//! something out has Undo. One may have a body under its title: the shell
+//! says it ([`toast_with`]), or expects it for a notice of wadd's
+//! ([`expect_body`]: Copy here's "{name} is on this machine").
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gtk::{glib, prelude::*};
 use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -25,7 +27,40 @@ pub struct Toast {
     pub id: u64,
     pub level: Level,
     pub title: String,
+    pub body: Option<String>,
     pub undo: Option<String>,
+}
+
+/// How long a body waits for its notice.
+const EXPECTED: Duration = Duration::from_secs(600);
+
+thread_local! {
+    /// Bodies for toasts to come, by their title.
+    static BODIES: RefCell<Vec<(String, String, Instant)>> = RefCell::default();
+}
+
+/// The next toast titled `title` has `body` under it.
+pub fn expect_body(title: &str, body: &str) {
+    BODIES.with(|b| {
+        let mut b = b.borrow_mut();
+        b.retain(|(t, _, at)| t != title && at.elapsed() < EXPECTED);
+        b.push((title.to_string(), body.to_string(), Instant::now()));
+    });
+}
+
+/// The body expected for a toast titled `title` (taken).
+pub fn take_body(title: &str) -> Option<String> {
+    BODIES.with(|b| {
+        let mut b = b.borrow_mut();
+        let i = b.iter().position(|(t, _, at)| t == title && at.elapsed() < EXPECTED)?;
+        Some(b.remove(i).1)
+    })
+}
+
+/// A toast of the shell's with a body under its title (its notice, in the bell's list, is the title).
+pub fn toast_with(shell: &Shell, level: Level, title: &str, body: &str) {
+    expect_body(title, body);
+    shell.toast(level, title, None);
 }
 
 /// How long one stays.
@@ -41,11 +76,11 @@ pub struct Queue {
 }
 
 impl Queue {
-    pub fn push(&mut self, level: Level, title: &str, undo: Option<String>) -> u64 {
+    pub fn push(&mut self, level: Level, title: &str, body: Option<String>, undo: Option<String>) -> u64 {
         self.next += 1;
         // The same again (a retry, a double click) moves up rather than piling up.
         self.shown.retain(|t| !(t.title == title && t.undo == undo));
-        self.shown.push(Toast { id: self.next, level, title: title.into(), undo });
+        self.shown.push(Toast { id: self.next, level, title: title.into(), body, undo });
         if self.shown.len() > MAX {
             let extra = self.shown.len() - MAX;
             self.shown.drain(..extra);
@@ -94,7 +129,8 @@ impl Toasts {
     }
 
     pub fn push(self: &Rc<Self>, level: Level, title: &str, undo: Option<String>) {
-        let id = self.queue.borrow_mut().push(level, title, undo);
+        let body = take_body(title);
+        let id = self.queue.borrow_mut().push(level, title, body, undo);
         let w = Rc::downgrade(self);
         glib::timeout_add_local_once(lasts(level), move || {
             if let Some(m) = w.upgrade() {
@@ -170,7 +206,29 @@ impl Toasts {
             .valign(gtk::Align::Center)
             .css_classes(["ov-toast-title"])
             .build();
-        card.append(&title);
+        match &t.body {
+            Some(b) => {
+                let text = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Vertical)
+                    .spacing(2)
+                    .hexpand(true)
+                    .valign(gtk::Align::Center)
+                    .build();
+                text.append(&title);
+                title.set_max_width_chars(40);
+                let body = gtk::Label::builder()
+                    .label(b)
+                    .xalign(0.0)
+                    .max_width_chars(40)
+                    .wrap(true)
+                    .wrap_mode(gtk::pango::WrapMode::WordChar)
+                    .css_classes(["ov-toast-body"])
+                    .build();
+                text.append(&body);
+                card.append(&text);
+            }
+            None => card.append(&title),
+        }
         if let Some(undo) = t.undo.clone() {
             let b = gtk::Button::builder().label("Undo").css_classes(["ov-act"]).valign(gtk::Align::Center).build();
             let (w, id) = (Rc::downgrade(self), t.id);
@@ -207,7 +265,7 @@ mod tests {
     fn the_newest_four_oldest_first() {
         let mut q = Queue::default();
         for i in 1..=6 {
-            q.push(Level::Info, &format!("t{i}"), None);
+            q.push(Level::Info, &format!("t{i}"), None, None);
         }
         let titles: Vec<&str> = q.shown().iter().map(|t| t.title.as_str()).collect();
         assert_eq!(titles, ["t3", "t4", "t5", "t6"]);
@@ -216,20 +274,28 @@ mod tests {
     #[test]
     fn dismissing_and_the_same_again() {
         let mut q = Queue::default();
-        let a = q.push(Level::Ok, "Built", None);
-        let b = q.push(Level::Info, "Moved to the Trash", Some("u1".into()));
+        let a = q.push(Level::Ok, "Built", None, None);
+        let b = q.push(Level::Info, "Moved to the Trash", None, Some("u1".into()));
         assert!(q.dismiss(a));
         assert!(!q.dismiss(a));
         assert_eq!(q.shown().len(), 1);
         // The same notice again replaces itself, and comes last (newest).
-        q.push(Level::Warn, "Other", None);
-        let c = q.push(Level::Info, "Moved to the Trash", Some("u1".into()));
+        q.push(Level::Warn, "Other", None, None);
+        let c = q.push(Level::Info, "Moved to the Trash", None, Some("u1".into()));
         assert_ne!(b, c);
         let titles: Vec<&str> = q.shown().iter().map(|t| t.title.as_str()).collect();
         assert_eq!(titles, ["Other", "Moved to the Trash"]);
         // But a different Undo is a different toast.
-        q.push(Level::Info, "Moved to the Trash", Some("u2".into()));
+        q.push(Level::Info, "Moved to the Trash", None, Some("u2".into()));
         assert_eq!(q.shown().len(), 3);
+    }
+
+    #[test]
+    fn a_body_waits_for_its_toast_once() {
+        expect_body("Pixel Art is on this machine", "Copied from Desk.");
+        assert_eq!(take_body("Other"), None);
+        assert_eq!(take_body("Pixel Art is on this machine").as_deref(), Some("Copied from Desk."));
+        assert_eq!(take_body("Pixel Art is on this machine"), None);
     }
 
     #[test]

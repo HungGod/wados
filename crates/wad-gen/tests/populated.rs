@@ -144,8 +144,6 @@ fn a_wadspace_on_the_screen() {
             "Secret=github_token",
             // Its home keeps its files' owners under the machine's maps.
             "Volume=wad-wadspaces-config:/config:z,idmap",
-            // A GitHub project: wadd's copy of it, read-only, to start from.
-            "Volume=/var/lib/wados/copies/wadspaces:/run/wadspaces-copies/wadspaces:ro,z",
             "Volume=/var/lib/wados/extra/wadspaces:/run/wadspaces-extra:ro,z",
             // The screen only through its own folder.
             "Volume=/run/wados/screen/wadspaces:/run/wadspaces-display:ro,rslave",
@@ -160,6 +158,16 @@ fn a_wadspace_on_the_screen() {
     );
     assert!(!u.contains("/run/user/") && !u.contains("SecurityLabelDisable") && !has(&u, "[Install]"), "{u}");
     assert!(!u.contains("BindsTo") && !u.contains("PublishPort") && !u.contains("WLR_WL_OUTPUTS"), "{u}");
+    // Its GitHub project isn't cloned here (yet): it isn't in it.
+    assert!(!u.contains("/config/Desktop/") && !u.contains("/run/wadspaces-copies"), "{u}");
+    // Cloned: wadd's clone, worked in where it is, and labelled already (no :z, SELinux on).
+    let clone = Mounts::from([("wadspaces".to_string(), "/var/lib/wados/projects/wadspaces/wadspaces".to_string())]);
+    let cloned = unit(w, &clone, &m);
+    assert!(
+        has(&cloned, "Volume=/var/lib/wados/projects/wadspaces/wadspaces:/config/Desktop/WadSpaces:rw"),
+        "{cloned}"
+    );
+    assert!(!cloned.contains("SecurityLabelDisable"), "{cloned}");
     // Two screens: its compositor draws a window on each.
     let two = unit(w, &Mounts::new(), &Machine { screens: 2, ..machine() });
     assert!(has(&two, "Environment=WLR_WL_OUTPUTS=2"), "{two}");
@@ -219,13 +227,16 @@ fn a_mount_is_the_machines_own_folder_and_turns_selinux_off() {
     let lib = library();
     let m = machine();
     let w = ws(&lib, "cosmic-bodybuilding");
-    let found = Mounts::from([("mount-thesis".to_string(), "/var/home/sam/Thesis".to_string())]);
+    let found = Mounts::from([
+        ("mount-thesis".to_string(), "/var/home/sam/Thesis".to_string()),
+        ("writing".to_string(), "/var/lib/wados/projects/cosmic-bodybuilding/writing".to_string()),
+    ]);
     let u = unit(w, &found, &m);
     assert_lines(
         &u,
         &[
             "Volume=/var/home/sam/Thesis:/config/Desktop/Thesis:rw",
-            "Volume=/var/lib/wados/copies/writing:/run/wadspaces-copies/writing:ro,z",
+            "Volume=/var/lib/wados/projects/cosmic-bodybuilding/writing:/config/Desktop/Writing:rw",
             "SecurityLabelDisable=true",
         ],
     );
@@ -242,13 +253,21 @@ fn a_mount_is_the_machines_own_folder_and_turns_selinux_off() {
     // Not on this machine: nothing mounted or listed, and SELinux stays on.
     let away = unit(w, &Mounts::new(), &m);
     assert!(!away.contains("/config/Desktop") && !away.contains("SecurityLabelDisable"), "{away}");
-    assert!(!extras::projects_json(w, &Mounts::new()).contains("mount-thesis"));
+    let none = extras::projects_json(w, &Mounts::new());
+    assert!(!none.contains("mount-thesis") && !none.contains("writing"), "{none}");
     // A path podman's -v can't say isn't mounted either.
     let odd = Mounts::from([("mount-thesis".to_string(), "/var/home/sam/a:b".to_string())]);
     assert!(!unit(w, &odd, &m).contains("/config/Desktop"));
-    // A copy is copied in, from wadd's copy of its files.
-    let demo = unit(ws(&lib, "vanua-academy-client-demo"), &Mounts::new(), &m);
-    assert!(has(&demo, "Volume=/var/lib/wados/copies/deck:/run/wadspaces-copies/deck:ro,z"), "{demo}");
+    // A copy is copied in, from wadd's copy of its files (once it has one).
+    let demo = ws(&lib, "vanua-academy-client-demo");
+    let copy = Mounts::from([("deck".to_string(), "/var/lib/wados/copies/vanua-academy-client-demo/deck".to_string())]);
+    let u = unit(demo, &copy, &m);
+    assert!(
+        has(&u, "Volume=/var/lib/wados/copies/vanua-academy-client-demo/deck:/run/wadspaces-copies/deck:ro,z"),
+        "{u}"
+    );
+    assert!(extras::projects_json(demo, &copy).contains("\"kind\": \"copy\""));
+    assert!(!unit(demo, &Mounts::new(), &m).contains("/run/wadspaces-copies"));
 }
 
 #[test]

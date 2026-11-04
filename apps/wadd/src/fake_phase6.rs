@@ -8,10 +8,12 @@
 //!   Trust, untrust, deny and Later change it; logout leaves it needing a
 //!   login, and login is a Tailnet job that signs in "in the browser"
 //!   (`signIn`, then `signInDone`) and comes back running.
-//! - **Peers:** Desk (online, with two wadspaces) and Laptop (offline). Copy
+//! - **Peers:** Desk (online, with three wadspaces, one its starter
+//!   `wadspaces`: the same id as this machine's) and Laptop (offline). Copy
 //!   here is a CopyWadspace job that applies `space.import` to this library.
 //! - **GitHub:** signed in as hunggod, with three repositories. Sign-in is a
-//!   Github job with a device code, like the real one; sign-out forgets it.
+//!   Github job with a device code, with the real one's stages and params
+//!   (`url`, `code`, `login`); sign-out forgets it.
 //!
 //! Each stage of its jobs takes `step`.
 
@@ -25,8 +27,8 @@ use wad_model::{AppId, AppIn, JobKind, KeyRef, PartState, Peer, PeerKind, Projec
 use wad_model::{SecretKind, Wadspace};
 use wad_proto::github::FIRST_SCOPES;
 use wad_proto::{
-    ApiError, DeviceKind, ErrorCode, Event, GithubAccount, JobInfo, PeerInfo, Repo, SignInProvider, SignInRequest,
-    Tailnet, TailnetAsk, TailnetDevice, TailnetState,
+    ApiError, DeviceKind, DriveState, ErrorCode, Event, GithubAccount, JobInfo, PeerInfo, Repo, SignInProvider,
+    SignInRequest, Tailnet, TailnetAsk, TailnetDevice, TailnetState,
 };
 
 use crate::api_phase6::{Accounts, Net};
@@ -82,6 +84,8 @@ fn running(hostname: &str, now: i64) -> Tailnet {
             ip: "100.88.20.7".into(),
             at: now - 60_000,
         }],
+        drive: DriveState::Shared,
+        drive_error: None,
     }
 }
 
@@ -135,7 +139,13 @@ pub fn peer_wadspaces(peer: &str, now: i64) -> Vec<Wadspace> {
         "app:obsidian".into(),
         KeyRef { id: "desk-vault".into(), name: "Desk vault".into(), kind: SecretKind::Obsidian },
     );
-    vec![art, notes]
+    // Its own starter: the same id as every machine's (and this one's), so
+    // a peer's wadspace and one of this machine's share an id.
+    let mut starter = wad_model::ops::blank("wadspaces", "WadOS", peer, now - 60 * 24 * HOUR, 3);
+    starter.starter = true;
+    starter.apps = vec![AppIn::new(AppId::Vscode), AppIn::new(AppId::Terminal)];
+    starter.look.layout.icons = ["app:vscode", "app:terminal"].map(String::from).to_vec();
+    vec![art, notes, starter]
 }
 
 fn repos(now: i64) -> Vec<Repo> {
@@ -379,7 +389,7 @@ impl Net for Sample {
             ("fetch", format!("Getting {} from {from}", doc.name)),
             ("import", "Making it this machine's".to_string()),
         ];
-        let title = format!("Copying {} from {from}", doc.name);
+        let title = format!("Copying {} to this machine", doc.name);
         let peer = peer.to_string();
         let info = self.0.job(JobKind::CopyWadspace, &title, ws, &stages, |me, job| async move {
             me.stage(&job, "fetch", false, 2).await;
@@ -405,18 +415,23 @@ impl Accounts for Sample {
 
     async fn github_signin(&self, req: SignInRequest) -> Result<JobInfo, ApiError> {
         let signin = SignInProvider::Github;
-        let stages = [
-            ("code", "Asking GitHub for a code".to_string()),
-            ("signin", signin.held_label()),
-            ("token", "Keeping the token".to_string()),
-        ];
+        // The real one's stages and params (github.rs).
+        let stages: Vec<(&str, String)> = crate::github::STAGES
+            .iter()
+            .map(|(id, label)| (*id, if *id == "signin" { signin.held_label() } else { label.to_string() }))
+            .collect();
         self.0.job(JobKind::Github, "Signing in to GitHub", "github", &stages, |me, job| async move {
-            me.stage(&job, "code", false, 1).await;
+            let (url, code) = ("https://github.com/login/device", "WADS-0601");
+            me.stage(&job, "open", false, 1).await;
+            me.jobs.update(&job, true, |j| {
+                j.params.insert("url".into(), Value::String(url.into()));
+                j.params.insert("code".into(), Value::String(code.into()));
+            });
             {
-                let _window = me.bus.sign_in(signin, "https://github.com/login/device", Some("WADS-0601"));
+                let _window = me.bus.sign_in(signin, url, Some(code));
                 me.stage(&job, "signin", true, 3).await;
             }
-            me.stage(&job, "token", false, 1).await;
+            me.stage(&job, "save", false, 1).await;
             {
                 let mut st = me.st.lock().unwrap();
                 let mut account = st.github.take().unwrap_or_else(hunggod);
@@ -425,6 +440,9 @@ impl Accounts for Sample {
                         account.scopes.push(s);
                     }
                 }
+                me.jobs.update(&job, true, |j| {
+                    j.params.insert("login".into(), Value::String(account.login.clone()));
+                });
                 st.github = Some(account);
             }
             me.tell_github();
