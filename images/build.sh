@@ -21,9 +21,11 @@
 #                                         stacked on the base and assembled
 #
 #   builder  localhost/wados-builder:44       Fedora 44 with Rust 1.99: builds
-#            wadspaces-clipboard (crates/wad-clip), wadspaces-session
-#            (crates/wad-session) and selkies-desktop (apps/selkies-desktop)
-#            into .build/images/bin, with cargo's caches in podman volumes
+#            wadbrowser (apps/wadbrowser), wadspaces-clipboard
+#            (crates/wad-clip), wadspaces-session (crates/wad-session) and
+#            selkies-desktop (apps/selkies-desktop) into .build/images/bin
+#            (WadBrowser's launcher and icon into .build/images/share), with
+#            cargo's caches in podman volumes
 #   base     localhost/wados-base:44          the desktop every wadspace runs on
 #   pkg      localhost/wados-pkg-<id>:latest  (and :<image id 12>) one install's
 #            files on their own, FROM scratch (wadspaces-pkg capture)
@@ -45,6 +47,7 @@ ROOT="$(cd "${HERE}/.." && pwd)"
 BASE="${WADOS_BASE:-localhost/wados-base:44}"
 BUILDER=localhost/wados-builder:44
 BIN="${ROOT}/.build/images/bin"
+SHARE="${ROOT}/.build/images/share"
 NO_CACHE=()
 BUILT_BUILDER=false
 PKGS="${WADOS_PKGS:-}"
@@ -61,15 +64,19 @@ build_builder() {
 
 # The programs that run in every wadspace, built for Fedora 44 in the
 # builder, with the checkout mounted read-only. Cargo builds in a workspace
-# of their own (the root Cargo.toml for its shared tables and [profile.image],
-# members cut down to the two crates), so other crates being written can't
-# break the image's build, and nothing in the checkout is written. Cargo.lock
-# pins their dependencies: the build stops if it needed one Cargo.lock
-# hasn't got (as --locked would).
+# of their own: the root Cargo.toml (for its shared tables and
+# [profile.image]) with its members cut down to the three programs, the
+# crates they use and their tests' (wad-wadd-client's are wadd's) coming
+# along as path dependencies, and assets/ (WadBrowser's pages embed some).
+# So other programs being written can't break the image's build, and
+# nothing in the checkout is written. Cargo.lock pins their dependencies:
+# the build stops if it needed one Cargo.lock hasn't got (as --locked
+# would). WadBrowser's launcher and icon go to ${SHARE}, the base's `share`
+# build context (/usr/share).
 build_bins() {
     build_builder
-    log "building wadspaces-clipboard, wadspaces-session and selkies-desktop (in the builder)"
-    rm -rf "${BIN}" && mkdir -p "${BIN}"
+    log "building wadbrowser, wadspaces-clipboard, wadspaces-session and selkies-desktop (in the builder)"
+    rm -rf "${BIN}" "${SHARE}" && mkdir -p "${BIN}" "${SHARE}"
     # label=disable, not :z: relabelling would rewrite the whole checkout.
     podman run --rm --security-opt label=disable \
         -v "${ROOT}":/src:ro \
@@ -78,16 +85,19 @@ build_bins() {
         -v "${BIN}":/out \
         "${BUILDER}" \
         bash -c 'set -eo pipefail
-            rm -rf /tmp/ws && mkdir -p /tmp/ws/crates && cd /tmp/ws
+            rm -rf /tmp/ws && mkdir -p /tmp/ws && cd /tmp/ws
             cp /src/Cargo.toml /src/Cargo.lock . && cp Cargo.lock /tmp/pinned.lock
-            cp -r /src/crates/wad-clip /src/crates/wad-session crates/
-            sed -i "s|^members = .*|members = [\"crates/wad-clip\", \"crates/wad-session\"]|" Cargo.toml
-            cargo build --profile image -p wad-clip -p wad-session
+            cp -r /src/crates /src/apps /src/assets .
+            sed -i "s|^members = .*|members = [\"crates/wad-clip\", \"crates/wad-session\", \"apps/wadbrowser\"]|" Cargo.toml
+            cargo build --profile image -p wad-clip -p wad-session -p wadbrowser
             pairs() { grep -A1 "^name = " "$1" | grep -v "^--" | paste - - | sort -u; }
             extra="$(comm -13 <(pairs /tmp/pinned.lock) <(pairs Cargo.lock))"
             [[ -z "${extra}" ]] || { echo "Cargo.lock does not pin: ${extra}" >&2; exit 1; }
-            cp /target/image/wadspaces-clipboard /target/image/wadspaces-session /out/
+            cp /target/image/wadbrowser /target/image/wadspaces-clipboard /target/image/wadspaces-session /out/
             cp -r /src/apps/selkies-desktop /tmp/sd && make -s -C /tmp/sd && cp /tmp/sd/selkies-desktop /out/'
+    local data="${ROOT}/apps/wadbrowser/data"
+    install -Dm644 "${data}/io.wados.Browser.desktop" "${SHARE}/applications/io.wados.Browser.desktop"
+    install -Dm644 "${data}/icons/io.wados.Browser.svg" "${SHARE}/icons/hicolor/scalable/apps/io.wados.Browser.svg"
 }
 
 build_base() {
@@ -95,7 +105,7 @@ build_base() {
     log "building ${BASE} from images/base/"
     podman build "${NO_CACHE[@]}" \
         --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --build-arg VERSION="$(date -u +%Y%m%d)" \
-        --build-context "bin=${BIN}" \
+        --build-context "bin=${BIN}" --build-context "share=${SHARE}" \
         -t "${BASE}" "${HERE}/base"
 }
 

@@ -10,6 +10,8 @@ pub enum PermissionKind {
     Media,
     Clipboard,
     IdleDetection,
+    Camera,
+    Microphone,
 }
 
 impl PermissionKind {
@@ -20,6 +22,8 @@ impl PermissionKind {
             Self::Media => "media",
             Self::Clipboard => "clipboard",
             Self::IdleDetection => "idle_detection",
+            Self::Camera => "camera",
+            Self::Microphone => "microphone",
         }
     }
 
@@ -30,7 +34,24 @@ impl PermissionKind {
             "media" => Some(Self::Media),
             "clipboard" => Some(Self::Clipboard),
             "idle_detection" => Some(Self::IdleDetection),
+            "camera" => Some(Self::Camera),
+            "microphone" => Some(Self::Microphone),
             _ => None,
+        }
+    }
+}
+
+impl PermissionKind {
+    /// What a prompt asks for ("Use your camera").
+    pub fn asking(self) -> &'static str {
+        match self {
+            Self::Notifications => "Show notifications",
+            Self::Geolocation => "Know your location",
+            Self::Media => "Use your camera and microphone",
+            Self::Clipboard => "See what you copied",
+            Self::IdleDetection => "Know when you're away",
+            Self::Camera => "Use your camera",
+            Self::Microphone => "Use your microphone",
         }
     }
 }

@@ -178,6 +178,7 @@ impl Machine {
         });
         shell.set_machine(&me);
         me.keys();
+        me.follow_windows(shell);
 
         let weak = Rc::downgrade(&me);
         let spring = Spring::new(&me.chrome, PAGE, 0.0, move |p| {
@@ -330,6 +331,24 @@ impl Machine {
         self.go(if self.page.get() == Page::Launcher { Page::Desktop } else { Page::Launcher });
     }
 
+    /// A window coming forward (opened, or brought up) is on the desktop, so
+    /// the launcher goes down to it, as the spike's Machine.svelte does: the
+    /// launcher would cover it otherwise (WadBrowser opened from a link, a
+    /// second launch handing over to the first).
+    fn follow_windows(self: &Rc<Self>, shell: &Rc<Shell>) {
+        let seen: RefCell<Option<Forward>> = RefCell::new(None);
+        let w = Rc::downgrade(self);
+        shell.placer.on_windows(move |list| {
+            let Some(m) = w.upgrade() else { return };
+            let mut seen = seen.borrow_mut();
+            let came = seen.as_ref().is_some_and(|before| before.came_forward(list));
+            *seen = Some(Forward::of(list));
+            if came && m.page() == Page::Launcher {
+                m.go(Page::Desktop);
+            }
+        });
+    }
+
     fn keys(self: &Rc<Self>) {
         // The launcher: its own keys first (home::Launcher::key), then
         // PageDown for the desktop; a scroll down too.
@@ -395,4 +414,60 @@ pub fn natural(w: &impl IsA<gtk::Widget>) -> (f64, f64) {
     let (_, nw, _, _) = w.measure(gtk::Orientation::Horizontal, -1);
     let (_, nh, _, _) = w.measure(gtk::Orientation::Vertical, nw);
     (nw as f64, nh as f64)
+}
+
+/// The windows as they were, to tell when one comes forward.
+struct Forward {
+    ids: Vec<u32>,
+    front: Option<u32>,
+}
+
+impl Forward {
+    fn of(list: &[crate::wm::Top]) -> Self {
+        Forward {
+            ids: list.iter().map(|t| t.id).collect(),
+            front: list.iter().find(|t| t.activated && !t.minimized).map(|t| t.id),
+        }
+    }
+
+    /// A window opened (not minimized), or another one is in front now.
+    fn came_forward(&self, list: &[crate::wm::Top]) -> bool {
+        let opened = list.iter().any(|t| !t.minimized && !self.ids.contains(&t.id));
+        let front = list.iter().find(|t| t.activated && !t.minimized).map(|t| t.id);
+        opened || (front.is_some() && front != self.front)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Forward;
+    use crate::wm::Top;
+
+    fn top(id: u32, activated: bool, minimized: bool) -> Top {
+        Top {
+            id,
+            app_id: "io.wados.Browser".into(),
+            title: String::new(),
+            outputs: vec![],
+            activated,
+            maximized: false,
+            minimized,
+            fullscreen: false,
+        }
+    }
+
+    #[test]
+    fn a_window_coming_forward_is_seen() {
+        let before = Forward::of(&[top(1, true, false)]);
+        // Nothing changed, or the one in front went into the background.
+        assert!(!before.came_forward(&[top(1, true, false)]));
+        assert!(!before.came_forward(&[top(1, false, true)]));
+        // A window opened (in front or not), or another one brought up.
+        assert!(before.came_forward(&[top(1, false, false), top(2, true, false)]));
+        assert!(before.came_forward(&[top(1, true, false), top(2, false, false)]));
+        let two = Forward::of(&[top(1, true, false), top(2, false, false)]);
+        assert!(two.came_forward(&[top(1, false, false), top(2, true, false)]));
+        // One opened minimized (a wadspace in the background) isn't.
+        assert!(!before.came_forward(&[top(1, true, false), top(3, false, true)]));
+    }
 }

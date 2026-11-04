@@ -1,6 +1,6 @@
 [package]
 name = "wadbrowser-ui"
-description = "WadBrowser's windows (forked from Cactus): libadwaita tabs, the header bar, the bookmarks bar, find, settings, shortcuts"
+description = "WadBrowser's windows (forked from Cactus), as the v2 design draws them: the tab bar, the header bar, the shield, the profile chip, the menus and dialogs"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,9 +10,18 @@ license = "MPL-2.0"
 [dependencies]
 adw.workspace = true
 anyhow.workspace = true
+async-channel.workspace = true
+chrono.workspace = true
+gdk4-wayland.workspace = true
+gio.workspace = true
 gtk.workspace = true
 tracing.workspace = true
 wadbrowser-core.workspace = true
 wadbrowser-privacy.workspace = true
 wadbrowser-webkit.workspace = true
+wad-gtk.workspace = true
+# The catalog's web apps (the new tab's tiles).
+wad-model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 webkit6.workspace = true

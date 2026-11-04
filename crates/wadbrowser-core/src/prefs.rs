@@ -22,6 +22,11 @@ pub struct Preferences {
     pub clear_history_on_quit: bool,
     pub omnibox_suggestion_limit: usize,
     pub block_cosmetic_filters: bool,
+    /// "Block all social media": the social sites' pages, and what other pages load from them.
+    pub block_social: bool,
+    /// A tab not looked at for this long sleeps (its page unloaded, reloaded when it's
+    /// shown again); 0: tabs never sleep.
+    pub sleep_tabs_after_minutes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -52,6 +57,8 @@ impl Default for Preferences {
             clear_history_on_quit: false,
             omnibox_suggestion_limit: 8,
             block_cosmetic_filters: true,
+            block_social: false,
+            sleep_tabs_after_minutes: 30,
         }
     }
 }

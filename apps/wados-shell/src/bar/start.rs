@@ -1,7 +1,8 @@
 //! The logo's menu (`shell/bar/Launcher.svelte`): search, your wadspaces
 //! (what's running, then the latest launched: two rows; the rest on the
-//! launcher), the machine's own apps (and the Builder), and power (Lock,
-//! and in the machine's own session Restart and Power off: session.rs).
+//! launcher), the machine's own apps (and the Builder) and web apps, and
+//! power (Lock, and in the machine's own session Restart and Power off:
+//! session.rs).
 //! It's the logo's half grown out: over it on the dock, under it on the
 //! desktop.
 
@@ -155,6 +156,22 @@ impl Start {
             .collect()
     }
 
+    /// The machine's web apps that match.
+    fn found_web_apps(&self) -> Vec<wad_model::BrowserApp> {
+        let q = self.q();
+        let lib = self.shell.store.library();
+        lib.web_apps.iter().filter(|a| q.is_empty() || a.name.to_lowercase().contains(&q)).cloned().collect()
+    }
+
+    fn open_web_app(&self, a: &wad_model::BrowserApp) {
+        self.close();
+        let argv = super::tasks::web_app_argv(a);
+        let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
+        if !ui::spawn(&argv) {
+            self.shell.toast(wad_proto::Level::Warn, "WadBrowser isn't on this machine", None);
+        }
+    }
+
     fn fill(self: &Rc<Self>) {
         while let Some(c) = self.body.first_child() {
             self.body.remove(&c);
@@ -215,10 +232,12 @@ impl Start {
         }
 
         let apps = self.found_apps();
-        if !apps.is_empty() {
+        let web_apps = self.found_web_apps();
+        if !apps.is_empty() || !web_apps.is_empty() {
             self.body.append(&label("THIS MACHINE", &["wb-h4"]));
         }
         let grid = gtk::Grid::builder().column_spacing(2).row_spacing(2).halign(gtk::Align::Start).build();
+        let n_apps = apps.len();
         for (i, (key, name, _)) in apps.into_iter().enumerate() {
             let col = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(5).build();
             let ai = gtk::Box::builder().css_classes(["wb-ai"]).homogeneous(true).halign(gtk::Align::Center).build();
@@ -232,6 +251,29 @@ impl Start {
             b.connect_clicked(move |_| {
                 if let Some(m) = w.upgrade() {
                     m.open_app(key);
+                }
+            });
+            grid.attach(&b, (i % 4) as i32, (i / 4) as i32, 1, 1);
+        }
+        // The machine's own web apps (the browser's "Create app from this
+        // page"), each in a WadBrowser window of its own.
+        for (j, a) in web_apps.into_iter().enumerate() {
+            let i = n_apps + j;
+            let col = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(5).build();
+            let ai = gtk::Box::builder().css_classes(["wb-ai"]).homogeneous(true).halign(gtk::Align::Center).build();
+            ai.append(&Icon::new("globe", 20));
+            col.append(&ai);
+            col.append(&gtk::Label::builder().label(&a.name).css_classes(["wb-res-name"]).build());
+            let b = gtk::Button::builder()
+                .child(&col)
+                .css_classes(["wb-res"])
+                .tooltip_text(format!("Open {}, a web app", a.name))
+                .build();
+            b.set_size_request(CELL, -1);
+            let w = Rc::downgrade(self);
+            b.connect_clicked(move |_| {
+                if let Some(m) = w.upgrade() {
+                    m.open_web_app(&a);
                 }
             });
             grid.attach(&b, (i % 4) as i32, (i / 4) as i32, 1, 1);

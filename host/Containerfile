@@ -7,9 +7,10 @@
 # installer stick, a new machine and the Surface run this. A machine with an
 # NVIDIA card may run Containerfile.nvidia instead, built on this one.
 #
-# Built by host/build.sh image, with host/ as the context and two more:
-#   bin     .build/host/bin: wadd, wados-shell, wadsctl, wadspaces-clipboard
-#           (release builds for Fedora 44, from host/builder)
+# Built by host/build.sh image, with host/ as the context and three more:
+#   bin     .build/host/bin: wadd, wados-shell, wadsctl, wadspaces-clipboard,
+#           wadbrowser (release builds for Fedora 44, from host/builder)
+#   share   .build/host/share: WadBrowser's launcher and icon
 #   assets  assets/: WadSpaces' pictures and fonts
 # No secret is in any of them: the image is the same for everyone.
 
@@ -63,7 +64,7 @@ LABEL org.opencontainers.image.title="WadOS host" \
 
 # The screen: our labwc (and Xwayland, which wlroots needs to be there; it
 # starts only for an X client), greetd, GTK 4 with layer shell, libadwaita
-# and WebKitGTK (the browser, phase 5), foot (the terminal), gvfs (Files'
+# and WebKitGTK (WadBrowser), foot (the terminal), gvfs (Files'
 # Machines over Taildrive, phase 6), Mesa's GL, Vulkan and VA-API, GStreamer's
 # codecs (WebKitGTK plays through it), the fonts and the icons. No
 # xdg-desktop-portal: the shell opens its own file dialog and files.
@@ -153,13 +154,16 @@ RUN kver="$(ls /usr/lib/modules)" \
 
 # WadOS's own: its config and units (host/etc, host/usr), the cursors,
 # the binaries (wadd's clipboard bridge where it looks for it:
-# apps/wadd/src/clip.rs), and WadSpaces' pictures where wad-gtk, the shell
-# and wadd look (crates/wad-gtk/src/assets.rs). Its fonts are the system's.
+# apps/wadd/src/clip.rs), WadBrowser's launcher and icon, and WadSpaces'
+# pictures where wad-gtk, the shell and wadd look
+# (crates/wad-gtk/src/assets.rs). Its fonts are the system's.
 COPY etc/ /etc/
 COPY usr/ /usr/
 COPY --from=cursors /out/WadOS /usr/share/icons/WadOS
-COPY --from=bin --chmod=755 wadd wados-shell wadsctl /usr/bin/
+COPY --from=bin --chmod=755 wadd wados-shell wadsctl wadbrowser /usr/bin/
 COPY --from=bin --chmod=755 wadspaces-clipboard /usr/libexec/wados/
+COPY --from=share --chmod=644 applications/io.wados.Browser.desktop /usr/share/applications/
+COPY --from=share --chmod=644 icons/hicolor/scalable/apps/io.wados.Browser.svg /usr/share/icons/hicolor/scalable/apps/
 COPY --from=assets / /usr/share/wados/assets/
 RUN mkdir -p /usr/share/fonts/wados \
     && mv /usr/share/wados/assets/fonts/* /usr/share/fonts/wados/ \
@@ -202,12 +206,16 @@ RUN systemctl enable greetd.service podman.socket wadd.socket wadd.service \
 # for a machine with its person and one without.
 RUN set -e; \
     for b in /usr/bin/wadd /usr/bin/wados-shell /usr/bin/wadsctl /usr/libexec/wados/wadspaces-clipboard \
-             /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \
+             /usr/bin/wadbrowser /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \
         out="$(ldd -r "${b}" 2>&1)"; \
         if grep -E 'not found|undefined symbol' <<< "${out}"; then echo "${b} doesn't load" >&2; exit 1; fi; \
     done; \
     wadd version; \
     wadsctl --help 2>&1 | grep -q usage; \
+    wadbrowser --version; \
+    grep -qx 'Exec=wadbrowser --default %U' /usr/share/applications/io.wados.Browser.desktop; \
+    test -s /usr/share/icons/hicolor/scalable/apps/io.wados.Browser.svg; \
+    if command -v gtk-update-icon-cache > /dev/null; then gtk-update-icon-cache -q -f /usr/share/icons/hicolor; fi; \
     labwc --version; \
     mkdir -m 0700 /tmp/xdg; \
     XDG_RUNTIME_DIR=/tmp/xdg WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1 \
@@ -251,7 +259,9 @@ ours = []
 for top in ("etc", "usr"):
     for d, _, fs in os.walk(os.path.join("/ctx", top)):
         ours += ["/" + os.path.relpath(os.path.join(d, f), "/ctx") for f in fs]
-ours += ["/usr/bin/wadd", "/usr/bin/wados-shell", "/usr/bin/wadsctl"]
+ours += ["/usr/bin/wadd", "/usr/bin/wados-shell", "/usr/bin/wadsctl", "/usr/bin/wadbrowser",
+         "/usr/share/applications/io.wados.Browser.desktop",
+         "/usr/share/icons/hicolor/scalable/apps/io.wados.Browser.svg"]
 for top in ("/usr/libexec/wados", "/usr/lib/wados", "/usr/share/wados", "/usr/share/fonts/wados",
             "/usr/share/icons/WadOS", "/usr/share/themes/WadOS", "/usr/share/selinux/packages/wados"):
     ours += [os.path.join(d, f) for d, _, fs in os.walk(top) for f in fs]

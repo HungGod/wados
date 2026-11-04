@@ -6,21 +6,30 @@
 
 pub mod bookmarks_io;
 pub mod cli;
+pub mod conf;
 pub mod errors;
+pub mod instance;
 pub mod internal;
 pub mod metrics;
+pub mod modes;
 pub mod omnibox;
 pub mod paths;
 pub mod permissions;
 pub mod prefs;
+pub mod profiles;
 pub mod project;
 pub mod sanitize;
 pub mod search;
+pub mod signin;
+pub mod site;
 pub mod store;
 pub mod url_util;
+pub mod wadd;
+pub mod zoom;
 
-pub use cli::{LaunchArgs, help_text};
+pub use cli::{Request, help_text};
 pub use errors::{BrowserError, BrowserResult};
+pub use modes::{Mode, WindowSpec};
 pub use omnibox::{Suggestion, SuggestionKind, suggest};
 pub use paths::AppPaths;
 pub use permissions::{PermissionDecision, PermissionKind, SitePermission, origin_from_url};

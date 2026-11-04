@@ -86,18 +86,20 @@ image_of() {
 }
 
 # ------------------------------------------------------------ the binaries
-# wadd, the shell, wadsctl and the clipboard bridge, release builds for
-# Fedora 44, built in the host's builder with the checkout read-only (label
-# disabled: relabelling would rewrite the whole checkout). Cargo's registry
-# and target dir are kept under .build/host, so a rebuild only builds what
-# changed. Cargo.lock must already pin everything (--locked). Stripped into
-# .build/host/bin; their symbols are kept in .build/host/debug.
+# wadd, the shell, wadsctl, the clipboard bridge and WadBrowser, release
+# builds for Fedora 44, built in the host's builder with the checkout
+# read-only (label disabled: relabelling would rewrite the whole checkout).
+# Cargo's registry and target dir are kept under .build/host, so a rebuild
+# only builds what changed. Cargo.lock must already pin everything
+# (--locked). Stripped into .build/host/bin; their symbols are kept in
+# .build/host/debug. WadBrowser's launcher and icon go to .build/host/share,
+# the image's `share` context (/usr/share).
 build_bins() {
     log "building ${BUILDER} (host/builder)"
     podman build -q -t "${BUILDER}" "${HERE}/builder" > /dev/null
     mkdir -p "${BUILD}/cargo/registry" "${BUILD}/cargo/git" "${BUILD}/target"
-    rm -rf "${BUILD}/bin" "${BUILD}/debug" && mkdir -p "${BUILD}/bin" "${BUILD}/debug"
-    log "building wadd, wados-shell, wadsctl and wadspaces-clipboard (cargo -j${JOBS}, in the builder)"
+    rm -rf "${BUILD}/bin" "${BUILD}/debug" "${BUILD}/share" && mkdir -p "${BUILD}/bin" "${BUILD}/debug"
+    log "building wadd, wados-shell, wadsctl, wadspaces-clipboard and wadbrowser (cargo -j${JOBS}, in the builder)"
     podman run --rm --security-opt label=disable \
         -v "${ROOT}:/src:ro" \
         -v "${BUILD}/cargo/registry:/usr/local/cargo/registry" \
@@ -106,12 +108,15 @@ build_bins() {
         -v "${BUILD}/bin:/out" -v "${BUILD}/debug:/debug" \
         -w /src "${BUILDER}" \
         bash -c 'set -eo pipefail
-            cargo build --release --locked -j "$0" -p wadd -p wados-shell -p wadsctl -p wad-clip
-            for b in wadd wados-shell wadsctl wadspaces-clipboard; do
+            cargo build --release --locked -j "$0" -p wadd -p wados-shell -p wadsctl -p wad-clip -p wadbrowser
+            for b in wadd wados-shell wadsctl wadspaces-clipboard wadbrowser; do
                 objcopy --only-keep-debug "/target/release/${b}" "/debug/${b}.debug"
                 install -s -m 755 "/target/release/${b}" "/out/${b}"
             done' "${JOBS}"
     ls -l "${BUILD}/bin" | tail -n +2 | awk '{ printf ">>   %-22s %6.1f MB\n", $9, $5 / 1048576 }'
+    local data="${ROOT}/apps/wadbrowser/data"
+    install -Dm644 "${data}/io.wados.Browser.desktop" "${BUILD}/share/applications/io.wados.Browser.desktop"
+    install -Dm644 "${data}/icons/io.wados.Browser.svg" "${BUILD}/share/icons/hicolor/scalable/apps/io.wados.Browser.svg"
 }
 
 # ------------------------------------------------------------ the MOK key
@@ -201,6 +206,7 @@ build_images() {
     log "building ${IMAGE_BASE}:unchunked (host/Containerfile)"
     podman build --jobs 1 -f "${HERE}/Containerfile" \
         --build-context "bin=${BUILD}/bin" \
+        --build-context "share=${BUILD}/share" \
         --build-context "assets=${ROOT}/assets" \
         -t "${IMAGE_BASE}:unchunked" "${HERE}"
     local built=(host)

@@ -50,12 +50,13 @@ impl MachineApp {
         }
     }
 
-    /// The app ids its windows have (the browser's fork keeps Cactus's until it's renamed).
+    /// The app ids its windows have (a web app's windows are their own:
+    /// `wadspaces-webapp-<id>`, [`web_app_argv`]).
     pub fn app_ids(self) -> &'static [&'static str] {
         match self {
             MachineApp::Settings => &["io.wados.Settings"],
             MachineApp::Files => &["io.wados.Files"],
-            MachineApp::Browser => &["io.wados.Browser", "io.wados.WadBrowser", "org.cactus.Browser"],
+            MachineApp::Browser => &["io.wados.Browser"],
             MachineApp::Builder => &[crate::builder::APP_ID],
         }
     }
@@ -70,6 +71,18 @@ impl MachineApp {
             MachineApp::Builder => None,
         }
     }
+}
+
+/// What opens one of the machine's web apps (`Library::web_apps`): its own
+/// WadBrowser window (`wadbrowser_core::cli`), in its profile when that
+/// isn't the default one.
+pub fn web_app_argv(a: &wad_model::BrowserApp) -> Vec<String> {
+    let mut argv = vec!["wadbrowser".into(), "--app".into(), a.id.clone(), "--name".into(), a.name.clone()];
+    argv.extend(["--url".into(), a.url.clone()]);
+    if !a.profile.is_empty() && a.profile != "default" {
+        argv.extend(["--profile".into(), a.profile.clone()]);
+    }
+    argv
 }
 
 /// The machine app a window belongs to, if it's one of theirs.
@@ -200,7 +213,7 @@ mod tests {
             top(1, "io.wados.Files", false),
             top(2, "io.wadspaces.studio", true),
             top(3, "io.wados.Terminal", false),
-            top(4, "org.cactus.Browser", false),
+            top(4, "io.wados.Browser", false),
             top(5, "io.wados.Files", false),
             top(6, "io.wados.Shell", false),
             top(7, "io.wados.Builder", false),
@@ -217,6 +230,22 @@ mod tests {
         assert_eq!(ids(MachineApp::Builder), [7]);
         // The wadspace's window isn't a task; the terminal and the shell's other window are the others.
         assert_eq!(t.others.iter().map(|w| w.id).collect::<Vec<_>>(), [3, 6]);
+    }
+
+    #[test]
+    fn web_apps_open_in_a_wadbrowser_window_of_their_own() {
+        let mut a = wad_model::BrowserApp {
+            id: "webapp-3".into(),
+            name: "Maps & Co".into(),
+            url: "https://maps.example/x?y=1".into(),
+            profile: "default".into(),
+        };
+        assert_eq!(
+            web_app_argv(&a),
+            ["wadbrowser", "--app", "webapp-3", "--name", "Maps & Co", "--url", "https://maps.example/x?y=1"]
+        );
+        a.profile = "work".into();
+        assert_eq!(web_app_argv(&a)[7..], ["--profile", "work"]);
     }
 
     #[test]
@@ -281,7 +310,9 @@ mod tests {
     fn glyphs_and_titles() {
         assert_eq!(glyph("io.wados.Terminal"), "square-terminal");
         assert_eq!(glyph("io.wados.Shell"), "blocks");
-        assert_eq!(glyph("org.cactus.Browser"), "globe");
+        assert_eq!(glyph("io.wados.Browser"), "globe");
+        // Cactus's own id isn't the browser's any more.
+        assert_eq!(app_of("org.cactus.Browser"), None);
         assert_eq!(glyph("io.wados.Builder"), "blocks");
         assert_eq!(glyph("com.example.Thing"), "app-window");
         let mut t = top(1, "io.wados.Terminal", false);

@@ -14,7 +14,7 @@
 #   4. copies VS Code extensions the image has into ~/.vscode/extensions,
 #      where they're missing (wadspaces-vscode-extensions)
 #   4b. takes what the wadspace brings when it starts (/run/wadspaces-extra):
-#      its desktop layout, and its web apps (HOOK(browser): a later phase)
+#      its desktop layout, and its web apps' launchers (wadspaces-webapp)
 #   5. seeds ~/Desktop with the launchers named in the desktop-entries lists
 #   6. hands the paths in the chown lists to abc
 #   7. rebuilds the labwc right-click menu from those launchers
@@ -112,13 +112,13 @@ fi
 EXTRA=/run/wadspaces-extra
 [[ -f "${EXTRA}/layout.json" ]] && cp "${EXTRA}/layout.json" "${CONF}/layout.json"
 
-# ---------------------------------------------------- HOOK(browser): web apps
-# Web apps (with the icons wadd made) and the browser's launcher go here, a
-# later phase: the browser (a Cactus fork) brings /usr/local/bin/
-# wadspaces-webapp, which makes each one's launcher, as
+# ------------------------------------------------------------- web apps
+# Each web app's launcher (with the icon wadd made), a WadBrowser window of
+# its own: wadspaces-webapp makes it, as
 #   wadspaces-webapp --id <id> --icon ${EXTRA}/icons/<id>.png <name> <url>
-# for each {"id", "name", "url"} in ${EXTRA}/webapps.json. Until then
-# they're left out, and said so.
+# for each {"id", "name", "url"} in ${EXTRA}/webapps.json. wadspaces-layout
+# then places the ones layout.json names. A base without the browser (an
+# old one) leaves them out, and says so.
 if [[ -f "${EXTRA}/webapps.json" ]]; then
     if [[ -x /usr/local/bin/wadspaces-webapp ]]; then
         while IFS= read -r -d '' WID && IFS= read -r -d '' WNAME && IFS= read -r -d '' WURL; do

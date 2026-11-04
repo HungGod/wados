@@ -20,10 +20,13 @@
 #   wadspaces-dnf <id> [--desktop f] <pkg>...   a desktop app from Fedora
 #   wadspaces-vscode-extensions <id>...         VS Code extensions (after the vscode feature)
 #   wadspaces-pkg capture|assemble              packages: one install's files on their own
+#   wadspaces-webapp --id <id> --icon <png> <name> <url>
+#                                               a website in a WadBrowser window of its own
 #
-# Build it with images/build.sh, which first builds wadspaces-clipboard,
-# wadspaces-session and selkies-desktop in images/builder and passes them in
-# as the `bin` build context.
+# Build it with images/build.sh, which first builds wadbrowser,
+# wadspaces-clipboard, wadspaces-session and selkies-desktop in
+# images/builder and passes them in as the `bin` build context (and
+# WadBrowser's launcher and icon as `share`).
 FROM ghcr.io/linuxserver/baseimage-fedora:44@sha256:f262a934dd87c6d1e959f32a9af75207c4c67f6f7a9893f28077c0f1aba34fc4
 
 ARG BUILD_DATE
@@ -123,24 +126,60 @@ RUN \
   test -s /usr/share/selkies/www/icon.png && \
   labwc --version
 
-# WadOS's own programs, built for Fedora 44 in images/builder: the
+# WadBrowser's libraries: GTK 4, libadwaita and WebKitGTK 6 (it plays media
+# through the GStreamer above; WebKit's sandbox, bubblewrap and
+# xdg-dbus-proxy, comes with it), glib-networking for TLS, GTK's settings'
+# schemas, the icon themes its buttons and launcher draw from, and
+# gtk4-layer-shell (70 kB: wad-gtk, which the browser's chrome uses, links
+# it). A layer of its own: the big install above stays cached.
+RUN \
+  echo "**** WadBrowser's libraries ****" && \
+  dnf -y --setopt=install_weak_deps=False install \
+    adwaita-icon-theme \
+    glib-networking \
+    gsettings-desktop-schemas \
+    gtk4-layer-shell \
+    hicolor-icon-theme \
+    libadwaita \
+    webkitgtk6.0 && \
+  dnf clean all && \
+  rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*
+
+# WadOS's own programs, built for Fedora 44 in images/builder: the browser
+# (apps/wadbrowser, a Cactus fork: every web app's window too), the
 # clipboard bridge (crates/wad-clip), the desktop's moves between the screen
 # and a stream (crates/wad-session), and the desktop shell (apps/selkies-desktop:
 # a plain Wayland client, cairo + libwayland; it starts apps through gio).
+# WadBrowser's launcher (io.wados.Browser.desktop, wad-gen's recipe's) and
+# icon come as `share`.
 COPY --from=bin / /usr/local/bin/
+COPY --from=share / /usr/share/
 RUN \
   echo "**** check they run here ****" && \
-  ! ldd /usr/local/bin/selkies-desktop /usr/local/bin/wadspaces-clipboard /usr/local/bin/wadspaces-session | grep 'not found' && \
+  ! ldd /usr/local/bin/selkies-desktop /usr/local/bin/wadspaces-clipboard /usr/local/bin/wadspaces-session \
+      /usr/local/bin/wadbrowser | grep 'not found' && \
   wadspaces-clipboard --version && \
   wadspaces-session --version && \
-  tmux -f /etc/tmux.conf -L check start-server ';' kill-server
-
-# HOOK(browser): the browser goes here, a later phase (a Cactus fork; v1's
-# WadBrowser is gone). It brings: its binary in /usr/local/bin, BROWSER and
-# xdg-open's http(s)/text/html handlers (/etc/xdg/mimeapps.list) pointed at
-# it, and /usr/local/bin/wadspaces-webapp, the web apps' launchers, which
-# init-wadspaces-workspace calls for /run/wadspaces-extra/webapps.json (see
-# HOOK(browser) there). Until then links open in whatever app claims them.
+  wadbrowser --version && \
+  tmux -f /etc/tmux.conf -L check start-server ';' kill-server && \
+  echo "**** links open in WadBrowser (--default: full or Focus, as wadbrowser.conf says) ****" && \
+  desktop-file-validate /usr/share/applications/io.wados.Browser.desktop && \
+  gtk-update-icon-cache -q -f /usr/share/icons/hicolor && \
+  update-desktop-database -q /usr/share/applications && \
+  [ "$(xdg-mime query default x-scheme-handler/https)" = io.wados.Browser.desktop ] && \
+  [ "$(xdg-mime query default text/html)" = io.wados.Browser.desktop ] && \
+  gio mime x-scheme-handler/http | grep -q 'Default application.*io.wados.Browser.desktop' && \
+  echo "**** a web app's launcher (then taken out again) ****" && \
+  wadspaces-webapp --id wados-check "Check" https://check.invalid/ > /dev/null && \
+  desktop-file-validate /usr/share/applications/wadspaces-webapp-wados-check.desktop && \
+  grep -qx 'Exec=wadbrowser --app wados-check --name "Check" --url "https://check.invalid/" %U' \
+      /usr/share/applications/wadspaces-webapp-wados-check.desktop && \
+  rm /usr/share/applications/wadspaces-webapp-wados-check.desktop /etc/wadspaces/apps.d/webapp-wados-check.list && \
+  sed -i '/^wadspaces-webapp-wados-check.desktop$/d' /etc/wadspaces/desktop-entries.d/webapps.list && \
+  { [ -s /etc/wadspaces/desktop-entries.d/webapps.list ] || rm /etc/wadspaces/desktop-entries.d/webapps.list; } && \
+  rmdir --ignore-fail-on-non-empty /etc/wadspaces/apps.d
+# $BROWSER (what programs open links with) too.
+ENV BROWSER=/usr/local/bin/wadbrowser-link
 
 # Fedora's updates, as of the build day (VERSION, from images/build.sh): the
 # installs above take what they install new, not updates to what the base

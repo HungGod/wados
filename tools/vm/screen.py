@@ -9,6 +9,9 @@ from QEMU's screendump (8-bit RGB or RGBA PNGs, not interlaced).
                             the box where they differ ("x0 y0 x1 y1", the
                             last pixels inside), looking only inside the
                             given box if there is one; exit 1 when they don't
+    screen.py --ink FILE.png
+                            a page of big black text on white is drawn:
+                            exit 0 when there's enough of both
 
 Standard library only.
 """
@@ -88,7 +91,30 @@ def diff(a, b, within=None):
     print(f"{x0} {y0} {x1} {y1}")
 
 
+def ink(path):
+    """A web page of big black text on white: how much of each there is."""
+    w, h, bpp, rows = pixels(path)
+    black = white = 0
+    for line in rows:
+        for x in range(0, w * bpp, bpp):
+            r, g, b = line[x], line[x + 1], line[x + 2]
+            if r < 8 and g < 8 and b < 8:  # the text (#000), not the dark chrome (#080815)
+                black += 1
+            elif r > 230 and g > 230 and b > 230:
+                white += 1
+    print(f"black {black}, white {white}")
+    sys.exit(0 if black > MIN_INK and white > MIN_PAPER else 1)
+
+
+# A page of the check's (huge text on white) has far more of both than this.
+MIN_INK = 5000
+MIN_PAPER = 100000
+
+
 def main(argv):
+    if len(argv) == 3 and argv[1] == "--ink":
+        ink(argv[2])
+        return
     if len(argv) in (3, 7):
         diff(argv[1], argv[2], tuple(int(v) for v in argv[3:]) if len(argv) == 7 else None)
         return

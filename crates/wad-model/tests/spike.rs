@@ -929,3 +929,111 @@ mod two_clicks {
         );
     }
 }
+
+/// The browser's saved sign-ins for sites (src/sim/actions/browser.ts's
+/// secrets.saveWeb and secrets.removeSite).
+mod web_keys {
+    use super::*;
+    use wad_model::SecretKind;
+
+    #[test]
+    fn a_site_signs_in_with_a_new_web_key_or_one_it_has() {
+        let mut lib = library();
+        // A new one: a web key with that site, named as asked (or for the site).
+        let out =
+            act(&mut lib, Op::SaveWebKey { name: s("Personal"), site: s("https://www.GitLab.com/x"), existing: None });
+        let id = out.created.expect("a key");
+        let k = lib.key(&id).expect("made");
+        assert_eq!(
+            (k.name.as_str(), k.kind, k.sites.as_slice()),
+            ("Personal", SecretKind::Web, &[s("gitlab.com")][..])
+        );
+        assert_eq!(out.toast.as_deref(), Some("Saved sign-in “Personal”"));
+        assert!(out.changed.is_empty() && !out.needs_build, "no wadspace changes");
+        let unnamed = act(&mut lib, Op::SaveWebKey { name: s(" "), site: s("news.ycombinator.com"), existing: None });
+        assert_eq!(lib.key(&unnamed.created.expect("a key")).map(|k| k.name.as_str()), Some("news.ycombinator.com"));
+        // One it has: the site joins its sites, once.
+        for _ in 0..2 {
+            let out =
+                act(&mut lib, Op::SaveWebKey { name: s(""), site: s("gitlab.com"), existing: Some(s("hunggod")) });
+            assert_eq!(out.created.as_deref(), Some("hunggod"));
+            assert_eq!(out.toast.as_deref(), Some("gitlab.com signs in with hunggod"));
+        }
+        let k = lib.key("hunggod").expect("hunggod");
+        assert_eq!(k.sites, [s("github.com"), s("gitlab.com")]);
+        assert_eq!(k.changed_at, Some(common::EPOCH));
+    }
+
+    #[test]
+    fn only_a_web_key_a_web_address_and_a_key_there_is() {
+        let mut lib = library();
+        let was = lib.clone();
+        let r =
+            apply(&mut lib, Op::SaveWebKey { name: s(""), site: s("x.com"), existing: Some(s("old-steam")) }, &ctx());
+        assert_eq!(r, Err(EditError::Refused(s("Steam isn’t a web sign-in"))));
+        let r = apply(&mut lib, Op::SaveWebKey { name: s(""), site: s("not a site"), existing: None }, &ctx());
+        assert_eq!(r, Err(EditError::Refused(s("That isn’t a web address"))));
+        let r = apply(&mut lib, Op::SaveWebKey { name: s(""), site: s("x.com"), existing: Some(s("gone")) }, &ctx());
+        assert_eq!(r, Err(EditError::NotFound { what: "key", id: s("gone") }));
+        let r = apply(&mut lib, Op::RemoveSite { key: s("gone"), site: s("x.com") }, &ctx());
+        assert_eq!(r, Err(EditError::NotFound { what: "key", id: s("gone") }));
+        assert_eq!(lib, was);
+    }
+
+    #[test]
+    fn a_site_taken_off_a_key_the_key_stays() {
+        let mut lib = library();
+        act(&mut lib, Op::RemoveSite { key: s("work-web"), site: s("https://mail.google.com/mail/u/0") });
+        let k = lib.key("work-web").expect("still there");
+        assert_eq!(k.sites, [s("claude.ai"), s("drive.google.com")]);
+        assert_eq!(k.changed_at, Some(common::EPOCH));
+        // A site it doesn't have: nothing changes.
+        let was = lib.clone();
+        act(&mut lib, Op::RemoveSite { key: s("work-web"), site: s("github.com") });
+        assert_eq!(lib, was);
+    }
+
+    #[test]
+    fn they_read_as_the_spikes_actions() {
+        let op: Op =
+            serde_json::from_str(r#"{"op": "secrets.saveWeb", "name": "Work", "site": "github.com"}"#).expect("an op");
+        assert_eq!(op, Op::SaveWebKey { name: s("Work"), site: s("github.com"), existing: None });
+        let op: Op =
+            serde_json::from_str(r#"{"op": "secrets.saveWeb", "name": "", "site": "x.com", "existing": "hunggod"}"#)
+                .expect("an op");
+        assert_eq!(op, Op::SaveWebKey { name: s(""), site: s("x.com"), existing: Some(s("hunggod")) });
+        let op: Op = serde_json::from_str(r#"{"op": "secrets.removeSite", "key": "hunggod", "site": "github.com"}"#)
+            .expect("an op");
+        assert_eq!(op, Op::RemoveSite { key: s("hunggod"), site: s("github.com") });
+    }
+}
+
+/// The browser's web apps of your own (src/sim/actions/browser.ts's
+/// browser.newApp and browser.removeApp).
+mod web_apps {
+    use super::*;
+
+    #[test]
+    fn a_web_app_of_your_own_comes_and_goes() {
+        let mut lib = library();
+        let id = act(&mut lib, Op::NewWebApp { name: s("Docs"), url: s("docs.rs/gtk4") }).created.expect("an id");
+        assert!(lib.web_apps.iter().any(|a| a.id == id && a.url == "https://docs.rs/gtk4"));
+        let out = act(&mut lib, Op::RemoveWebApp { id: id.clone() });
+        assert_eq!(out.toast.as_deref(), Some("Removed Docs"));
+        assert!(out.changed.is_empty() && !out.needs_build, "no wadspace changes");
+        assert!(!lib.web_apps.iter().any(|a| a.id == id));
+        // The sample's own, Calendar, goes too; one that isn't there is an error, and nothing changes.
+        act(&mut lib, Op::RemoveWebApp { id: s("calendar") });
+        assert!(lib.web_apps.is_empty());
+        let was = lib.clone();
+        let r = apply(&mut lib, Op::RemoveWebApp { id: s("calendar") }, &ctx());
+        assert_eq!(r, Err(EditError::NotFound { what: "web app", id: s("calendar") }));
+        assert_eq!(lib, was);
+    }
+
+    #[test]
+    fn it_reads_as_the_spikes_action() {
+        let op: Op = serde_json::from_str(r#"{"op": "assets.removeWebApp", "id": "calendar"}"#).expect("an op");
+        assert_eq!(op, Op::RemoveWebApp { id: s("calendar") });
+    }
+}

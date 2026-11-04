@@ -1,0 +1,6 @@
+#!/bin/sh
+# $BROWSER: a link opens in the wadspace's kind of WadBrowser window, full or
+# Focus, as /run/wadspaces-extra/wadbrowser.conf (or the user's own
+# ~/.config/wadbrowser/wadbrowser.conf) says. Programs that read $BROWSER
+# run it as one command, so the flag can't go in it.
+exec wadbrowser --default "$@"

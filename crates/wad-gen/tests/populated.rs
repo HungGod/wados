@@ -183,7 +183,7 @@ fn its_keys_are_mounted_and_listed() {
     );
     let json: serde_json::Value =
         serde_json::from_str(&extras::signins_json(w, &lib.keys).expect("it has keys")).expect("json");
-    assert_eq!(json["version"], 1);
+    assert_eq!(json["version"], 2);
     let s = &json["signins"];
     assert_eq!(s[0]["id"], "vanua-claude");
     assert_eq!(s[0]["web"], false);
@@ -194,7 +194,11 @@ fn its_keys_are_mounted_and_listed() {
     assert_eq!(s[1]["web"], true);
     assert_eq!(s[1]["apps"], serde_json::json!(["gmail", "google-drive", "claude"]));
     assert_eq!(s[1]["paths"], serde_json::json!([]));
+    // A web key's sites (its record's, this machine's); an app's key has none.
+    assert_eq!(s[1]["sites"], serde_json::json!(["claude.ai", "mail.google.com", "drive.google.com"]));
+    assert_eq!(s[0]["sites"], serde_json::json!([]));
     assert_eq!(s[3]["apps"], serde_json::json!(["github"]));
+    assert_eq!(s[3]["sites"], serde_json::json!(["github.com"]));
     // WadBrowser's own windows, in IntelligenceQuest's group.
     let iq = extras::signins(ws(&lib, "intelligencequest"));
     assert_eq!(iq[1].key.id, "hunggod");
@@ -204,6 +208,9 @@ fn its_keys_are_mounted_and_listed() {
     assert!(desk.contains("\".config/obsidian/\""), "{desk}");
     let elsewhere = extras::signins_json(ws(&lib, "desk-lab"), &[]).expect("its key");
     assert!(elsewhere.contains("\".config/obsidian/Local Storage/\""), "{elsewhere}");
+    // Without this machine's record of a web key, it has no sites.
+    let bare: serde_json::Value = serde_json::from_str(&extras::signins_json(w, &[]).expect("its keys")).expect("json");
+    assert_eq!(bare["signins"][1]["sites"], serde_json::json!([]));
     assert!(extras::signins_json(ws(&lib, "travel"), &lib.keys).is_none());
 }
 
@@ -364,7 +371,7 @@ fn its_extra_folder() {
         layout,
         serde_json::json!({"version": 1, "icons": [
             {"app": "vscode", "desktop": "wadspaces-vscode.desktop", "label": "VS Code", "autostart": true},
-            {"app": "wadbrowser", "desktop": "wadbrowser.desktop", "label": "WadBrowser"},
+            {"app": "wadbrowser", "desktop": "io.wados.Browser.desktop", "label": "WadBrowser"},
             {"app": "terminal", "desktop": "foot.desktop", "label": "Command line"},
             {"project": "wadspaces", "label": "WadSpaces"},
         ]})

@@ -3446,6 +3446,7 @@ name = "wadbrowser"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "tracing",
  "tracing-subscriber",
  "wadbrowser-core",
  "wadbrowser-ui",
@@ -3461,9 +3462,15 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.21",
+ "tokio",
  "toml",
+ "tracing",
  "url",
+ "wad-model",
+ "wad-proto",
+ "wad-wadd-client",
 ]
 
 [[package]]
@@ -3472,6 +3479,9 @@ version = "0.1.0"
 dependencies = [
  "adblock",
  "anyhow",
+ "serde_json",
+ "sha2",
+ "tempfile",
  "tracing",
  "ureq",
  "wadbrowser-core",
@@ -3482,9 +3492,17 @@ name = "wadbrowser-ui"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "chrono",
+ "gdk4-wayland",
+ "gio",
  "gtk4",
  "libadwaita",
+ "serde",
+ "serde_json",
  "tracing",
+ "wad-gtk",
+ "wad-model",
  "wadbrowser-core",
  "wadbrowser-privacy",
  "wadbrowser-webkit",
@@ -3496,6 +3514,10 @@ name = "wadbrowser-webkit"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "gtk4",
+ "serde_json",
+ "tempfile",
  "tracing",
  "url",
  "wadbrowser-core",

@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# A website as an app of its own: its launcher, which opens it in a
+# WadBrowser window of its own (Wayland app_id wadspaces-webapp-<id>, its
+# name, no address bar). init-wadspaces-workspace runs it as root at each
+# start for each web app wadd lists in /run/wadspaces-extra/webapps.json,
+# with the icon wadd made; an image's own build steps may run it too.
+#
+#   wadspaces-webapp --id <id> --icon <png> <name> <url>
+#   wadspaces-webapp --id claude "Claude" https://claude.ai
+#   wadspaces-webapp "Claude" https://claude.ai          (the id: the name's slug)
+#
+# Writes /usr/share/applications/wadspaces-webapp-<id>.desktop, running
+#   wadbrowser --app <id> --name <name> --url <url> [--icon <png>] %U
+# where selkies-desktop, wadspaces-layout (layout.json names it, and
+# /etc/wadspaces/apps.d/webapp-<id>.list) and wadspaces-menu find it, and
+# lists it for hand-made images' desktops (desktop-entries.d/webapps.list).
+# The icon is copied to /usr/share/wadspaces/webapps/<id>.png; without one
+# (none given, or not there yet) the launcher has WadBrowser's. Nothing is
+# fetched. Web apps share the browser's default profile, so one sign-in
+# covers Gmail, Drive and the rest; one with a saved sign-in uses that
+# instead (WadBrowser reads /run/wadspaces-extra/signins.json itself), so
+# the launcher never changes for it.
+set -euo pipefail
+ID=""
+ICON_SRC=""
+while [[ $# -gt 0 && "$1" == --* ]]; do
+    case "$1" in
+        --id) ID="${2:-}"; shift 2 ;;
+        --icon) ICON_SRC="${2:-}"; shift 2 ;;
+        *) echo "wadspaces-webapp: unknown option: $1" >&2; exit 2 ;;
+    esac
+done
+[[ $# -eq 2 ]] || { echo "usage: wadspaces-webapp [--id <id>] [--icon <png>] <name> <url>" >&2; exit 2; }
+NAME="$1"; URL="$2"
+[[ "${URL}" =~ ^https?://[^[:space:]]+$ ]] || { echo "wadspaces-webapp: not a web address: ${URL}" >&2; exit 2; }
+[[ -n "${NAME}" && "${NAME}" != *$'\n'* ]] || { echo "wadspaces-webapp: the name is empty or has a line break" >&2; exit 2; }
+if [[ -z "${ID}" ]]; then
+    ID="$(printf '%s' "${NAME}" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')"
+    [[ -n "${ID}" ]] || ID=app
+fi
+# WadBrowser's app ids (wadbrowser_core::cli::web_app_id).
+[[ "${ID}" =~ ^[a-z0-9][a-z0-9-]{0,63}$ ]] || { echo "wadspaces-webapp: bad app id: ${ID}" >&2; exit 2; }
+command -v wadbrowser > /dev/null || { echo "wadspaces-webapp: needs wadbrowser (the base has it)" >&2; exit 1; }
+
+APPS=/usr/share/applications
+CONF=/etc/wadspaces
+ICONS=/usr/share/wadspaces/webapps
+LAUNCHER="wadspaces-webapp-${ID}"
+
+ICON=io.wados.Browser
+ICON_ARG=""
+if [[ -n "${ICON_SRC}" && -s "${ICON_SRC}" ]]; then
+    mkdir -p "${ICONS}"
+    install -m 0644 "${ICON_SRC}" "${ICONS}/${ID}.png"
+fi
+if [[ -s "${ICONS}/${ID}.png" ]]; then
+    ICON="${ICONS}/${ID}.png"
+fi
+
+# One Exec argument, quoted as the desktop entry spec says: inside double
+# quotes, " ` $ \ take a backslash, and a % is doubled. (The whole value is
+# then escaped as any value is: value.)
+quote() {
+    local s="$1"
+    s="${s//\\/\\\\}"; s="${s//\"/\\\"}"; s="${s//\`/\\\`}"; s="${s//\$/\\\$}"; s="${s//%/%%}"
+    printf '"%s"' "${s}"
+}
+[[ "${ICON}" == /* ]] && ICON_ARG=" --icon $(quote "${ICON}")"
+# A key's value in the file, escaped as the spec's strings are: a backslash
+# doubled (the name has no line breaks). GLib undoes this before it reads
+# Exec's quoting.
+value() { printf '%s' "${1//\\/\\\\}"; }
+EXEC="wadbrowser --app ${ID} --name $(quote "${NAME}") --url $(quote "${URL}")${ICON_ARG} %U"
+
+mkdir -p "${APPS}"
+cat > "${APPS}/${LAUNCHER}.desktop.tmp" <<EOF
+[Desktop Entry]
+Type=Application
+Name=$(value "${NAME}")
+Comment=$(value "${URL}")
+Exec=$(value "${EXEC}")
+Icon=${ICON}
+Terminal=false
+StartupNotify=true
+StartupWMClass=${LAUNCHER}
+Categories=Network;WebBrowser;
+EOF
+mv "${APPS}/${LAUNCHER}.desktop.tmp" "${APPS}/${LAUNCHER}.desktop"
+
+mkdir -p "${CONF}/apps.d" "${CONF}/desktop-entries.d"
+echo "${LAUNCHER}.desktop" > "${CONF}/apps.d/webapp-${ID}.list"
+grep -qxF "${LAUNCHER}.desktop" "${CONF}/desktop-entries.d/webapps.list" 2>/dev/null \
+    || echo "${LAUNCHER}.desktop" >> "${CONF}/desktop-entries.d/webapps.list"
+echo "webapp: ${NAME} -> ${URL} (${LAUNCHER}.desktop)"

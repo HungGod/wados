@@ -9,7 +9,7 @@
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::{app_name, is_named_app, url_host};
+use crate::catalog::{app_name, host_of, is_named_app, url_host};
 use crate::check::{self, CheckError, MAX_NAME, MAX_VALUE};
 use crate::chips::{ChipKind, chip_of};
 use crate::commands::{CommandError, next_command_name, parse_command};
@@ -143,6 +143,11 @@ fn not_found(what: &'static str, id: &str) -> EditError {
 
 fn refused(s: impl Into<String>) -> EditError {
     EditError::Refused(s.into())
+}
+
+/// A site as a web key lists it: its host, lowercased, without "www." ("https://www.GitHub.com/x" → "github.com").
+fn web_site(site: &str) -> Option<String> {
+    host_of(site)
 }
 
 /// A file or folder kept in a wadspace: a folder is mounted, a file copied in.
@@ -308,6 +313,17 @@ pub enum Op {
     /// A key taken off what signs in with it (the Builder's Secrets box ×): `app`'s things with `key` sign in as the app does, or with nothing. With an Undo.
     #[serde(rename = "space.dropKey")]
     DropKey { ws: String, app: AppId, key: String },
+    /// A site signs in with a web key (the browser's "Saved sign-ins"): `existing`'s, which gets `site` too, else a new web key named `name` (none: the site's name). Created: the key's id.
+    #[serde(rename = "secrets.saveWeb")]
+    SaveWebKey {
+        name: String,
+        site: String,
+        #[serde(default)]
+        existing: Option<String>,
+    },
+    /// A web key stops signing in to `site` (the key itself stays).
+    #[serde(rename = "secrets.removeSite")]
+    RemoveSite { key: String, site: String },
     /// Into another sign-in group: it drops the key it was grouped by and signs in with `key` (none: with nothing). An app the key needs comes too.
     #[serde(rename = "space.joinGroup")]
     JoinGroup {
@@ -405,6 +421,9 @@ pub enum Op {
     /// A web app of your own for the machine's browser, ready to drop on wadspaces. Created: its id.
     #[serde(rename = "assets.webApp")]
     NewWebApp { name: String, url: String },
+    /// A web app of your own taken off the machine's browser (its new tab, Settings). Wadspaces it was dropped on keep their own copies.
+    #[serde(rename = "assets.removeWebApp")]
+    RemoveWebApp { id: String },
 }
 
 /// Make one edit. On an error nothing changed.
@@ -613,6 +632,17 @@ impl Tx<'_> {
             Op::SwapKey { ws, slot, key } => self.swap_key(&ws, &slot, &key),
             Op::DropKey { ws, app, key } => self.drop_key(&ws, app, &key),
             Op::JoinGroup { ws, key } => self.join_group(&ws, key.as_deref()),
+            Op::SaveWebKey { name, site, existing } => self.save_web_key(&name, &site, existing.as_deref()),
+            Op::RemoveSite { key, site } => {
+                let site = web_site(&site).unwrap_or_else(|| site.trim().to_ascii_lowercase());
+                let now = self.ctx.now_ms;
+                let k = self.lib.keys.iter_mut().find(|k| k.id == key).ok_or_else(|| not_found("key", &key))?;
+                if k.sites.contains(&site) {
+                    k.sites.retain(|s| *s != site);
+                    k.changed_at = Some(now);
+                }
+                Ok(())
+            }
 
             Op::AddCommand { ws, kind, text } => {
                 let (kind, text) = parse_command(kind, &text)?;
@@ -779,6 +809,12 @@ impl Tx<'_> {
                 });
                 self.out.toast = Some(format!("{shown} is an app"));
                 self.out.created = Some(id);
+                Ok(())
+            }
+            Op::RemoveWebApp { id } => {
+                let i = self.lib.web_apps.iter().position(|a| a.id == id).ok_or_else(|| not_found("web app", &id))?;
+                let gone = self.lib.web_apps.remove(i);
+                self.out.toast = Some(format!("Removed {}", gone.name));
                 Ok(())
             }
         }
@@ -1065,6 +1101,32 @@ impl Tx<'_> {
         });
         self.out.created = Some(id.clone());
         Ok(id)
+    }
+
+    /// A site into a web key's sites (`existing`'s), else a new web key for it.
+    fn save_web_key(&mut self, name: &str, site: &str, existing: Option<&str>) -> Result<(), EditError> {
+        let site = web_site(site).ok_or_else(|| refused("That isn’t a web address"))?;
+        let now = self.ctx.now_ms;
+        if let Some(id) = existing {
+            let k = self.lib.keys.iter_mut().find(|k| k.id == id).ok_or_else(|| not_found("key", id))?;
+            if k.kind != SecretKind::Web {
+                return Err(refused(format!("{} isn’t a web sign-in", k.name)));
+            }
+            if !k.sites.contains(&site) {
+                k.sites.push(site.clone());
+                k.changed_at = Some(now);
+            }
+            self.out.toast = Some(format!("{site} signs in with {}", k.name));
+            self.out.created = Some(k.id.clone());
+            return Ok(());
+        }
+        let shown = if name.trim().is_empty() { truncate(&site, MAX_NAME) } else { check::name(name)? };
+        let id = self.new_key(&shown, SecretKind::Web)?;
+        if let Some(k) = self.lib.keys.iter_mut().find(|k| k.id == id) {
+            k.sites = vec![site.clone()];
+        }
+        self.out.toast = Some(format!("Saved sign-in “{shown}”"));
+        Ok(())
     }
 
     /// What `variant` in `ws` signs in with (none: as its app does, or nothing). A web app with a key of its own leaves the browser's group for one of its own (or one with that key already).

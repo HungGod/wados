@@ -5,6 +5,7 @@
 #   wados-shell           apps/wados-shell the shell (GTK4, gtk4-layer-shell, PAM)
 #   wadsctl               apps/wadsctl     what labwc's keybinds run
 #   wadspaces-clipboard   crates/wad-clip  a wadspace's clipboard bridge, run by wadd
+#   wadbrowser            apps/wadbrowser  the browser (GTK4, libadwaita, WebKitGTK 6)
 #
 # host/build.sh builds this as localhost/wados-host-builder:44 and runs cargo
 # in it with the checkout mounted read-only and cargo's caches under
@@ -12,15 +13,17 @@
 # builds what runs inside wadspaces.
 FROM registry.fedoraproject.org/fedora:44@sha256:cb3bd21415bd82a2fae1a9379f3f972fa8e78d460c9f86101274d13230dd6fd6
 
-# gtk4-devel brings pango, cairo, glib and graphene's; binutils (with gcc)
-# strips the binaries.
+# gtk4-devel brings pango, cairo, glib and graphene's; webkitgtk6.0-devel
+# libsoup 3's and JavaScriptCore's; binutils (with gcc) strips the binaries.
 RUN dnf -y --setopt=install_weak_deps=False install \
       gcc \
       gtk4-devel \
       gtk4-layer-shell-devel \
+      libadwaita-devel \
       pam-devel \
       pkgconf-pkg-config \
-      rustup && \
+      rustup \
+      webkitgtk6.0-devel && \
     dnf clean all && rm -rf /var/cache/libdnf5 /var/log/dnf5.log*
 
 # Rust 1.99 exactly, from rustup, as images/builder has it. RUSTUP_TOOLCHAIN

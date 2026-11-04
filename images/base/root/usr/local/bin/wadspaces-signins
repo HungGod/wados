@@ -8,12 +8,20 @@ folder on the host that wadd mounts into each wadspace that uses it, at
 /run/wadspaces-signins/<id>, so signing in once covers all of them. wadd lists
 them in /run/wadspaces-extra/signins.json:
 
-    {"version": 1, "signins": [{"id": "vscode-k3x9q2", "name": "VS Code", "web": false,
+    {"version": 2, "signins": [{"id": "vscode-k3x9q2", "name": "VS Code", "web": false,
                                 "apps": ["vscode"], "dir": "/run/wadspaces-signins/vscode-k3x9q2",
-                                "paths": [".config/Code/User/globalStorage/", ".claude.json"]}, ...]}
+                                "paths": [".config/Code/User/globalStorage/", ".claude.json"],
+                                "sites": []},
+                               {"id": "work-web", "name": "Work", "web": true,
+                                "apps": ["gmail", "@browser"], "dir": "/run/wadspaces-signins/work-web",
+                                "paths": [], "sites": ["mail.google.com", "github.com"]}, ...]}
 
-A web sign-in is the browser's (it reads the list itself; HOOK(browser): a
-later phase), and is skipped here. For an app's, each
+(Version 2 added each key's "sites": a web key's sites, which open in its
+profile in any WadBrowser window. This script reads either version.)
+
+A web sign-in is WadBrowser's (it reads the list itself: a web app's key is
+its profile, "@browser" the browser's own windows'), and is skipped here.
+For an app's, each
 path (under the home folder; a folder's ends in /) becomes a link into the
 sign-in, kept there at the same path:
   - if this wadspace already has the path and the sign-in doesn't, it moves

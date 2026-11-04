@@ -8,8 +8,9 @@
 //!   wadd puts each one's icon at `icons/<id>.png`);
 //! - `layout.json`: its desktop's icons in order, and what opens at start
 //!   (`wadspaces-layout`, `wadspaces-projects`);
-//! - `signins.json`: the keys it mounts and what signs in with each
-//!   (`wadspaces-signins`; WadBrowser reads its profiles from it);
+//! - `signins.json`: the keys it mounts, what signs in with each, and the
+//!   sites a web key signs in to (`wadspaces-signins`; WadBrowser reads its
+//!   profiles from it);
 //! - `projects.json`: its projects (`wadspaces-projects`);
 //! - `wadbrowser.conf`: what links open in, with WadBrowser;
 //! - its wallpaper ([`wallpaper_file`]), which wadd copies in.
@@ -274,10 +275,18 @@ struct SignInEntry {
     apps: Vec<String>,
     dir: String,
     paths: Vec<String>,
+    /// A web key's sites: a page on one of them, in any of WadBrowser's
+    /// windows, opens in this key's profile.
+    sites: Vec<String>,
 }
 
-/// signins.json: each key it mounts, where, and its paths (the key's own,
-/// from `keys`, this machine's; else its kind's). None without keys.
+/// signins.json's version: 2 added each key's `sites` (version 1's
+/// readers, `wadspaces-signins` and WadBrowser, read it as they did).
+pub const SIGNINS_VERSION: u32 = 2;
+
+/// signins.json: each key it mounts, where, its paths (the key's own,
+/// from `keys`, this machine's; else its kind's) and, for a web key, the
+/// sites it signs in to (its record's). None without keys.
 pub fn signins_json(ws: &Wadspace, keys: &[Secret]) -> Option<String> {
     let list = signins(ws);
     if list.is_empty() {
@@ -292,6 +301,7 @@ pub fn signins_json(ws: &Wadspace, keys: &[Secret]) -> Option<String> {
                 Some(p) => p.clone(),
                 None => default_paths(s.key.kind).iter().map(|p| p.to_string()).collect(),
             };
+            let sites = record.filter(|_| web).map(|r| r.sites.clone()).unwrap_or_default();
             SignInEntry {
                 dir: format!("{SIGNINS_ROOT}/{}", s.key.id),
                 name: record.map_or_else(|| s.key.name.clone(), |r| r.name.clone()),
@@ -299,10 +309,11 @@ pub fn signins_json(ws: &Wadspace, keys: &[Secret]) -> Option<String> {
                 web,
                 apps: s.apps,
                 paths,
+                sites,
             }
         })
         .collect();
-    Some(pretty(&serde_json::json!({ "version": 1, "signins": signins })))
+    Some(pretty(&serde_json::json!({ "version": SIGNINS_VERSION, "signins": signins })))
 }
 
 // ------------------------------------------------------------ projects

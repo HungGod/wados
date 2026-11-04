@@ -10,6 +10,11 @@ license = "MPL-2.0"
 [dependencies]
 adblock.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 tracing.workspace = true
 ureq.workspace = true
 wadbrowser-core.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

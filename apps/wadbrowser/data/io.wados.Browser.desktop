@@ -4,7 +4,9 @@ Type=Application
 Name=WadBrowser
 GenericName=Web Browser
 Comment=WadOS's web browser, based on Cactus
-Exec=wadbrowser %U
+# --default: links open in what the wadspace chose (wadbrowser.conf: full
+# or focus); on the machine, and without one, a full window.
+Exec=wadbrowser --default %U
 Icon=io.wados.Browser
 Terminal=false
 Categories=Network;WebBrowser;
@@ -16,8 +18,8 @@ Actions=new-window;new-private-window;
 
 [Desktop Action new-window]
 Name=New Window
-Exec=wadbrowser
+Exec=wadbrowser --default --new-window
 
 [Desktop Action new-private-window]
 Name=New Private Window
-Exec=wadbrowser --private
+Exec=wadbrowser --private --new-window

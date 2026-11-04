@@ -8,16 +8,20 @@
 #   3. a wrong password doesn't unlock it; sam's does (typed through QMP),
 #      and the shell's screen shows (tools/vm/screen.py: not blank); the
 #      desktop's icon is below the bar; a second Lock and unlock
-#   4. a terminal-only wadspace through wadd's socket, as sam: built (it
-#      runs the base as it is), on the screen, its window there; a tone
-#      played in it reaches the machine's PipeWire, and the VM's sound card
-#      (.build/vm/sound.wav)
-#   5. the machine's session (WADOS_SESSION=machine): the power key opens
+#   4. a wadspace with the terminal and a web app, through wadd's socket, as
+#      sam: built (it runs the base as it is), on the screen, its window
+#      there; a tone played in it reaches the machine's PipeWire, and the
+#      VM's sound card (.build/vm/sound.wav)
+#   5. WadBrowser in sam's session: a page served in the VM, drawn
+#      (screen.py --ink); a second wadbrowser hands its page over (still one
+#      process); a web app's window (wadspaces-webapp-<id>); and in the
+#      wadspace, the browser and its web app's launcher
+#   6. the machine's session (WADOS_SESSION=machine): the power key opens
 #      the shell's menu, the volume keys, the brightness (none in a VM), the
 #      idle lock, logind's lock-session
-#   6. Restart, through the shell and logind: it comes back to the lock screen
-#   7. Power off, through the shell and logind: QEMU ends
-#   8. booted again: suspend locks the screen within logind's 5 s, a key
+#   7. Restart, through the shell and logind: it comes back to the lock screen
+#   8. Power off, through the shell and logind: QEMU ends
+#   9. booted again: suspend locks the screen within logind's 5 s, a key
 #      wakes it, and QMP's quit ends it (VM_KEEP=1: it keeps running)
 
 ok() { printf 'ok    %s\n' "$*"; }
@@ -99,6 +103,7 @@ check() {
     check_user
     check_unlock
     check_wadspace
+    check_browser
     check_session
     check_restart
     check_power_off
@@ -215,7 +220,7 @@ check_desktop_below_bar() {
 }
 
 check_wadspace() {
-    say "4. a wadspace with only the terminal, on the screen, with sound"
+    say "4. a wadspace with the terminal and a web app, on the screen, with sound"
     local screen id b st phase opened wins
     if [[ "$(api GET /v1/health)" == ok ]]; then ok "wadd answers sam on /run/wadd/wadd.sock"; else fail "wadd doesn't answer sam"; journal -u wadd -u wadd.socket; fi
     screen="$(api GET /v1/screen)"
@@ -224,6 +229,8 @@ check_wadspace() {
     id="$(api POST /v1/ops '{"op": {"op": "space.create", "name": "VM Terminal"}}' | jq -r .created 2> /dev/null)"
     [[ -n "${id}" && "${id}" != null ]] || { fail "no wadspace made"; step_time; return; }
     api POST /v1/ops "{\"op\": {\"op\": \"apps.add\", \"ws\": \"${id}\", \"app\": \"terminal\"}}" > /dev/null
+    # A web app too (WadBrowser comes with it): it arrives at start, never builds (step 5 looks for its launcher).
+    api POST /v1/ops "{\"op\": {\"op\": \"builder.addWebApp\", \"ws\": \"${id}\", \"name\": \"VM page\", \"url\": \"http://127.0.0.1:8799/\"}}" > /dev/null
     b="$(api POST "/v1/wadspaces/${id}/build")"
     if [[ "$(jq -r .state.built <<< "${b}")" == built && "$(jq -r .job <<< "${b}")" == null ]]; then
         ok "${id}: built (nothing to build: it runs ${BASE_IMAGE} as it is)"
@@ -272,8 +279,87 @@ check_wadspace() {
     step_time
 }
 
+# In sam's session, as the shell starts things (a user unit, so it outlives ssh).
+in_session() {
+    local unit=$1
+    shift
+    as_sam "XDG_RUNTIME_DIR=/run/user/1000 systemd-run --user --quiet --collect --unit ${unit} --setenv=WAYLAND_DISPLAY=wayland-0 $*"
+}
+browser_procs() { as_sam 'pgrep -x -u sam wadbrowser | wc -l' 2> /dev/null; }
+
+check_browser() {
+    say "5. WadBrowser: on the machine (a page, a second launch handed over, a web app's window), and in a wadspace"
+    local wins drawn n ws launchers
+    # Pages served in the VM itself: nothing from the internet. Huge black
+    # text on white, so a page that's drawn shows (screen.py --ink).
+    as_sam 'mkdir -p /tmp/wb && for p in index:WadOS-VM-page two:Second-page; do
+        printf "<!doctype html><title>%s</title><body style=\"margin:0;background:#fff;color:#000;font:bold 160px sans-serif\">%s</body>\n" "${p#*:}" "${p#*:}" > "/tmp/wb/${p%%:*}.html"; done' 2> /dev/null
+    in_session wb-pages python3 -m http.server 8799 --bind 127.0.0.1 --directory /tmp/wb 2> /dev/null
+    in_session wb-browser wadbrowser http://127.0.0.1:8799/index.html 2> /dev/null
+    for _ in $(seq 30); do
+        wins="$(shell wm list)"
+        grep -q 'io.wados.Browser "[^"]*WadOS-VM-page' <<< "${wins}" && break
+        sleep 2
+    done
+    note "wm list: ${wins}"
+    if grep -q 'io.wados.Browser "[^"]*WadOS-VM-page' <<< "${wins}"; then
+        ok "WadBrowser opened a page (io.wados.Browser, its title the page's)"
+    else
+        fail "no WadBrowser window with the page"
+        as_sam 'XDG_RUNTIME_DIR=/run/user/1000 journalctl --user -u wb-browser --no-pager | tail -n 20' 2> /dev/null | indent
+    fi
+    sleep 3
+    shot_to 5-browser.png
+    if drawn="$(python3 "${HERE}/screen.py" --ink "${SHOTS}/5-browser.png" 2>&1)"; then ok "the page is drawn (${drawn})"; else fail "the page isn't drawn: ${drawn}"; fi
+
+    if as_sam 'XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 timeout 20 wadbrowser http://127.0.0.1:8799/two.html' 2> /dev/null; then
+        ok "a second wadbrowser handed its page over and exited 0"
+    else
+        fail "the second wadbrowser failed"
+    fi
+    sleep 3
+    wins="$(shell wm list)"
+    n="$(browser_procs)"
+    if [[ "${n}" == 1 ]] && grep -q 'Second-page' <<< "${wins}"; then
+        ok "still one browser, and it shows the second page (a new tab)"
+    else
+        fail "browsers: ${n}; wm list: ${wins}"
+    fi
+    shot_to 5-browser-second.png
+    if drawn="$(python3 "${HERE}/screen.py" --ink "${SHOTS}/5-browser-second.png" 2>&1)"; then ok "the second tab is drawn (${drawn})"; else fail "the second tab isn't drawn: ${drawn}"; fi
+
+    as_sam 'XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0 timeout 20 wadbrowser --app vmpage --name "VM page" --url http://127.0.0.1:8799/index.html' 2> /dev/null
+    for _ in $(seq 15); do
+        wins="$(shell wm list)"
+        grep -q 'wadspaces-webapp-vmpage' <<< "${wins}" && break
+        sleep 2
+    done
+    if grep -q 'wadspaces-webapp-vmpage' <<< "${wins}"; then ok "a web app's window (wadspaces-webapp-vmpage)"; else fail "no web app window: ${wins}"; fi
+    sleep 2
+    shot_to 5-web-app.png
+    if drawn="$(python3 "${HERE}/screen.py" --ink "${SHOTS}/5-web-app.png" 2>&1)"; then ok "the web app's page is drawn (${drawn})"; else fail "the web app's page isn't drawn: ${drawn}"; fi
+    as_sam 'XDG_RUNTIME_DIR=/run/user/1000 systemctl --user stop wb-browser wb-pages; pkill -x -u sam wadbrowser; true' 2> /dev/null
+    for _ in $(seq 10); do [[ "$(browser_procs)" == 0 ]] && break; sleep 1; done
+    if [[ "$(browser_procs)" == 0 ]]; then ok "closed"; else fail "wadbrowser is still running"; fi
+
+    # In a wadspace: the browser is in the base image, and a web app gets its launcher.
+    ws="$(api GET /v1/wadspaces | jq -r '.[] | select(.name == "VM Terminal") | .id' 2> /dev/null | head -1)"
+    if [[ -n "${ws}" ]]; then
+        note "in ${ws}: $(as_root "podman exec --user abc wad-${ws} wadbrowser --version" 2>&1 | head -1)"
+        launchers="$(as_root "podman exec wad-${ws} sh -c 'ls /usr/share/applications/ | grep -E \"^(io.wados.Browser|wadspaces-webapp-)\"'" 2> /dev/null | tr '\n' ' ')"
+        if grep -q 'wadspaces-webapp-' <<< "${launchers}" && grep -q 'io.wados.Browser' <<< "${launchers}"; then
+            ok "the wadspace has WadBrowser and its web app's launcher (${launchers})"
+        else
+            fail "launchers in ${ws}: ${launchers:-none}"
+        fi
+    else
+        fail "no VM Terminal wadspace to look in"
+    fi
+    step_time
+}
+
 check_session() {
-    say "5. the machine's session: power key, volume, brightness, idle, lock-session"
+    say "6. the machine's session: power key, volume, brightness, idle, lock-session"
     local s v0 v1 b sid
     s="$(shell session)"
     note "session: ${s}"
@@ -318,7 +404,7 @@ check_session() {
 }
 
 check_restart() {
-    say "6. Restart through the shell (logind): it comes back to the lock screen"
+    say "7. Restart through the shell (logind): it comes back to the lock screen"
     local r port
     port="$(cat "${VM}/ssh.port")"
     r="$(shell power restart)"
@@ -344,7 +430,7 @@ check_restart() {
 }
 
 check_suspend() {
-    say "8. locking before suspend: within logind's 5 s, and the inhibitor back after waking"
+    say "9. locking before suspend: within logind's 5 s, and the inhibitor back after waking"
     # A boot of its own, the last: once this VM has slept and woken, QEMU's
     # virtio-vga hangs the next boot's GPU probe, whether it restarts or
     # powers off (seen three times), so the VM ends with QMP's quit. It
@@ -414,7 +500,7 @@ check_suspend() {
 }
 
 check_power_off() {
-    say "7. Power off through the shell (logind)"
+    say "8. Power off through the shell (logind)"
     local r
     r="$(shell power off)"
     note "wadsctl power off: ${r}"

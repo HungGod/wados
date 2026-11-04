@@ -1,6 +1,8 @@
 # Builds WadOS's programs that run inside wadspaces against Fedora 44, the
 # wadspaces' own system:
 #
+#   wadbrowser           apps/wadbrowser     the browser and every web app's window (GTK 4,
+#                                            libadwaita, WebKitGTK 6: a Cactus fork)
 #   wadspaces-clipboard  crates/wad-clip     the wadspace's clipboard bridged to the machine's
 #   wadspaces-session    crates/wad-session  its desktop moving between the screen and a stream
 #   selkies-desktop      apps/selkies-desktop (C, make)  the desktop's icons, Start menu and taskbar
@@ -11,18 +13,26 @@
 FROM registry.fedoraproject.org/fedora:44@sha256:cb3bd21415bd82a2fae1a9379f3f972fa8e78d460c9f86101274d13230dd6fd6
 
 # selkies-desktop links libwayland-client/-cursor, libX11, libXext and cairo;
-# wayland-protocols has the xdg-shell XML its Makefile reads. The Rust crates
-# need only a C linker (wayland-client is pure Rust).
+# wayland-protocols has the xdg-shell XML its Makefile reads. WadBrowser
+# links GTK 4, libadwaita and WebKitGTK 6 (with libsoup 3 and JavaScriptCore,
+# which webkitgtk6.0-devel brings), and gtk4-layer-shell (wad-gtk's session
+# lock, which it never calls, is linked with the rest of wad-gtk); its SQLite
+# and TLS (aws-lc) are built from source with gcc. The other Rust crates need only a C linker
+# (wayland-client is pure Rust).
 RUN dnf -y --setopt=install_weak_deps=False install \
       cairo-devel \
       gcc \
+      gtk4-devel \
+      gtk4-layer-shell-devel \
+      libadwaita-devel \
       libX11-devel \
       libXext-devel \
       make \
       pkgconf-pkg-config \
       rustup \
       wayland-devel \
-      wayland-protocols-devel && \
+      wayland-protocols-devel \
+      webkitgtk6.0-devel && \
     dnf clean all && rm -rf /var/cache/libdnf5 /var/log/dnf5.log*
 
 # Rust 1.99 exactly, from rustup (Fedora's own rust moves on with updates),

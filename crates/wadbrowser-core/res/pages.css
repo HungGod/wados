@@ -1,0 +1,696 @@
+/* The cactus:// pages' look, served at cactus://res/pages.css: the spike's
+   tokens and base (src/styles/tokens.css, base.css), its Button and Toggle,
+   and its browser pages (src/apps/browser/pages/*.svelte). Dark only. */
+
+@font-face {
+  font-family: 'Inter';
+  src: url('fonts/Inter-Variable.ttf') format('truetype');
+  font-weight: 100 900;
+  font-display: block;
+}
+@font-face {
+  font-family: 'Space Grotesk';
+  src: url('fonts/SpaceGrotesk-Variable.ttf') format('truetype');
+  font-weight: 300 700;
+  font-display: block;
+}
+
+:root {
+  color-scheme: dark;
+
+  --bg: #0a0614;
+  --bg-2: #0e0919;
+  --surface: #140d22;
+  --surface-2: #1b132d;
+  --surface-3: #241a39;
+  --line: rgb(240 234 250 / 0.09);
+  --line-strong: rgb(240 234 250 / 0.18);
+  --fg: #f5f2fa;
+  --muted: rgb(245 242 250 / 0.62);
+  --faint: rgb(245 242 250 / 0.4);
+
+  --accent: #c6ff1f;
+  --accent-fg: #0a0614;
+  --accent-soft: rgb(198 255 31 / 0.2);
+  --accent-2: #ff3d81;
+  --accent-2-soft: rgb(255 61 129 / 0.24);
+  --danger: #ff5d7a;
+  --danger-soft: rgb(255 93 122 / 0.16);
+  --warn: #e8c36a;
+  --warn-soft: rgb(232 195 106 / 0.16);
+  --c-key: #ff3d81;
+  --shadow: rgb(3 2 8 / 0.85);
+
+  --r-sm: 8px;
+  --r: 12px;
+  --r-md: 16px;
+  --r-lg: 20px;
+  --r-xl: 24px;
+  --r-pill: 999px;
+
+  --font: 'Inter', system-ui, sans-serif;
+  --font-display: 'Space Grotesk', 'Inter', sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', 'Cascadia Code', 'DejaVu Sans Mono', monospace;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* ------------------------------------------------------------ base */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+html {
+  height: 100%;
+}
+body {
+  background: var(--bg-2);
+  color: var(--fg);
+  font: 14px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+h1,
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+p {
+  margin: 0;
+}
+a {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+img {
+  -webkit-user-drag: none;
+  user-select: none;
+}
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: default;
+}
+code {
+  font-family: var(--font-mono);
+  color: var(--fg);
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+::selection {
+  background: var(--accent-soft);
+}
+.icon {
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+}
+.muted {
+  color: var(--muted);
+}
+.faint {
+  color: var(--faint);
+}
+
+/* ------------------------------------------------------------ buttons and toggles (ui/Button, ui/Toggle) */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 16px;
+  border-radius: var(--r);
+  border: 1px solid transparent;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    border-color 0.15s,
+    box-shadow 0.15s,
+    transform 0.1s;
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.btn.sm {
+  height: 32px;
+  padding: 0 12px;
+  font-size: 13px;
+}
+.btn.primary {
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: 0 8px 24px -10px var(--accent);
+  font-weight: 600;
+}
+.btn.secondary {
+  background: var(--surface-2);
+  border-color: var(--line-strong);
+}
+.btn.secondary:hover {
+  background: var(--surface-3);
+}
+.btn.ghost {
+  background: transparent;
+  color: var(--muted);
+}
+.btn.ghost:hover {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+.btn.quiet {
+  background: transparent;
+  border-color: var(--line);
+  color: var(--muted);
+}
+.btn.quiet:hover {
+  color: var(--fg);
+  border-color: var(--line-strong);
+}
+.btn.danger {
+  background: var(--danger-soft);
+  color: var(--danger);
+  border-color: rgb(255 93 122 / 0.3);
+}
+.btn.danger:hover {
+  background: rgb(255 93 122 / 0.24);
+}
+.btn:disabled {
+  opacity: 0.4;
+  box-shadow: none;
+}
+
+.toggle {
+  width: 40px;
+  height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-3);
+  padding: 2px;
+  flex: none;
+  transition: background 0.18s;
+}
+.toggle .knob {
+  display: block;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--fg);
+  transition: transform 0.2s var(--ease-out);
+}
+.toggle.on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.toggle.on .knob {
+  transform: translateX(16px);
+  background: var(--accent-fg);
+}
+.toggle:disabled {
+  opacity: 0.4;
+}
+
+/* A choice (Settings' search engine): its value, quiet, with a chevron. */
+select.choice {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 34px;
+  padding: 0 32px 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: transparent
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='rgb(245 242 250 / 0.62)' stroke-width='1.75' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E")
+    no-repeat right 10px center;
+  color: var(--muted);
+  font-size: 14px;
+  outline: none;
+}
+select.choice:hover {
+  color: var(--fg);
+  border-color: var(--line-strong);
+}
+select.choice:focus-visible {
+  border-color: var(--accent);
+}
+select.choice option {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+
+/* ------------------------------------------------------------ a page of the browser's own */
+
+.cactus-page {
+  min-height: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 30px 28px 40px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cactus-page.wide {
+  max-width: 760px;
+  gap: 16px;
+}
+.cactus-page.list {
+  gap: 14px;
+}
+.cactus-page h1 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 24px;
+}
+.cactus-page h1 .icon.lime {
+  color: var(--accent);
+}
+.cactus-page h2 {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 12px;
+}
+.cactus-page.wide h2 {
+  font-size: 15px;
+  color: var(--fg);
+  margin-top: 8px;
+}
+.cactus-page section {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-md);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+}
+.cactus-page .row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  min-height: 56px;
+}
+.cactus-page.wide .row {
+  gap: 14px;
+  padding: 14px 16px;
+}
+.cactus-page .row + .row {
+  border-top: 1px solid var(--line);
+}
+.cactus-page .row > .icon {
+  color: var(--muted);
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.cactus-page small,
+.cactus-page .empty {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+.cactus-page .row small.line {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+small a.inline {
+  color: var(--accent);
+}
+.value {
+  color: var(--muted);
+}
+.swatch {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  flex: none;
+}
+
+/* The privacy page's counts. */
+.stats {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 1fr;
+  gap: 12px;
+}
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+.stat b {
+  font: 600 26px / 1 var(--font-display);
+}
+.stat.big b {
+  font-size: 34px;
+  color: var(--accent);
+}
+.stat span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+table.sites {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+table.sites th {
+  text-align: left;
+  color: var(--faint);
+  font-weight: 500;
+  font-size: 12px;
+  padding: 6px 10px;
+}
+table.sites td {
+  padding: 8px 10px;
+  border-top: 1px solid var(--line);
+}
+table.sites td a:hover {
+  text-decoration: underline;
+}
+table.sites th:not(:first-child),
+table.sites td:not(:first-child) {
+  text-align: right;
+  width: 90px;
+  font-variant-numeric: tabular-nums;
+}
+
+ul.plain {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+ul.allowed li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* History. */
+.cactus-page .empty.line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+ul.visits li {
+  display: grid;
+  grid-template-columns: 90px 1fr auto;
+  gap: 14px;
+  align-items: center;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+ul.visits li .t {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+ul.visits li .t:hover {
+  text-decoration: underline;
+}
+ul.visits small,
+ul.visits .host {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------ the new tab */
+
+.newtab {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 64px 24px 40px;
+  gap: 26px;
+  background:
+    radial-gradient(ellipse 520px 260px at 50% 0%, rgb(198 255 31 / 0.07), transparent 70%),
+    var(--bg-2);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 600 26px / 1 var(--font-display);
+}
+.mark {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+form.search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(560px, 100%);
+  height: 48px;
+  margin: 0;
+  padding: 0 16px;
+  border-radius: var(--r-pill);
+  border: 1px solid var(--line-strong);
+  background: var(--surface);
+  color: var(--muted);
+}
+form.search:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+form.search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-size: 15px;
+  color: var(--fg);
+}
+form.search input::placeholder {
+  color: var(--muted);
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 96px);
+  justify-content: center;
+  gap: 8px;
+  width: min(640px, 100%);
+}
+.tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 6px 10px;
+  border-radius: var(--r);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+.tile:hover,
+.tile.menu-open {
+  background: var(--surface-2);
+  color: var(--fg);
+}
+.tile > span:last-child {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tile.mine::after {
+  content: '';
+  position: absolute;
+  top: 10px;
+  right: 20px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent-2);
+}
+.newtab .hint {
+  color: var(--faint);
+  font-size: 12px;
+}
+
+/* A web app's icon (ui/AppIcon): its site's on a white card, or its initial. */
+.site-icon,
+.web-icon {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: var(--s);
+  height: var(--s);
+  border-radius: calc(var(--s) * 0.22);
+}
+.site-icon {
+  background: #fbf9ff;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.08);
+}
+.site-icon img {
+  width: 66%;
+  height: 66%;
+  object-fit: contain;
+  display: block;
+}
+.web-icon {
+  background: #1f1533;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
+  color: var(--tint);
+  font: 700 calc(var(--s) * 0.52) / 1 var(--font-display);
+}
+
+/* The menu a tile of your own opens (ui/MenuList). */
+.menu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 220px;
+  max-width: 340px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-2);
+  box-shadow: 0 18px 48px -12px var(--shadow);
+  outline: none;
+}
+.menu .item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 34px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  text-align: left;
+  color: var(--fg);
+}
+.menu .item:hover,
+.menu .item:focus-visible {
+  background: var(--surface-3);
+  outline: none;
+}
+.menu .item .icon {
+  color: var(--muted);
+}
+.menu .item.danger,
+.menu .item.danger .icon {
+  color: var(--danger);
+}
+.menu .sep {
+  height: 1px;
+  margin: 5px 8px;
+  background: var(--line);
+}
+.menu .heading {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* ------------------------------------------------------------ pages that say why there's no page */
+
+.notice {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 40px 24px;
+  text-align: center;
+  background: var(--bg-2);
+}
+.notice.blocked {
+  background:
+    radial-gradient(circle 280px at 50% 35%, rgb(255 61 129 / 0.1), transparent 70%),
+    var(--bg-2);
+}
+.notice.failed {
+  background:
+    radial-gradient(circle 280px at 50% 35%, rgb(232 195 106 / 0.08), transparent 70%),
+    var(--bg-2);
+}
+.notice .badge {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 24px;
+}
+.notice.blocked .badge {
+  background: var(--accent-2-soft);
+  color: var(--accent-2);
+}
+.notice.failed .badge {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+.notice h1 {
+  font-size: 24px;
+}
+.notice p {
+  max-width: 46ch;
+  color: var(--muted);
+}
+.notice p b {
+  color: var(--fg);
+}
+.notice .where {
+  max-width: 60ch;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  color: var(--faint);
+}
+.notice .acts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+/* Cactus has no page by that name. */
+.notice.missing {
+  gap: 12px;
+  color: var(--muted);
+}
+.notice.missing a.home {
+  color: var(--accent);
+}
+.notice.missing a.home:hover {
+  text-decoration: underline;
+}

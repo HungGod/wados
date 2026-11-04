@@ -26,6 +26,5 @@ phases. `firebase` and `go` (retired from the catalog) are not coming back.
 | `gcloud` | Google Cloud's apt repository | Google Cloud's yum repository |
 | `hplip` | hplip + cups-client | Fedora's `hplip` + `cups-client` |
 
-Also waiting on the browser phase (`HOOK(browser)` in `Containerfile` and
-`init-wadspaces-workspace`): `wadspaces-webapp` (web apps' launchers) and
-the browser itself.
+The browser came in phase 5: WadBrowser (`apps/wadbrowser`) is in the base,
+with `wadspaces-webapp` (web apps' launchers) and the link handlers.

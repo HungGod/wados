@@ -58,7 +58,9 @@ const fn feature(name: &'static str, needs: &'static [&'static str], probe: &'st
 
 /// Every app's recipe, in the catalog's order.
 pub static APPS: [(AppId, Recipe); 13] = [
-    (AppId::Wadbrowser, Recipe::Builtin { desktop: "wadbrowser.desktop" }),
+    // The base's (images/base): its launcher is named after its app id, as
+    // its windows' Wayland app_id is, so desktops match them by name.
+    (AppId::Wadbrowser, Recipe::Builtin { desktop: "io.wados.Browser.desktop" }),
     // Microsoft's dnf repo (packages.microsoft.com/yumrepos/vscode): its RPM
     // brings the libraries Electron needs. The script wraps it as v1's did
     // (--no-sandbox, --password-store=basic) and writes this launcher.

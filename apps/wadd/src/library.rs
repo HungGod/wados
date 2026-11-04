@@ -205,6 +205,40 @@ mod tests {
     }
 
     #[test]
+    fn the_browsers_site_keys_are_saved_and_survive_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let id = {
+            let (d, bus) = docs(dir.path());
+            let (_, mut rx) = bus.subscribe();
+            let save: Op = serde_json::from_value(
+                serde_json::json!({"op": "secrets.saveWeb", "name": "Work", "site": "github.com"}),
+            )
+            .unwrap();
+            let id = d.apply(save).unwrap().created.expect("a key");
+            let more: Op = serde_json::from_value(
+                serde_json::json!({"op": "secrets.saveWeb", "name": "", "site": "gitlab.com", "existing": id}),
+            )
+            .unwrap();
+            d.apply(more).unwrap();
+            let less: Op = serde_json::from_value(
+                serde_json::json!({"op": "secrets.removeSite", "key": id, "site": "github.com"}),
+            )
+            .unwrap();
+            d.apply(less).unwrap();
+            // Keys aren't a wadspace's: watchers hear the whole library.
+            let mut heard = false;
+            while let Ok(e) = rx.try_recv() {
+                heard |= matches!(&e, Event::Library(l) if l.keys.iter().any(|k| k.id == id));
+            }
+            assert!(heard);
+            id
+        };
+        let (d, _) = docs(dir.path());
+        let k = d.snapshot().keys.into_iter().find(|k| k.id == id).expect("kept");
+        assert_eq!(k.sites, ["gitlab.com"]);
+    }
+
+    #[test]
     fn what_an_edit_took_out_can_be_put_back_once() {
         let dir = tempfile::tempdir().unwrap();
         let (d, _) = docs(dir.path());

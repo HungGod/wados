@@ -1,0 +1,8 @@
+# Links and web pages open in WadBrowser (its --default launcher: full or
+# Focus, as the wadspace's wadbrowser.conf says). A user's own
+# ~/.config/mimeapps.list wins.
+[Default Applications]
+x-scheme-handler/http=io.wados.Browser.desktop
+x-scheme-handler/https=io.wados.Browser.desktop
+text/html=io.wados.Browser.desktop
+application/xhtml+xml=io.wados.Browser.desktop

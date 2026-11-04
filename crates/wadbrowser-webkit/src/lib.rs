@@ -1,20 +1,36 @@
-//! WadBrowser's WebKitGTK layer: web views, network sessions, the request
-//! policy that blocks ads and trackers, and download paths.
+//! WadBrowser's WebKitGTK layer: a network session per profile (cookies
+//! kept), web views with a UserContentManager each, popups that keep
+//! `window.opener`, per-site keys, the content filters and the shield,
+//! the `cactus://` scheme, permission prompts, per-site zoom, downloads and
+//! tab sleeping.
+//!
+//! The UI starts it ([`init`]), says what windows do for pages ([`set_hooks`])
+//! and serves the `cactus://` pages ([`scheme::set_page_source`]).
 //!
 //! Forked from Cactus (github.com/yohannes-mesay/cactus-browser, commit
 //! 8ae5a66, MPL-2.0).
 
-mod downloads;
-mod policy;
+pub mod downloads;
+mod engine;
+pub mod filters;
+pub mod permissions;
+pub mod scheme;
 mod session;
+pub mod shield;
+pub mod sleep;
+pub mod testlog;
 mod view;
+pub mod wadd;
+pub mod zoom;
 
 pub use downloads::{
-    file_uri_for_path, filename_from_url, path_from_destination, sanitize_filename, unique_download_path,
+    DownloadEvent, file_uri_for_path, filename_from_url, path_from_destination, sanitize_filename, unique_download_path,
 };
-pub use policy::{attach_blocking_policy, wire_privacy};
-pub use session::SessionBundle;
+pub use engine::{Engine, Hooks, engine, init, set_hooks};
+pub use permissions::Ask;
+pub use scheme::{Page, PageRequest, set_page_source};
+pub use session::{SessionBundle, ephemeral_run, forget, network_session, set_ephemeral_run, signins};
 pub use view::{
-    apply_privacy_headers, attach_request_filter, create_web_view, inject_cosmetic_css, load_html, navigate,
-    webkit_version_string,
+    PAGE_HANDLER, ViewState, add_user_script, apply_privacy_headers, create_related_view, create_web_view,
+    inject_cosmetic_css, live_views, load_html, navigate, profile_for_uri, state, webkit_version_string,
 };
