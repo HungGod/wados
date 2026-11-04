@@ -225,6 +225,14 @@ pub enum Op {
         #[serde(default)]
         machine: Option<String>,
     },
+    /// Another machine's wadspace (`doc`, as machine `from` sent it), copied
+    /// here as this machine's: a new id, never built here, its name kept, its
+    /// projects as they are (they still name `from`'s folders, which come
+    /// over Taildrive). A tag this library doesn't have, and keys this
+    /// machine doesn't have, are left off (those slots sign in with nothing).
+    /// A document that doesn't check out is refused. Created: its id.
+    #[serde(rename = "space.import")]
+    Import { doc: Box<Wadspace>, from: String },
     /// Closing the Builder on a wadspace with nothing in it lets it go.
     #[serde(rename = "builder.discardIfEmpty")]
     DiscardIfEmpty { ws: String },
@@ -536,6 +544,7 @@ impl Tx<'_> {
             }
             Op::Fresh { payload } => self.fresh(payload),
             Op::Duplicate { ws, machine } => self.duplicate(&ws, machine.as_deref()),
+            Op::Import { doc, from } => self.import(*doc, &from),
             Op::DiscardIfEmpty { ws } => {
                 let x = self.get(&ws)?;
                 if x.apps.is_empty() && x.exts.is_empty() && x.look.projects.is_empty() && x.commands.is_empty() {
@@ -906,6 +915,40 @@ impl Tx<'_> {
         self.lib.wadspaces.push(copy);
         self.touched(&id);
         self.out.created = Some(id);
+        Ok(())
+    }
+
+    fn import(&mut self, mut doc: Wadspace, from: &str) -> Result<(), EditError> {
+        check::id("machine", from)?;
+        check::wadspace(&doc)?;
+        let ids: Vec<&str> = self.lib.wadspaces.iter().map(|x| x.id.as_str()).collect();
+        doc.id = free_id(&ids, &doc.name);
+        doc.machine = self.ctx.machine.clone();
+        doc.order = self.next_order();
+        doc.created_at = self.ctx.now_ms;
+        doc.deleted_at = None;
+        doc.starter = false;
+        doc.last_launched = None;
+        if doc.tag.as_ref().is_some_and(|t| !self.lib.tags.iter().any(|y| y.id == *t)) {
+            doc.tag = None;
+        }
+        // Keys stay on their machine: one this machine has (of that kind) is
+        // named as it is here; any other is left off.
+        let keys = &self.lib.keys;
+        let here = |k: &KeyRef| keys.iter().find(|s| s.id == k.id && s.kind == k.kind).map(Secret::key_ref);
+        doc.secrets.by_slot = std::mem::take(&mut doc.secrets.by_slot)
+            .into_iter()
+            .filter_map(|(slot, k)| here(&k).map(|k| (slot, k)))
+            .collect();
+        doc.secrets.groups = std::mem::take(&mut doc.secrets.groups)
+            .into_iter()
+            .filter_map(|g| here(&g.key).map(|key| KeyGroup { key, ..g }))
+            .collect();
+        let (id, name) = (doc.id.clone(), doc.name.clone());
+        self.lib.wadspaces.push(doc);
+        self.touched(&id);
+        self.out.created = Some(id);
+        self.out.toast = Some(format!("{name} is on this machine"));
         Ok(())
     }
 

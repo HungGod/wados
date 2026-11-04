@@ -6,12 +6,28 @@
 //! by wadd (`POST /v1/ops`), so every surface edits the same way.
 
 mod error;
+pub mod github;
+pub mod peers;
+pub mod signin;
+pub mod tailnet;
 
 pub use error::{ApiError, ErrorCode};
+pub use github::{GithubAccount, Repo, SignInRequest};
+pub use peers::PeerInfo;
+pub use signin::SignInProvider;
+pub use tailnet::{
+    Answer, DeviceKind, RemoteHello, RemoteMachine, RemoteTrust, Tailnet, TailnetAsk, TailnetDevice, TailnetState,
+    TrustAnswer, TrustBook,
+};
 
 /// The edits themselves (wad_model's), for callers that only depend on wad-proto.
 pub mod wad_model_op {
     pub use wad_model::edit::{Library, Op, Payload};
+}
+
+/// The documents and machines (wad_model's), for callers that only depend on wad-proto.
+pub mod wad_model_doc {
+    pub use wad_model::{Peer, PeerKind, Wadspace};
 }
 
 /// What builds, runs and jobs are made of (wad_model's), for callers that only depend on wad-proto.
@@ -132,6 +148,28 @@ pub enum Event {
     Run(Box<WadspaceRun>),
     /// The screen wadd puts wadspaces on (the compositor it found, or none).
     Screen(ScreenInfo),
+    /// The tailnet as it is now: this machine on it, its devices, the ones asking.
+    Tailnet(Tailnet),
+    /// My machines on the tailnet, as `GET /v1/peers` has them (nested: a list can't sit beside the tag).
+    Peers {
+        peers: Vec<PeerInfo>,
+    },
+    /// The GitHub account wadd has a token for; none: signed out (nested, as `peers`).
+    Github {
+        account: Option<GithubAccount>,
+    },
+    /// A sign-in waiting in the browser: the shell opens `url` in WadBrowser
+    /// (`code`: the one to type there, GitHub's device code). The present until its `signInDone`.
+    SignIn {
+        provider: SignInProvider,
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
+    },
+    /// That sign-in is over (signed in, failed or cancelled): its window closes.
+    SignInDone {
+        provider: SignInProvider,
+    },
 }
 
 impl Event {
@@ -143,12 +181,25 @@ impl Event {
             Event::Build(b) => Some(format!("build:{}", b.id)),
             Event::Run(r) => Some(format!("run:{}", r.id)),
             Event::Screen(_) => Some("screen".into()),
+            Event::Tailnet(_) => Some("tailnet".into()),
+            Event::Peers { .. } => Some("peers".into()),
+            Event::Github { .. } => Some("github".into()),
+            Event::SignIn { provider, .. } => Some(format!("signIn:{provider}")),
             Event::Library(_)
             | Event::Wadspace(_)
             | Event::WadspaceGone { .. }
             | Event::Notice { .. }
             | Event::JobLines { .. }
-            | Event::JobGone { .. } => None,
+            | Event::JobGone { .. }
+            | Event::SignInDone { .. } => None,
+        }
+    }
+
+    /// The present this event ends (a new watcher doesn't get it any more): a sign-in's, when it's done.
+    pub fn ends_key(&self) -> Option<String> {
+        match self {
+            Event::SignInDone { provider } => Some(format!("signIn:{provider}")),
+            _ => None,
         }
     }
 }

@@ -24,6 +24,8 @@ pub enum ErrorCode {
     Cancelled,
     /// A bug or something unexpected; the message has details.
     Internal,
+    /// This wadd doesn't do that (yet): a route whose work comes in a later phase.
+    NotImplemented,
 }
 
 /// The one error shape: wadd's API returns it as the body of a failed request.
@@ -58,6 +60,11 @@ impl ApiError {
 
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::Internal, message)
+    }
+
+    /// A route whose work isn't built yet (501).
+    pub fn not_implemented(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::NotImplemented, message)
     }
 
     /// Windows that didn't close for a move (code Conflict).

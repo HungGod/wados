@@ -1008,6 +1008,130 @@ mod web_keys {
     }
 }
 
+/// Another machine's wadspace copied here (`space.import`: a peer's "Copy
+/// here", over the tailnet). Not the spike's: its copies came from the account.
+mod import {
+    use super::*;
+    use wad_model::{CheckError, KeyRef, Project, ProjectKind, ProjectSource, SecretKind, Wadspace};
+
+    /// Desk's VanuaAcademy, as its remote API sends it: a folder of Desk's
+    /// in it, Desk's own tag, and a Google key only Desk has.
+    fn from_desk(lib: &Library) -> Wadspace {
+        let mut doc = ws(lib, "vanua-academy").clone();
+        doc.machine = s("m-desk");
+        doc.tag = Some(s("desk-only"));
+        doc.last_launched = Some(5);
+        let source = ProjectSource { machine_id: s("m-desk"), paths: vec![s("~/Pictures/Sprites")] };
+        doc.look.projects.push(Project {
+            id: s("sprites"),
+            as_name: s("Sprites"),
+            kind: ProjectKind::Mount { source, make: false },
+        });
+        doc.look.layout.icons.push(s("project:sprites"));
+        let g = doc.secrets.groups.iter_mut().find(|g| g.id.as_deref() == Some("g-google")).expect("its Google group");
+        g.key = KeyRef { id: s("desk-google"), name: s("Google (Desk)"), kind: SecretKind::Web };
+        doc
+    }
+
+    fn import(lib: &mut Library, doc: &Wadspace) -> wad_model::Outcome {
+        act(lib, Op::Import { doc: Box::new(doc.clone()), from: s("m-desk") })
+    }
+
+    #[test]
+    fn a_copy_is_this_machines_with_a_new_id_and_never_built_here() {
+        let mut lib = library();
+        let doc = from_desk(&lib);
+        let was = ws(&lib, "vanua-academy").clone();
+        let out = import(&mut lib, &doc);
+        // A new id by the usual rules (a slug of its name, as a duplicate's); the name kept as it is.
+        let id = out.created.clone().expect("its id");
+        assert_eq!(id, "vanuaacademy");
+        assert_eq!(out.changed, std::slice::from_ref(&id));
+        assert_eq!(out.toast.as_deref(), Some("VanuaAcademy is on this machine"));
+        let x = ws(&lib, &id);
+        assert_eq!((x.name.as_str(), x.machine.as_str()), ("VanuaAcademy", common::HERE));
+        // Never built here: it needs a build, it isn't the starter (which comes built), and it hasn't been opened here.
+        assert!(out.needs_build);
+        assert!(!x.starter && x.last_launched.is_none());
+        assert_eq!((x.created_at, x.updated_at), (common::EPOCH, common::EPOCH));
+        assert!(x.order > lib.wadspaces.iter().filter(|y| y.id != id).map(|y| y.order).max().unwrap_or(0));
+        // Its projects as they are: Desk's folder is still Desk's (it comes over Taildrive).
+        assert_eq!(x.look.projects, doc.look.projects);
+        assert!(
+            x.look
+                .projects
+                .iter()
+                .any(|p| matches!(&p.kind, ProjectKind::Mount { source, .. } if source.machine_id == "m-desk"))
+        );
+        assert_eq!((&x.apps, &x.exts, &x.look.layout), (&doc.apps, &doc.exts, &doc.look.layout));
+        // This machine's own is as it was.
+        assert_eq!(ws(&lib, "vanua-academy"), &was);
+        // Again: another copy, another id (that one's taken now).
+        assert_eq!(import(&mut lib, &doc).created.as_deref(), Some("vanuaacademy-2"));
+    }
+
+    #[test]
+    fn a_tag_or_a_key_this_machine_doesnt_have_is_left_off() {
+        let mut lib = library();
+        let mut doc = from_desk(&lib);
+        // A key this machine has, by another name there: named as it is here.
+        doc.secrets.by_slot.get_mut("ext:anthropic.claude-code").expect("Claude Code's").name = s("Claude (Desk)");
+        // A key with an id this machine has, of another kind: not the same key.
+        doc.secrets
+            .by_slot
+            .insert(s("app:vscode"), KeyRef { id: s("old-steam"), name: s("VS Code"), kind: SecretKind::Vscode });
+        let id = import(&mut lib, &doc).created.expect("its id");
+        let x = ws(&lib, &id);
+        assert_eq!(x.tag, None, "Desk's tag isn't one here: General");
+        let groups: Vec<&str> = x.secrets.groups.iter().filter_map(|g| g.id.as_deref()).collect();
+        assert_eq!(
+            groups,
+            ["g-work", "g-hunggod"],
+            "the Google group's key is Desk's: its web apps sign in with nothing"
+        );
+        assert!(x.exts.iter().any(|e| e.id == "google-firebase"), "the web apps stay");
+        let slots: Vec<(&str, &str)> = x.secrets.by_slot.iter().map(|(s, k)| (s.as_str(), k.name.as_str())).collect();
+        assert_eq!(slots, [("ext:anthropic.claude-code", "VanuaAcademy-claude")]);
+        // A tag this machine has stays.
+        doc.tag = Some(s("studio"));
+        let id = import(&mut lib, &doc).created.expect("its id");
+        assert_eq!(ws(&lib, &id).tag.as_deref(), Some("studio"));
+    }
+
+    #[test]
+    fn a_document_that_doesnt_check_out_is_refused() {
+        let mut lib = library();
+        let was = lib.clone();
+        let good = from_desk(&lib);
+        let try_ = |lib: &mut Library, doc: Wadspace, from: &str| {
+            apply(lib, Op::Import { doc: Box::new(doc), from: s(from) }, &ctx())
+        };
+        let mut old = good.clone();
+        old.version = 5;
+        assert!(matches!(try_(&mut lib, old, "m-desk"), Err(EditError::Check(CheckError::Bad(_)))));
+        let mut unnamed = good.clone();
+        unnamed.name = s(" ");
+        assert_eq!(try_(&mut lib, unnamed, "m-desk"), Err(EditError::Check(CheckError::Name)));
+        let mut escape = good.clone();
+        escape.look.projects[0].as_name = s("../../etc");
+        assert!(matches!(try_(&mut lib, escape, "m-desk"), Err(EditError::Check(_))));
+        assert!(matches!(
+            try_(&mut lib, good, "../desk"),
+            Err(EditError::Check(CheckError::Id { what: "machine", .. }))
+        ));
+        assert_eq!(lib, was);
+    }
+
+    #[test]
+    fn it_reads_as_its_action() {
+        let lib = library();
+        let doc = serde_json::to_value(ws(&lib, "retro")).expect("a document");
+        let op: Op = serde_json::from_value(serde_json::json!({"op": "space.import", "doc": doc, "from": "m-desk"}))
+            .expect("an op");
+        assert!(matches!(&op, Op::Import { doc, from } if doc.id == "retro" && from == "m-desk"));
+    }
+}
+
 /// The browser's web apps of your own (src/sim/actions/browser.ts's
 /// browser.newApp and browser.removeApp).
 mod web_apps {

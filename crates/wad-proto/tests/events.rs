@@ -1,0 +1,119 @@
+//! Phase 6's events, through JSON and back as the shell decodes them
+//! (wad-wadd-client's `decode`: one `Event` from each SSE's data). Each is
+//! tagged `kind` beside its own fields, so none of them may have a `kind`
+//! of its own at the top (a tailnet's devices and a peer do, nested).
+
+use serde_json::{Value, json};
+use wad_model::{Peer, PeerKind};
+use wad_proto::{
+    DeviceKind, Event, GithubAccount, PeerInfo, SignInProvider, Tailnet, TailnetAsk, TailnetDevice, TailnetState,
+};
+
+/// To JSON and back: the same event, tagged `kind`.
+fn round_trip(e: &Event, kind: &str) -> Value {
+    let v = serde_json::to_value(e).unwrap_or_else(|err| panic!("{kind} doesn't serialize: {err}"));
+    assert_eq!(v["kind"], kind, "{v}");
+    let text = serde_json::to_string(&v).unwrap();
+    assert_eq!(&serde_json::from_str::<Event>(&text).unwrap_or_else(|err| panic!("{kind}: {err}: {text}")), e);
+    v
+}
+
+fn peer(id: &str, online: bool) -> PeerInfo {
+    PeerInfo {
+        peer: Peer {
+            id: id.into(),
+            name: id.trim_start_matches("m-").into(),
+            hostname: id.trim_start_matches("m-").into(),
+            kind: PeerKind::Laptop,
+            trusted: true,
+            online,
+            last_seen: 1,
+            os: "WadOS 44".into(),
+            gpu: Some("Intel Iris Xe".into()),
+        },
+        node_id: format!("n{id}"),
+        dns_name: format!("{id}.tail1234.ts.net"),
+    }
+}
+
+#[test]
+fn the_tailnet() {
+    let e = Event::Tailnet(Tailnet {
+        state: TailnetState::Running,
+        tailnet: "tail1234.ts.net".into(),
+        hostname: "surface".into(),
+        ip: "100.101.102.103".into(),
+        login_url: None,
+        devices: vec![TailnetDevice {
+            id: "nDesk1".into(),
+            name: "Desk".into(),
+            os: "linux".into(),
+            kind: DeviceKind::Desktop,
+            online: true,
+            trusted: true,
+            mine: true,
+        }],
+        asks: vec![TailnetAsk {
+            id: "nTab1".into(),
+            device: "Galaxy Tab S9".into(),
+            os: "android".into(),
+            kind: DeviceKind::Tablet,
+            ip: "100.88.20.7".into(),
+            at: 3,
+        }],
+    });
+    let v = round_trip(&e, "tailnet");
+    // Flat: its own fields beside the tag; the devices' kinds stay theirs.
+    assert_eq!((v["state"].as_str(), v["tailnet"].as_str()), (Some("running"), Some("tail1234.ts.net")));
+    assert_eq!(v["devices"][0]["kind"], "desktop");
+    assert_eq!(e.latest_key().as_deref(), Some("tailnet"));
+    // What a wadd says before it knows anything.
+    round_trip(&Event::Tailnet(Tailnet::default()), "tailnet");
+}
+
+#[test]
+fn the_peers() {
+    let e = Event::Peers { peers: vec![peer("m-desk", true), peer("m-laptop", false)] };
+    let v = round_trip(&e, "peers");
+    assert_eq!((v["peers"][1]["kind"].as_str(), v["peers"][1]["online"].as_bool()), (Some("laptop"), Some(false)));
+    assert_eq!(e.latest_key().as_deref(), Some("peers"));
+    round_trip(&Event::Peers { peers: vec![] }, "peers");
+}
+
+#[test]
+fn github_signed_in_and_out() {
+    let e = Event::Github {
+        account: Some(GithubAccount { login: "hunggod".into(), name: "Hung".into(), scopes: vec!["repo".into()] }),
+    };
+    let v = round_trip(&e, "github");
+    assert_eq!(v["account"]["login"], "hunggod");
+    assert_eq!(e.latest_key().as_deref(), Some("github"));
+    let out = round_trip(&Event::Github { account: None }, "github");
+    assert_eq!(out, json!({"kind": "github", "account": null}));
+}
+
+#[test]
+fn a_sign_in_and_its_end() {
+    let e = Event::SignIn {
+        provider: SignInProvider::Github,
+        url: "https://github.com/login/device".into(),
+        code: Some("WDOS-1234".into()),
+    };
+    let v = round_trip(&e, "signIn");
+    assert_eq!((v["provider"].as_str(), v["code"].as_str()), (Some("github"), Some("WDOS-1234")));
+    let ts = Event::SignIn {
+        provider: SignInProvider::Tailscale,
+        url: "https://login.tailscale.com/a/x".into(),
+        code: None,
+    };
+    let v = round_trip(&ts, "signIn");
+    assert!(v.get("code").is_none(), "{v}");
+    // A sign-in is the present until it's done: then a new watcher doesn't get it.
+    assert_eq!(e.latest_key().as_deref(), Some("signIn:github"));
+    let done = Event::SignInDone { provider: SignInProvider::Github };
+    let v = round_trip(&done, "signInDone");
+    assert_eq!(v, json!({"kind": "signInDone", "provider": "github"}));
+    assert_eq!(done.latest_key(), None);
+    assert_eq!(done.ends_key(), e.latest_key());
+    assert_eq!(ts.ends_key(), None);
+}

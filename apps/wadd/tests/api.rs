@@ -37,7 +37,8 @@ async fn up() -> Up {
     let shell = dir.path().join("shell.sock");
     let compositor = std::os::unix::net::UnixListener::bind(&shell).unwrap();
     let sock = dir.path().join("wadd.sock");
-    let parts = wadd::Parts { backend: fake.clone(), hands: hands.clone(), poll: Duration::from_millis(20) };
+    let parts =
+        wadd::Parts { backend: fake.clone(), hands: hands.clone(), poll: Duration::from_millis(20), sample: None };
     let server = wadd::Server::with_parts(
         Profile::User,
         config,

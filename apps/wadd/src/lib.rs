@@ -15,11 +15,13 @@
 
 pub mod access;
 pub mod api;
+pub mod api_phase6;
 pub mod backend;
 pub mod builds;
 pub mod clip;
 pub mod events;
 pub mod fake;
+pub mod fake_phase6;
 pub mod jobs;
 pub mod library;
 pub mod logbuf;
@@ -64,6 +66,9 @@ pub struct Parts {
     pub hands: Arc<dyn screen::Hands>,
     /// Between readiness checks.
     pub poll: Duration,
+    /// The tailnet, peers and GitHub as sample data ([`fake_phase6`]), each
+    /// stage of its jobs taking this long; none: the machine's.
+    pub sample: Option<Duration>,
 }
 
 impl Parts {
@@ -72,6 +77,7 @@ impl Parts {
             backend: Arc::new(backend::Real::new(config, profile)),
             hands: Arc::new(screen::HostHands),
             poll: Duration::from_secs(1),
+            sample: None,
         }
     }
 }
@@ -157,9 +163,19 @@ impl Server {
         if config.display.enabled {
             std::fs::create_dir_all(&d.screen_dir)?;
         }
+        let (net, accounts): (Arc<dyn api_phase6::Net>, Arc<dyn api_phase6::Accounts>) = match parts.sample {
+            Some(step) => {
+                let hostname = machine.name.to_lowercase();
+                let s =
+                    fake_phase6::Sample::new(&hostname, jobs.clone(), bus.clone(), docs.clone(), builds.clone(), step);
+                (Arc::new(s.clone()), Arc::new(s))
+            }
+            None => (Arc::new(api_phase6::NotYet), Arc::new(api_phase6::NotYet)),
+        };
         let runs =
             runs::Runs::new(parts.backend, docs.clone(), bus.clone(), screen.clone(), builds.clone(), run_settings);
-        let state = Arc::new(AppState { machine, profile, policy, bus, docs, logs, jobs, builds, runs, screen });
+        let state =
+            Arc::new(AppState { machine, profile, policy, bus, docs, logs, jobs, builds, runs, screen, net, accounts });
         Ok(Self { listener, bound, reconcile_every: Duration::from_secs(d.reconcile_s.max(1)), state })
     }
 

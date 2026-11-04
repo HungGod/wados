@@ -2,10 +2,12 @@
 //!
 //!   wadd serve            as a machine's system service (wadd.service)
 //!   wadd serve --user     on a laptop, as you (rootless podman, your paths)
+//!   wadd serve --sample   the tailnet, peers and GitHub as sample data (to build the UI against)
 //!   wadd version
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use clap::{Parser, Subcommand};
 use tracing_subscriber::layer::SubscriberExt;
@@ -13,7 +15,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::{EnvFilter, Layer};
 use wad_config::{Config, Profile};
 use wadd::logbuf::{BufferLayer, LogBuffer};
-use wadd::{Listen, Server, systemd};
+use wadd::{Listen, Parts, Server, systemd};
 
 #[derive(Parser)]
 #[command(name = "wadd", about = "The WadSpaces machine daemon")]
@@ -38,6 +40,10 @@ enum Cmd {
         /// Keep state here (a trial's own).
         #[arg(long)]
         state_dir: Option<PathBuf>,
+        /// Answer the tailnet, peers and GitHub with sample data (two peers,
+        /// a running tailnet with an ask, a signed-in GitHub), to build the UI against.
+        #[arg(long)]
+        sample: bool,
     },
     /// Print the version.
     Version,
@@ -49,11 +55,17 @@ fn main() -> ExitCode {
             println!("wadd {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Cmd::Serve { user, config, socket, state_dir } => serve(user, config, socket, state_dir),
+        Cmd::Serve { user, config, socket, state_dir, sample } => serve(user, config, socket, state_dir, sample),
     }
 }
 
-fn serve(user: bool, config: Option<PathBuf>, socket: Option<PathBuf>, state_dir: Option<PathBuf>) -> ExitCode {
+fn serve(
+    user: bool,
+    config: Option<PathBuf>,
+    socket: Option<PathBuf>,
+    state_dir: Option<PathBuf>,
+    sample: bool,
+) -> ExitCode {
     let profile = if user { Profile::User } else { Profile::System };
     let files = config.map(|c| vec![c]).unwrap_or_else(|| Config::files(profile));
     let mut config = match Config::load(profile, &files) {
@@ -84,8 +96,13 @@ fn serve(user: bool, config: Option<PathBuf>, socket: Option<PathBuf>, state_dir
             return ExitCode::FAILURE;
         }
     };
+    let mut parts = Parts::real(&config, profile);
+    if sample {
+        tracing::warn!("the tailnet, peers and GitHub are sample data");
+        parts.sample = Some(Duration::from_millis(800));
+    }
     let r = rt.block_on(async {
-        let server = Server::new(profile, config, listen, logs)?;
+        let server = Server::with_parts(profile, config, listen, logs, parts)?;
         server.serve().await
     });
     match r {

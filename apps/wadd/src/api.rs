@@ -23,6 +23,8 @@
 //! | `PUT /v1/screen/session` | the shell's compositor, as it starts ([`ScreenSession`]) → [`ScreenInfo`] |
 //! | `GET /v1/events` | what changes, as server-sent events (the present first) |
 //! | `GET /v1/logs?n=` | wadd's last log lines, secrets taken out |
+//!
+//! Phase 6's (the tailnet, peers, GitHub) are in [`crate::api_phase6`].
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -46,6 +48,7 @@ use wad_proto::{
 };
 
 use crate::access::{Peer, Policy};
+use crate::api_phase6::{Accounts, Net};
 use crate::builds::Builds;
 use crate::events::Bus;
 use crate::jobs::Jobs;
@@ -65,6 +68,10 @@ pub struct AppState {
     pub builds: Arc<Builds>,
     pub runs: Arc<Runs>,
     pub screen: Arc<Screen>,
+    /// The tailnet and peers ([`crate::api_phase6`]).
+    pub net: Arc<dyn Net>,
+    /// GitHub ([`crate::api_phase6`]).
+    pub accounts: Arc<dyn Accounts>,
 }
 
 /// An ApiError as an HTTP response.
@@ -88,6 +95,7 @@ impl IntoResponse for Failure {
             ErrorCode::Upstream => StatusCode::BAD_GATEWAY,
             ErrorCode::Timeout => StatusCode::GATEWAY_TIMEOUT,
             ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::NotImplemented => StatusCode::NOT_IMPLEMENTED,
         };
         (status, Json(self.0)).into_response()
     }
@@ -136,6 +144,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/undo/{id}", post(undo))
         .route("/v1/events", get(events))
         .route("/v1/logs", get(logs))
+        .merge(crate::api_phase6::routes())
         .layer(middleware::from_fn_with_state(app.clone(), check_peer))
         .with_state(app)
 }

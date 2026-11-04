@@ -121,6 +121,12 @@ impl Store {
                 Change::Screen
             }
             Event::Notice { level, title, undo } => Change::Notice { level, title, undo },
+            // Phase 6's: the tailnet, peers, GitHub and the sign-in driver (the UI's, still to come).
+            Event::Tailnet(_)
+            | Event::Peers { .. }
+            | Event::Github { .. }
+            | Event::SignIn { .. }
+            | Event::SignInDone { .. } => return,
         };
         self.tell(change);
     }
