@@ -1,13 +1,14 @@
-//! Phase 6's events, through JSON and back as the shell decodes them
+//! Phase 6's and 7's events, through JSON and back as the shell decodes them
 //! (wad-wadd-client's `decode`: one `Event` from each SSE's data). Each is
 //! tagged `kind` beside its own fields, so none of them may have a `kind`
 //! of its own at the top (a tailnet's devices and a peer do, nested).
 
 use serde_json::{Value, json};
-use wad_model::{Peer, PeerKind};
+use wad_model::{Peer, PeerKind, StreamMode, StreamStage, Transport};
+use wad_proto::streams::{SECURE_NEEDS_VM, TURN_DOWN};
 use wad_proto::{
-    DeviceKind, DriveState, Event, GithubAccount, PeerInfo, SignInProvider, Tailnet, TailnetAsk, TailnetDevice,
-    TailnetState,
+    DeviceKind, DriveState, Event, GithubAccount, PeerInfo, SignInProvider, StreamInfo, StreamList,
+    StreamsAvailability, Tailnet, TailnetAsk, TailnetDevice, TailnetState,
 };
 
 /// To JSON and back: the same event, tagged `kind`.
@@ -119,4 +120,57 @@ fn a_sign_in_and_its_end() {
     assert_eq!(done.latest_key(), None);
     assert_eq!(done.ends_key(), e.latest_key());
     assert_eq!(ts.ends_key(), None);
+}
+
+#[test]
+fn the_streams() {
+    let public = StreamInfo {
+        id: "studio".into(),
+        mode: StreamMode::Public,
+        transport: Transport::Webrtc,
+        stage: StreamStage::Live,
+        live: true,
+        viewers: 2,
+        started: 1,
+        last_active: 2,
+        link: "https://surface.wadspaces.com/ws-0123/".into(),
+        turn_down: true,
+        warnings: vec![TURN_DOWN.into()],
+        job: None,
+        peer: None,
+    };
+    let from_desk = StreamInfo {
+        id: "notes".into(),
+        mode: StreamMode::Private,
+        transport: Transport::Websocket,
+        stage: StreamStage::Sidecar,
+        live: false,
+        viewers: 0,
+        started: 3,
+        last_active: 3,
+        link: "https://desk.tail1234.ts.net:48300/ws-4567/".into(),
+        turn_down: false,
+        warnings: vec![],
+        job: Some("job-1".into()),
+        peer: Some("m-desk".into()),
+    };
+    let list = StreamList { streams: vec![public, from_desk], available: StreamsAvailability::of(true, true, false) };
+    let e = Event::from(list.clone());
+    let v = round_trip(&e, "streams");
+    // Its streams' modes and stages, and each mode's availability, nested: no `kind` of theirs meets the tag.
+    assert_eq!((v["streams"][0]["mode"].as_str(), v["streams"][0]["viewers"].as_u64()), (Some("public"), Some(2)));
+    assert_eq!(
+        (v["streams"][1]["stage"].as_str(), v["streams"][1]["peer"].as_str()),
+        (Some("sidecar"), Some("m-desk"))
+    );
+    assert_eq!(v["available"]["public-secure"], json!({"available": false, "reason": SECURE_NEEDS_VM}));
+    assert!(v["streams"].as_array().unwrap().iter().all(|s| s.get("kind").is_none() && s.get("password").is_none()));
+    // The event is GET /v1/streams's answer beside the tag.
+    let mut answer = v.clone();
+    answer.as_object_mut().unwrap().remove("kind");
+    assert_eq!(serde_json::from_value::<StreamList>(answer).unwrap(), list);
+    assert_eq!(e.latest_key().as_deref(), Some("streams"));
+    assert_eq!(e.ends_key(), None);
+    // None streaming.
+    round_trip(&Event::Streams { streams: vec![], available: StreamsAvailability::of(false, false, false) }, "streams");
 }

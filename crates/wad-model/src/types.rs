@@ -647,16 +647,20 @@ impl StreamMode {
         matches!(self, StreamMode::Public | StreamMode::PublicSecure)
     }
 
-    /// In a Kata VM.
+    /// In a VM of its own (libkrun: `podman --runtime=krun`).
     pub fn is_secure(self) -> bool {
         matches!(self, StreamMode::PrivateSecure | StreamMode::PublicSecure)
     }
 }
 
+/// How far a stream is: its Stream job's stage while it starts (the job's
+/// stage ids are these names), then live, then ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StreamStage {
-    Kata,
+    /// Starting its VM (a secure stream). The spike called it `kata`.
+    #[serde(alias = "kata")]
+    Vm,
     Container,
     Sidecar,
     Route,
@@ -664,6 +668,22 @@ pub enum StreamStage {
     Serve,
     Live,
     Ended,
+}
+
+impl StreamStage {
+    /// Its name ('sidecar'): a Stream job's stage id.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StreamStage::Vm => "vm",
+            StreamStage::Container => "container",
+            StreamStage::Sidecar => "sidecar",
+            StreamStage::Route => "route",
+            StreamStage::Turn => "turn",
+            StreamStage::Serve => "serve",
+            StreamStage::Live => "live",
+            StreamStage::Ended => "ended",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -202,6 +202,8 @@ impl Store {
                 self.signins.borrow_mut().shift_remove(&provider);
                 Change::SignIn(provider)
             }
+            // Phase 7's shell keeps and shows them (the tray's Streams, card badges).
+            Event::Streams { .. } => return,
         };
         self.tell(change);
     }

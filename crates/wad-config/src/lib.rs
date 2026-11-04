@@ -121,8 +121,9 @@ pub struct Streaming {
     /// come from these ranges: `ports` ports from each first one.
     pub first_web_port: u16,
     pub first_mux_port: u16,
-    /// A private stream's port: wadd's proxy for it on 127.0.0.1, served on
-    /// the tailnet at the same number (Tailscale's HTTPS).
+    /// A private stream's port: wadd's proxy for it on 127.0.0.1 (its own
+    /// listener), served on the tailnet at the same number (`tailscale serve
+    /// --https=<port>`).
     pub first_private_port: u16,
     pub ports: u16,
     /// A stream nobody has watched or touched for this long is stopped.
@@ -131,6 +132,16 @@ pub struct Streaming {
     /// installer stick puts it here, 0600. Missing: STUN only (viewers with
     /// a direct path connect; the stream says so).
     pub turn: PathBuf,
+    /// Cloudflare's TURN API (Realtime): a stream's credentials are minted
+    /// at `<turn_api>/turn/keys/<token_id>/credentials/generate-ice-servers`.
+    /// A test points it at a mock.
+    pub turn_api: String,
+    /// How long a stream's TURN credentials last (the `ttl` asked for). wadd
+    /// writes new ones to the sidecar before they run out.
+    pub turn_ttl_s: u64,
+    /// The OCI runtime a secure stream's wadspace runs in (`podman
+    /// --runtime=<it>`: a VM of its own). Empty: no secure streams.
+    pub secure_runtime: String,
     /// cloudflared's metrics server (its /ready says whether the tunnel is up).
     pub metrics: String,
 }
@@ -148,6 +159,9 @@ impl Default for Streaming {
             ports: 100,
             idle_minutes: 30,
             turn: "/etc/wados/turn.toml".into(),
+            turn_api: "https://rtc.live.cloudflare.com/v1".into(),
+            turn_ttl_s: 86_400,
+            secure_runtime: "krun".into(),
             metrics: "127.0.0.1:20241".into(),
         }
     }
@@ -494,9 +508,13 @@ mod tests {
         let c = Config::defaults(Profile::System);
         assert!(c.streaming.host.is_empty());
         let text = toml::to_string(&c).unwrap();
-        for word in ["token", "api_key", "password", "firebase", "cloud"] {
+        // The TURN key is its file's (`turn`), never a value here; v1's [cloud] (Firebase) is gone.
+        for word in ["token", "api_key", "password", "secret", "firebase", "[cloud]"] {
             assert!(!text.contains(word), "{word} in the defaults");
         }
+        // Cloudflare's TURN API is only where to ask, with the key from that file.
+        assert_eq!(c.streaming.turn_api, "https://rtc.live.cloudflare.com/v1");
+        assert_eq!((c.streaming.turn_ttl_s, c.streaming.secure_runtime.as_str()), (86_400, "krun"));
     }
 
     #[test]
@@ -506,6 +524,18 @@ mod tests {
         assert_eq!(c.machine_id(), "sam-s-surface-book");
         c.machine.id = "surface".into();
         assert_eq!(c.machine_id(), "surface");
+    }
+
+    #[test]
+    fn turns_api_points_at_a_mock_and_secure_streams_turn_off() {
+        let t: toml::Table =
+            "[streaming]\nturn_api = \"http://127.0.0.1:9/v1\"\nturn_ttl_s = 600\nsecure_runtime = \"\"\n"
+                .parse()
+                .unwrap();
+        let c = Config::from_table(Profile::System, t).unwrap();
+        assert_eq!((c.streaming.turn_api.as_str(), c.streaming.turn_ttl_s), ("http://127.0.0.1:9/v1", 600));
+        assert!(c.streaming.secure_runtime.is_empty());
+        assert_eq!(c.streaming.first_private_port, 48300);
     }
 
     #[test]

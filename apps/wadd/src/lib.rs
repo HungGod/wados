@@ -11,14 +11,17 @@
 //! Phase 6: projects as a wadspace opens (projects.rs: GitHub clones,
 //! this machine's folders, copies, another machine's over Taildrive).
 //!
-//! Later phases: streams and the proxy, the tailnet and remote API,
-//! Open-with files, runs of one time,
+//! Phase 7: streams (their routes in api_phase7.rs, sample data in
+//! fake_phase7.rs until they're made).
+//!
+//! Later phases: Open-with files, runs of one time,
 //! keys' sign-in flows, devices, the network, updates, install, server mode,
 //! focus, and the tidy-up of images nothing needs (v1's tidy.rs).
 
 pub mod access;
 pub mod api;
 pub mod api_phase6;
+pub mod api_phase7;
 pub mod backend;
 pub mod builds;
 pub mod clip;
@@ -26,6 +29,7 @@ pub mod copies;
 pub mod events;
 pub mod fake;
 pub mod fake_phase6;
+pub mod fake_phase7;
 pub mod github;
 pub mod jobs;
 pub mod keys;
@@ -77,8 +81,9 @@ pub struct Parts {
     pub hands: Arc<dyn screen::Hands>,
     /// Between readiness checks.
     pub poll: Duration,
-    /// The tailnet, peers and GitHub as sample data ([`fake_phase6`]), each
-    /// stage of its jobs taking this long; none: the machine's.
+    /// The tailnet, peers, GitHub ([`fake_phase6`]) and streams
+    /// ([`fake_phase7`]) as sample data, each stage of its jobs taking this
+    /// long; none: the machine's.
     pub sample: Option<Duration>,
 }
 
@@ -208,6 +213,20 @@ impl Server {
         let runs =
             runs::Runs::new(parts.backend, docs.clone(), bus.clone(), screen.clone(), builds.clone(), run_settings);
         runs.attach(Arc::new(projects));
+        let streams: Arc<dyn api_phase7::Streams> = match parts.sample {
+            Some(step) => {
+                let hostname = machine.name.to_lowercase();
+                Arc::new(fake_phase7::Sample::new(
+                    &hostname,
+                    jobs.clone(),
+                    bus.clone(),
+                    docs.clone(),
+                    runs.clone(),
+                    step,
+                ))
+            }
+            None => Arc::new(api_phase7::NotYet),
+        };
         let state = Arc::new(AppState {
             machine,
             profile,
@@ -222,6 +241,7 @@ impl Server {
             net,
             accounts,
             keys,
+            streams,
         });
         Ok(Self { listener, bound, reconcile_every: Duration::from_secs(d.reconcile_s.max(1)), state, tailnet })
     }

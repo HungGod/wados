@@ -12,6 +12,7 @@ use serde_json::Value;
 use wad_proto::Event;
 
 mod phase6;
+mod phase7;
 mod sse;
 pub use reqwest::Method;
 pub use sse::SseParser;

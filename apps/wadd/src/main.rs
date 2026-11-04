@@ -2,7 +2,7 @@
 //!
 //!   wadd serve            as a machine's system service (wadd.service)
 //!   wadd serve --user     on a laptop, as you (rootless podman, your paths)
-//!   wadd serve --sample   the tailnet, peers and GitHub as sample data (to build the UI against)
+//!   wadd serve --sample   the tailnet, peers, GitHub and streams as sample data (to build the UI against)
 //!   wadd version
 
 use std::path::PathBuf;
@@ -40,8 +40,9 @@ enum Cmd {
         /// Keep state here (a trial's own).
         #[arg(long)]
         state_dir: Option<PathBuf>,
-        /// Answer the tailnet, peers and GitHub with sample data (two peers,
-        /// a running tailnet with an ask, a signed-in GitHub), to build the UI against.
+        /// Answer the tailnet, peers, GitHub and streams with sample data (two
+        /// peers, a running tailnet with an ask, a signed-in GitHub, a public
+        /// stream live and a private one starting), to build the UI against.
         #[arg(long)]
         sample: bool,
     },
@@ -98,7 +99,7 @@ fn serve(
     };
     let mut parts = Parts::real(&config, profile);
     if sample {
-        tracing::warn!("the tailnet, peers and GitHub are sample data");
+        tracing::warn!("the tailnet, peers, GitHub and streams are sample data");
         parts.sample = Some(Duration::from_millis(800));
     }
     let r = rt.block_on(async {

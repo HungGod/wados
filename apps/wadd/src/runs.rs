@@ -324,7 +324,7 @@ impl Runs {
     pub fn open(&self, id: &str, display: SessionDisplay) -> Result<WadspaceRun, ApiError> {
         if display == SessionDisplay::Stream {
             return Err(ApiError::bad_request(
-                "streams come in a later phase: open it on the screen, in a window or in the background",
+                "a stream starts with POST /v1/wadspaces/{id}/stream: open it on the screen, in a window or in the background",
             ));
         }
         let ws = self.docs.wadspace(id).ok_or_else(|| ApiError::not_found(format!("no wadspace {id:?}")))?;

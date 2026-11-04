@@ -16,13 +16,16 @@
 //! | `POST /v1/remote/wadspaces/{id}/build` → `BuildAnswer` | my machines and trusted devices |
 //! | `POST /v1/remote/wadspaces/{id}/open` (`OpenRequest`) → `WadspaceRun` | my machines and trusted devices |
 //! | `POST /v1/remote/wadspaces/{id}/stop` → `WadspaceRun` | my machines and trusted devices |
+//! | `POST /v1/remote/wadspaces/{id}/stream` (`StreamRequest`) → `StreamShare`, once it's live | my machines and trusted devices |
+//! | `DELETE /v1/remote/wadspaces/{id}/stream` → `StreamInfo`, ended | my machines and trusted devices |
 //! | `GET /v1/remote/trust` → [`TrustBook`] | my machines |
 //! | `POST /v1/remote/trust` ([`TrustAnswer`]) → [`TrustBook`] | my machines |
 //!
 //! Anything else past the gate is 403 to a device that isn't trusted (it
 //! asks, unless it was denied), and 404 when there's no such route. Building,
-//! opening and stopping go through the same code as the socket's. A body is
-//! 64 KB at most.
+//! opening, stopping and streaming go through the same code as the socket's
+//! (streams: [`crate::api_phase7::Streams`]); a stream's share (its key and
+//! password) goes only to the callers that get this far. A body is 64 KB at most.
 
 use std::net::SocketAddr;
 use std::sync::{Arc, OnceLock};
@@ -38,7 +41,7 @@ use tokio::net::{TcpListener, TcpSocket};
 use wad_model::{PeerKind, Wadspace};
 use wad_proto::{
     ApiError, BuildAnswer, ErrorCode, Event, Level, MachineInfo, OpenRequest, RemoteHello, RemoteMachine, RemoteTrust,
-    TrustAnswer, TrustBook, WadspaceRun,
+    StreamInfo, StreamRequest, StreamShare, TrustAnswer, TrustBook, WadspaceRun,
 };
 
 use crate::api::{AppState, Failure};
@@ -126,6 +129,7 @@ pub fn router(r: Arc<Remote>) -> Router {
         .route("/v1/remote/wadspaces/{id}/build", post(build))
         .route("/v1/remote/wadspaces/{id}/open", post(open))
         .route("/v1/remote/wadspaces/{id}/stop", post(stop))
+        .route("/v1/remote/wadspaces/{id}/stream", post(stream).delete(stream_stop))
         .route(TRUST, get(trust_book).post(trust_answer))
         .fallback(|| async { Failure(ApiError::not_found("no such endpoint")) })
         .layer(axum::extract::DefaultBodyLimit::max(BODY))
@@ -200,6 +204,34 @@ async fn stop(
     let run = r.app.runs.stop(&id).await?;
     notice(&r, format!("{} stopped {}", c.name, w.name));
     Ok(Json(run))
+}
+
+/// Streams a wadspace for the device that asked: its share (one-tap link,
+/// link, a public one's sign-in) once it's live.
+async fn stream(
+    State(r): State<Arc<Remote>>,
+    Extension(c): Extension<Caller>,
+    Path(id): Path<String>,
+    Json(req): Json<StreamRequest>,
+) -> Answer<StreamShare> {
+    let w = live(&r, &id)?;
+    let job = r.app.streams.start(&id, req).await?;
+    crate::api_phase7::ended(&r.app, &job.job.id).await?;
+    let share = r.app.streams.share(&id).await?;
+    let how = if req.mode.is_public() { "publicly" } else { "privately, on the tailnet" };
+    notice(&r, format!("{} is streaming {} {how}", c.name, w.name));
+    Ok(Json(share))
+}
+
+async fn stream_stop(
+    State(r): State<Arc<Remote>>,
+    Extension(c): Extension<Caller>,
+    Path(id): Path<String>,
+) -> Answer<StreamInfo> {
+    let w = live(&r, &id)?;
+    let ended = r.app.streams.stop(&id).await?;
+    notice(&r, format!("{} stopped streaming {}", c.name, w.name));
+    Ok(Json(ended))
 }
 
 async fn trust_book(State(r): State<Arc<Remote>>) -> Json<TrustBook> {

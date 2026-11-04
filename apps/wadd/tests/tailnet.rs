@@ -123,6 +123,15 @@ impl Device {
         let status = res.status().as_u16();
         (status, res.json().await.unwrap_or(Value::Null))
     }
+
+    /// `path` on `m`'s remote API with `method` and a JSON body: the status and the answer.
+    async fn send(&self, m: &Machine, port: u16, method: reqwest::Method, path: &str, body: &Value) -> (u16, Value) {
+        let to = SocketAddr::new(m.ip.parse().unwrap(), port);
+        let req = self.0.request(method, format!("http://{to}{path}")).json(body);
+        let res = req.timeout(Duration::from_secs(5)).send().await.unwrap();
+        let status = res.status().as_u16();
+        (status, res.json().await.unwrap_or(Value::Null))
+    }
 }
 
 async fn until<T>(what: &str, mut f: impl AsyncFnMut() -> Option<T>) -> T {
@@ -431,4 +440,40 @@ async fn the_home_is_shared_over_taildrive_as_the_person() {
     })
     .await;
     assert!(t.drive_error.unwrap_or_default().contains("drive:share"));
+}
+
+#[tokio::test]
+async fn streams_on_the_remote_api_are_for_my_machines_and_trusted_devices() {
+    use reqwest::Method;
+    let net = tailnet();
+    let port = free_port();
+    let desk = machine(&net, "nDesk", "m-desk", "127.0.0.1", port).await;
+    let _laptop = machine(&net, "nLaptop", "m-laptop", "127.0.0.2", port).await;
+    sees(&desk, "m-laptop").await;
+    // The desk's starter: there, so the gate and then the streams answer.
+    let path = "/v1/remote/wadspaces/wadspaces/stream";
+    let body = serde_json::json!({"mode": "private"});
+
+    // The phone isn't trusted: neither starting nor stopping a stream.
+    let phone = Device::at("127.0.0.3");
+    assert_eq!(phone.get(&desk, port, "/v1/remote/hello").await.1["trust"], "asked");
+    for method in [Method::POST, Method::DELETE] {
+        let (status, e) = phone.send(&desk, port, method.clone(), path, &body).await;
+        assert_eq!((status, e["code"].as_str()), (403, Some("forbidden")), "{method}");
+    }
+    // My machine gets past the gate: streams aren't made yet on the machine.
+    let laptop = Device::at("127.0.0.2");
+    for method in [Method::POST, Method::DELETE] {
+        let (status, e) = laptop.send(&desk, port, method.clone(), path, &body).await;
+        assert_eq!((status, e["code"].as_str()), (501, Some("not_implemented")), "{method}: {e}");
+    }
+    // So does a trusted device.
+    until("the phone's ask", async || desk.w.tailnet().await.unwrap().asks.into_iter().find(|a| a.id == "nPhone"))
+        .await;
+    desk.w.trust_device("nPhone").await.unwrap();
+    let (status, e) = phone.send(&desk, port, Method::POST, path, &body).await;
+    assert_eq!(status, 501, "{e}");
+    // No such wadspace there.
+    let (status, _) = laptop.send(&desk, port, Method::POST, "/v1/remote/wadspaces/nope/stream", &body).await;
+    assert_eq!(status, 404);
 }

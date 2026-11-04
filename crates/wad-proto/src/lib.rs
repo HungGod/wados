@@ -9,12 +9,14 @@ mod error;
 pub mod github;
 pub mod peers;
 pub mod signin;
+pub mod streams;
 pub mod tailnet;
 
 pub use error::{ApiError, ErrorCode};
 pub use github::{GithubAccount, Repo, SignInRequest};
 pub use peers::PeerInfo;
 pub use signin::SignInProvider;
+pub use streams::{Availability, StreamInfo, StreamList, StreamRequest, StreamShare, StreamsAvailability};
 pub use tailnet::{
     Answer, DeviceKind, DriveState, RemoteHello, RemoteMachine, RemoteTrust, Tailnet, TailnetAsk, TailnetDevice,
     TailnetState, TrustAnswer, TrustBook,
@@ -170,6 +172,12 @@ pub enum Event {
     SignInDone {
         provider: SignInProvider,
     },
+    /// The streams here and which modes can start, as `GET /v1/streams` has
+    /// them ([`StreamList`]'s fields: nested, as `peers`). Never a key or password.
+    Streams {
+        streams: Vec<StreamInfo>,
+        available: StreamsAvailability,
+    },
 }
 
 impl Event {
@@ -185,6 +193,7 @@ impl Event {
             Event::Peers { .. } => Some("peers".into()),
             Event::Github { .. } => Some("github".into()),
             Event::SignIn { provider, .. } => Some(format!("signIn:{provider}")),
+            Event::Streams { .. } => Some("streams".into()),
             Event::Library(_)
             | Event::Wadspace(_)
             | Event::WadspaceGone { .. }
