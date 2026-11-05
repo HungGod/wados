@@ -1,7 +1,7 @@
 //! A full-screen wadspace's bar (`shell/Fullscreen.svelte`), on each display
 //! with one: a few pixels along the top edge that, touched, bring the bar
 //! down (its name, what's in front, back to the desktop, in a window, to
-//! another display, stream, stop). It shows for a moment when the wadspace
+//! another display, Stream: the stream sheet, stop). It shows for a moment when the wadspace
 //! comes up full screen, then tucks away. Everywhere else, clicks go
 //! through to the wadspace.
 
@@ -175,7 +175,17 @@ impl Bar {
             button("monitor-up", &format!("To {next}"), "Full screen on another display comes in phase 10")
                 .set_sensitive(false);
         }
-        button("radio", "Stream", "Streams come in phase 7").set_sensitive(false);
+        // The stream sheet (its link, if it streams already).
+        let w = Rc::downgrade(&me);
+        button("radio", "Stream", "Stream it: privately on your tailnet, or publicly").connect_clicked(move |_| {
+            if let Some(m) = w.upgrade()
+                && let Some(id) = m.ws.borrow().clone()
+            {
+                m.pinned.set(false);
+                m.hide_soon(0);
+                crate::streams::sheet(&id, wad_model::StreamMode::Private);
+            }
+        });
         let stop = button("circle-stop", "Stop", "Stop it");
         stop.add_css_class("ov-stop");
         let w = Rc::downgrade(&me);

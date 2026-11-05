@@ -15,8 +15,10 @@
 //!   `search for <words>` (type them);
 //! - `spaces`: a full-screen wadspace to the background, and the desktop
 //!   (what Ctrl+Alt+↓ should run);
-//! - `toast [info|ok|warn|error] <words>`, `toasts` (what's showing);
-//! - `dialog` (what's up), `dialog later|deny|trust|ok|cancel|close`;
+//! - `toast [info|ok|warn|error] <words>`, `toasts` (what's showing),
+//!   `toasts press <label>` (the newest toast's own button: Show link, Retry);
+//! - `dialog` (what's up), `dialog later|deny|trust|ok|cancel|close` (and a
+//!   sheet's buttons, by the names it gives them);
 //! - `reveal [down|up] [display]`, `displays`;
 //! - `log`: what it was asked to show.
 
@@ -26,8 +28,8 @@ mod search;
 mod switcher;
 mod toasts;
 
-pub use dialog::{Confirm, confirm, device_icon};
-pub use toasts::{expect_body, toast_with};
+pub use dialog::{Confirm, Frame, Sheet, Tone, confirm, device_icon, frame, hide_sheet, show_sheet};
+pub use toasts::{expect_body, toast_doing, toast_with};
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -71,6 +73,8 @@ window.wados-search { background-color: rgb(5 3 12 / 0.5); }
 .ov-dialog-head { padding: 20px 20px 0; }
 .ov-dialog-badge { border-radius: 12px; }
 .ov-dialog-badge.warn { background-color: var(--warn-soft); color: var(--warn); }
+.ov-dialog-badge.accent { background-color: var(--accent-soft); color: var(--accent); }
+.ov-dialog-badge.magenta { background-color: var(--accent-2-soft); color: var(--accent-2); }
 .ov-dialog-title { font-family: 'Space Grotesk', Inter, sans-serif; font-weight: 600; font-size: 18px; letter-spacing: -0.18px; }
 button.ov-dialog-x { min-width: 30px; min-height: 30px; padding: 0; border: none; border-radius: 8px; background: none; box-shadow: none; color: var(--muted); }
 button.ov-dialog-x:hover { background-color: var(--surface-2); color: var(--fg); }
@@ -334,7 +338,7 @@ impl Overlays {
             let Some(m) = w.upgrade() else { return "error gone".into() };
             match args {
                 [] => m.dialogs.state(),
-                [what @ ("later" | "deny" | "trust" | "ok" | "cancel" | "close")] => {
+                [what] => {
                     if m.dialogs.press(what) {
                         m.note(&format!("dialog {what}"));
                         "ok".into()
@@ -342,11 +346,21 @@ impl Overlays {
                         format!("error no {what} here: {}", m.dialogs.state())
                     }
                 }
-                _ => "error dialog [later|deny|trust|ok|cancel|close]".into(),
+                _ => "error dialog [later|deny|trust|ok|cancel|close|<a sheet's button>]".into(),
             }
         });
         let w = Rc::downgrade(self);
-        shell.on_ctl("toasts", move |_| match w.upgrade() {
+        shell.on_ctl("toasts", move |args| match w.upgrade() {
+            Some(m) if !args.is_empty() => match args {
+                ["press", label @ ..] if !label.is_empty() => {
+                    if m.toasts.press(&label.join(" ")) {
+                        "ok".into()
+                    } else {
+                        format!("error no toast has {:?}", label.join(" "))
+                    }
+                }
+                _ => "error toasts [press <label>]".into(),
+            },
             Some(m) => {
                 let t: Vec<String> = m
                     .toasts

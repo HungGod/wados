@@ -1,10 +1,10 @@
 //! Phase 7's routes on wadd's socket: streams. They answer through the
-//! [`Streams`] trait, so the shell can be built against sample data
-//! ([`crate::fake_phase7::Sample`]: tests, and `wadd serve --sample`) while
-//! the real ones are made. Until they are, the machine's answer 501
-//! ([`NotYet`]). The types are wad-proto's `streams`; the remote API's two
-//! (`POST|DELETE /v1/remote/wadspaces/{id}/stream`) are in
-//! [`crate::remote`], through the same trait.
+//! [`Streams`] trait: the machine's ([`crate::streams::MachineStreams`]), or
+//! sample data ([`crate::fake_phase7::Sample`]: tests, and `wadd serve
+//! --sample`) for building the shell against. The types are wad-proto's
+//! `streams`; the remote API's (`GET|POST|DELETE
+//! /v1/remote/wadspaces/{id}/stream`) are in [`crate::remote`], through the
+//! same trait.
 //!
 //! | Route | What |
 //! |---|---|
@@ -12,6 +12,14 @@
 //! | `POST /v1/wadspaces/{id}/stream` | streams it ([`StreamRequest`]): a Stream job → [`JobInfo`] |
 //! | `DELETE /v1/wadspaces/{id}/stream` | stops its stream → the [`StreamInfo`] as it ended |
 //! | `GET /v1/streams/{id}/share` | its links and sign-in ([`StreamShare`]: its secrets) |
+//! | `POST /v1/peers/{peer}/wadspaces/{ws}/stream` | streams a wadspace of another machine of mine to here ([`StreamRequest`]) → [`StreamShare`], once it's live |
+//! | `DELETE /v1/peers/{peer}/wadspaces/{ws}/stream` | stops it there → the [`StreamInfo`] as it ended |
+//!
+//! Another machine's stream ("Stream from {machine}": the shell opens its
+//! share's one-tap link in a WadBrowser `--app` window) is that machine's
+//! (its remote API's `POST /v1/remote/wadspaces/{ws}/stream`), kept in this
+//! machine's list with `peer` set; it's known by (peer, wadspace), since
+//! wadspaces' ids are per machine. Its peer offline: 503.
 //!
 //! What each answers when it can't (the sample does the same):
 //! - no such wadspace here (not in the Trash), or no stream of it: 404;
@@ -28,8 +36,8 @@ use async_trait::async_trait;
 use axum::extract::{Path, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use wad_model::JobStatus;
-use wad_proto::{ApiError, ErrorCode, JobInfo, StreamInfo, StreamList, StreamRequest, StreamShare};
+use wad_model::{JobStatus, SessionDisplay, StreamMode};
+use wad_proto::{ApiError, ErrorCode, JobInfo, StreamInfo, StreamList, StreamRequest, StreamShare, WadspaceRun};
 
 use crate::api::{AppState, Failure};
 
@@ -45,9 +53,14 @@ pub trait Streams: Send + Sync + 'static {
     async fn stop(&self, ws: &str) -> Result<StreamInfo, ApiError>;
     /// Its one-tap link, link and (public) sign-in.
     async fn share(&self, ws: &str) -> Result<StreamShare, ApiError>;
+    /// Streams `ws` of my machine `peer` to here: its share once it's live
+    /// there (it's in the list meanwhile, with `peer`).
+    async fn start_peer(&self, peer: &str, ws: &str, req: StreamRequest) -> Result<StreamShare, ApiError>;
+    /// Stops `peer`'s stream of `ws`: it, ended.
+    async fn stop_peer(&self, peer: &str, ws: &str) -> Result<StreamInfo, ApiError>;
 }
 
-/// The machine's, until they're made: 501, "comes in phase 7".
+/// None here: 501, "comes in phase 7" (what the machine answered before streams.rs).
 pub struct NotYet;
 
 fn not_yet<T>(what: &str) -> Result<T, ApiError> {
@@ -68,6 +81,24 @@ impl Streams for NotYet {
     async fn share(&self, _: &str) -> Result<StreamShare, ApiError> {
         not_yet("Sharing a stream")
     }
+    async fn start_peer(&self, _: &str, _: &str, _: StreamRequest) -> Result<StreamShare, ApiError> {
+        not_yet("Streaming from another machine")
+    }
+    async fn stop_peer(&self, _: &str, _: &str) -> Result<StreamInfo, ApiError> {
+        not_yet("Stopping another machine's stream")
+    }
+}
+
+/// `POST …/open {display}` (the socket's and the remote API's): shown on
+/// the screen, in a window or the background by runs.rs; `stream` goes
+/// through the streams, as a private stream (`POST …/stream`, without
+/// `takeover`). Its run as it is now.
+pub async fn open(app: &AppState, id: &str, display: SessionDisplay) -> Result<WadspaceRun, ApiError> {
+    if display != SessionDisplay::Stream {
+        return app.runs.open(id, display);
+    }
+    app.streams.start(id, StreamRequest { mode: StreamMode::Private, takeover: false }).await?;
+    Ok(app.runs.state(id))
 }
 
 /// Waits for a Stream job to end: Ok when it's done (the stream is live),
@@ -96,6 +127,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/streams", get(streams))
         .route("/v1/wadspaces/{id}/stream", post(start).delete(stop))
         .route("/v1/streams/{id}/share", get(share))
+        .route("/v1/peers/{id}/wadspaces/{ws}/stream", post(start_peer).delete(stop_peer))
 }
 
 type Answer<T> = Result<Json<T>, Failure>;
@@ -118,4 +150,16 @@ async fn stop(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Answe
 
 async fn share(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Answer<StreamShare> {
     Ok(Json(app.streams.share(&id).await?))
+}
+
+async fn start_peer(
+    State(app): State<Arc<AppState>>,
+    Path((peer, ws)): Path<(String, String)>,
+    Json(req): Json<StreamRequest>,
+) -> Answer<StreamShare> {
+    Ok(Json(app.streams.start_peer(&peer, &ws, req).await?))
+}
+
+async fn stop_peer(State(app): State<Arc<AppState>>, Path((peer, ws)): Path<(String, String)>) -> Answer<StreamInfo> {
+    Ok(Json(app.streams.stop_peer(&peer, &ws).await?))
 }

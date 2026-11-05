@@ -3,13 +3,17 @@
 # image written onto the second virtual disk, with the wadspace base in its
 # root podman storage.
 #
-#   install-disk.sh REGISTRY IMAGE TARGET_IMGREF BASE KEY
+#   install-disk.sh REGISTRY IMAGE TARGET_IMGREF BASE KEY [EXTRA…]
 #
 # REGISTRY: the laptop's throwaway registry as the VM sees it (10.0.2.2:PORT);
 # IMAGE, BASE: names in it; TARGET_IMGREF: what the installed system says it
-# follows (bootc status); KEY: the public key root's SSH takes, on this disk only.
+# follows (bootc status); KEY: the public key root's SSH takes, on this disk
+# only; EXTRA: more images for root's podman storage, as BASE (the stream
+# sidecar, wados-stream:44).
 set -euo pipefail
 REG="$1" IMAGE="$2" TARGET="$3" BASE="$4" KEY="$5"
+shift 5
+EXTRA=("$@")
 DISK=/dev/disk/by-id/virtio-wados-target
 MNT=/mnt/wados
 T0=$(date +%s)
@@ -48,7 +52,7 @@ podman run --rm --privileged --pid=host \
     --security-opt label=type:unconfined_t \
     "${SRC}" bootc install to-disk "${args[@]}" "$(readlink -f "${DISK}")"
 
-step "the wadspace base (${BASE}), into the new disk's root podman storage"
+step "the wadspace base (${BASE})${EXTRA[*]:+ and ${EXTRA[*]}}, into the new disk's root podman storage"
 udevadm settle
 ROOTFS="$(lsblk -nrpo NAME,PARTLABEL,LABEL "$(readlink -f "${DISK}")" | awk '$2 == "root" || $3 == "root" { print $1; exit }')"
 [[ -n "${ROOTFS}" ]] || { lsblk -o NAME,PARTLABEL,LABEL,FSTYPE "${DISK}"; echo "no root partition" >&2; exit 1; }
@@ -66,13 +70,17 @@ unshare --mount --propagation private bash -euo pipefail -c '
     mount --bind "$1/lib/containers" /var/lib/containers
     mount -t tmpfs tmpfs /run/containers
     mount -t tmpfs tmpfs /run/libpod
-    podman pull -q --tls-verify=false "$2/$3"
-    podman tag "$2/$3" "localhost/$3"
-    podman untag "$2/$3" "$2/$3"
+    reg="$2"
+    shift 2
+    for img in "$@"; do
+        podman pull -q --tls-verify=false "${reg}/${img}"
+        podman tag "${reg}/${img}" "localhost/${img}"
+        podman untag "${reg}/${img}" "${reg}/${img}"
+    done
     podman images --format "   {{.Repository}}:{{.Tag}} {{.ID}} {{.Size}}"
     # Labelled as the machine labels its own (container_var_lib_t, container_ro_file_t…).
     restorecon -R /var/lib/containers
-' _ "${VAR}" "${REG}" "${BASE}"
+' _ "${VAR}" "${REG}" "${BASE}" "${EXTRA[@]}"
 
 step "root's SSH, on this disk only"
 # The image's sshd says PermitRootLogin no (etc/ssh/sshd_config.d/40-wados.conf).

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# Builds the images wadspaces run on, here: the builder and the base, and
-# packages and sets as wadd puts them together. What a package or a set is
-# (what it needs, WadOS's order, its Containerfile, its labels and its key)
-# is wad-gen's, asked through wados-pkgs (crates/wad-gen/src/bin/wados-pkgs),
-# so this script, wadd and CI build the same images. Nothing is pushed, and
-# nothing secret goes in.
+# Builds the images wadspaces run on, here: the builder, the base and the
+# stream sidecar, and packages and sets as wadd puts them together. What a
+# package or a set is (what it needs, WadOS's order, its Containerfile, its
+# labels and its key) is wad-gen's, asked through wados-pkgs
+# (crates/wad-gen/src/bin/wados-pkgs), so this script, wadd and CI build the
+# same images. Nothing is pushed, and nothing secret goes in.
 #
-#   images/build.sh                       the builder, then the base
-#   images/build.sh --only base           just one (builder or base; base
+#   images/build.sh                       the builder, the base, then the stream
+#   images/build.sh --only base           just one (builder, base or stream; base
 #                                         still builds the programs in the builder)
 #   images/build.sh --no-cache            without podman's layer cache
 #   images/build.sh pkg <id>              a package, captured on the base: one
@@ -27,6 +27,9 @@
 #            (WadBrowser's launcher and icon into .build/images/share), with
 #            cargo's caches in podman volumes
 #   base     localhost/wados-base:44          the desktop every wadspace runs on
+#   stream   localhost/wados-stream:44        the stream sidecar: upstream Selkies
+#            2.2.1 (images/stream/requirements.txt, pinned by sha256) on
+#            Fedora 44, beside a wadspace while it's streamed
 #   pkg      localhost/wados-pkg-<id>:latest  (and :<image id 12>) one install's
 #            files on their own, FROM scratch (wadspaces-pkg capture)
 #   chain    localhost/wados-chain:<sha12>    the base with packages copied on,
@@ -36,8 +39,8 @@
 #
 # pkg and set need cargo (wados-pkgs is built from the checkout) and jq.
 # WADOS_PKGS names a wados-pkgs already built (CI's); WADOS_BASE another base.
-# CI (.github/workflows/) publishes the builder and the base as
-# ghcr.io/hunggod/wados-{builder,base}:44 and packages as
+# CI (.github/workflows/) publishes the builder, the base and the stream as
+# ghcr.io/hunggod/wados-{builder,base,stream}:44 and packages as
 # ghcr.io/hunggod/wados-pkg-<id>:<abi> (the base's io.wadspaces.abi label);
 # this script never pushes.
 set -euo pipefail
@@ -46,6 +49,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "${HERE}/.." && pwd)"
 BASE="${WADOS_BASE:-localhost/wados-base:44}"
 BUILDER=localhost/wados-builder:44
+STREAM=localhost/wados-stream:44
 BIN="${ROOT}/.build/images/bin"
 SHARE="${ROOT}/.build/images/share"
 NO_CACHE=()
@@ -107,6 +111,15 @@ build_base() {
         --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --build-arg VERSION="$(date -u +%Y%m%d)" \
         --build-context "bin=${BIN}" --build-context "share=${SHARE}" \
         -t "${BASE}" "${HERE}/base"
+}
+
+# The stream sidecar: no programs of ours, just Selkies' pinned wheels
+# (images/stream/lock.sh writes them) on linuxserver's Fedora 44 base.
+build_stream() {
+    log "building ${STREAM} from images/stream/"
+    podman build "${NO_CACHE[@]}" \
+        --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" --build-arg VERSION="$(date -u +%Y%m%d)" \
+        -t "${STREAM}" "${HERE}/stream"
 }
 
 need_base() {
@@ -217,7 +230,7 @@ build_set() {
 ONLY=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --only) [[ $# -gt 1 && " builder base " == *" $2 "* ]] || { echo "--only builder|base" >&2; exit 2; }
+        --only) [[ $# -gt 1 && " builder base stream " == *" $2 "* ]] || { echo "--only builder|base|stream" >&2; exit 2; }
                 ONLY+=("$2"); shift 2 ;;
         --no-cache) NO_CACHE=(--no-cache); shift ;;
         pkg) shift; [[ $# -ge 1 ]] || { usage >&2; exit 2; }; find_pkgs; build_pkg "$@"; exit 0 ;;
@@ -226,11 +239,12 @@ while [[ $# -gt 0 ]]; do
         *) echo "unknown option: $1" >&2; usage >&2; exit 2 ;;
     esac
 done
-[[ ${#ONLY[@]} -gt 0 ]] || ONLY=(builder base)
+[[ ${#ONLY[@]} -gt 0 ]] || ONLY=(builder base stream)
 for name in "${ONLY[@]}"; do
     case "${name}" in
         builder) build_builder ;;
         base) build_base ;;
+        stream) build_stream ;;
     esac
 done
 log "built: ${ONLY[*]}"

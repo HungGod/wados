@@ -207,7 +207,7 @@ async fn open(
     Path(id): Path<String>,
     Json(req): Json<OpenRequest>,
 ) -> Result<Json<WadspaceRun>, Failure> {
-    Ok(Json(app.runs.open(&id, req.display)?))
+    Ok(Json(crate::api_phase7::open(&app, &id, req.display).await?))
 }
 
 async fn stop(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<WadspaceRun>, Failure> {

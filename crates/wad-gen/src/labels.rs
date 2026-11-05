@@ -32,7 +32,7 @@ pub const SHA: &str = "io.wadspaces.dockerfile-sha256";
 
 /// A wadspace's containers: its id.
 pub const WADSPACE: &str = "wadspaces.id";
-/// A stream sidecar's role ("display").
+/// A stream sidecar's role ("display"); a secure stream's wadspace's, "secure".
 pub const ROLE: &str = "wadspaces.role";
 /// A stream sidecar's stream (its guid).
 pub const STREAM: &str = "wadspaces.stream";

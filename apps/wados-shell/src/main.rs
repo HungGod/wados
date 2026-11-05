@@ -28,6 +28,7 @@ mod session;
 mod shell;
 mod signin;
 mod store;
+mod streams;
 mod surface;
 mod wadd;
 mod wallpaper;
@@ -117,6 +118,7 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     shell.set_builder(&builder);
     let machine = Machine::new(&shell);
     let _overlays = overlays::Overlays::new(&shell);
+    let streams = streams::start(&shell);
     // Phase 6: my other machines' wadspaces and copies; sign-ins in WadBrowser.
     peers::start(&shell);
     signin::start(&shell);
@@ -133,7 +135,7 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     }
     let app = app.clone();
     glib::spawn_future_local(async move {
-        let _keep = (_overlays, builder);
+        let _keep = (_overlays, builder, streams);
         while let Ok(req) = rx.recv().await {
             let words: Vec<&str> = req.line.split_whitespace().collect();
             let answer = match words.as_slice() {

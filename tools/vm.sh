@@ -19,7 +19,17 @@
 #                                two VMs, A and B, on a test tailnet (tools/tailnet.sh:
 #                                a local Headscale): they see each other, Taildrive,
 #                                the device that isn't trusted; then wadd's peers
-#                                (tools/vm/check-tailnet.sh; --plain: Tailscale only)
+#                                (tools/vm/check-tailnet.sh; --plain: Tailscale only;
+#                                --streams: the tailnet, peers, the device and
+#                                private streams only)
+#   tools/vm.sh stream-check [--no-secrets | --turn]
+#                                streams (phase 7), one VM: with no secrets, public
+#                                and private off and nothing crashes; then a quick
+#                                tunnel, a public stream watched from the laptop
+#                                (--turn: with real TURN) (tools/vm/check-stream.sh)
+#   tools/vm.sh stream-phone [--turn]
+#                                the phone test: a public stream's one-tap link
+#                                and QR code, until Enter
 #
 # VM_NAME=a (or --name a, before the command): a second VM of the same disk,
 # with its own layer, firmware variables, ports, QMP and serial log, in
@@ -33,7 +43,8 @@
 # 127.0.0.1, 10.0.2.2 from the VM), and it installs onto its second disk,
 # wados.qcow2 (40 GiB, sparse), with tools/vm/install-disk.sh: bootc install
 # to-disk, root's SSH key (this disk's only: never in the image) and the
-# wadspace base in root's podman storage. Then the builder, its registry and
+# wadspace base in root's podman storage, with the stream sidecar
+# (localhost/wados-stream:44, phase 7) when it's built. Then the builder, its registry and
 # everything else stop. The builder's own disk is kept (it has podman);
 # --fresh starts it from the cloud image again.
 #
@@ -76,6 +87,8 @@ VM_NAME="${VM_NAME:-}"
 RUN="${VM}${VM_NAME:+/${VM_NAME}}"
 REGISTRY=wados-vm-registry
 BASE_IMAGE=localhost/wados-base:44
+# The stream sidecar (phase 7): on the disk too, when it's built here.
+STREAM_IMAGE=localhost/wados-stream:44
 # sam's password on the test disk: a test user's, typed by QMP. Not a secret.
 SAM_PASSWORD="${VM_PASSWORD:-Wados-44!}"
 
@@ -239,7 +252,9 @@ disk() {
     echo "   ($(($(now) - t)) s)"
 
     trap 'set +e; builder_stop; registry_stop' EXIT
-    say "a registry on the laptop, with ${image} and ${BASE_IMAGE}"
+    local extra=()
+    podman image exists "${STREAM_IMAGE}" && extra+=("${STREAM_IMAGE}")
+    say "a registry on the laptop, with ${image}, ${BASE_IMAGE}${extra:+ and ${extra[*]}}"
     t=$(now)
     registry_stop
     local reg
@@ -250,6 +265,8 @@ disk() {
     local push=(podman push -q --tls-verify=false --compression-format zstd --compression-level 1)
     "${push[@]}" "${image}" "localhost:${reg}/wados-host:latest"
     "${push[@]}" "${BASE_IMAGE}" "localhost:${reg}/${BASE_IMAGE#localhost/}"
+    local x
+    for x in "${extra[@]}"; do "${push[@]}" "${x}" "localhost:${reg}/${x#localhost/}"; done
     echo "   127.0.0.1:${reg} ($(($(now) - t)) s)"
 
     say "the builder VM, with wados.qcow2 as its second disk"
@@ -276,7 +293,7 @@ disk() {
     ssh_to "${BUILDER_PORT}" root 'cat > /root/wados-vm.pub' < "${KEY}.pub"
     ssh_to "${BUILDER_PORT}" root 'cat > /root/install-disk.sh' < "${HERE}/install-disk.sh"
     ssh_to "${BUILDER_PORT}" root bash /root/install-disk.sh "10.0.2.2:${reg}" wados-host:latest "${target}" \
-        "${BASE_IMAGE#localhost/}" /root/wados-vm.pub < /dev/null
+        "${BASE_IMAGE#localhost/}" /root/wados-vm.pub "${extra[@]#localhost/}" < /dev/null
     echo "   ($(($(now) - t)) s)"
 
     say "stopping the builder and the registry"
@@ -418,5 +435,6 @@ case "${cmd}" in
     status) status ;;
     check) [[ -z "${VM_NAME}" ]] || die "check is the unnamed VM's"; . "${HERE}/check.sh"; check ;;
     tailnet-check) [[ -z "${VM_NAME}" ]] || die "tailnet-check names its own VMs"; . "${HERE}/check-tailnet.sh"; tailnet_check "$@" ;;
-    *) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    stream-check | stream-phone) [[ -z "${VM_NAME}" ]] || die "${cmd} names its own VM (stream)"; . "${HERE}/check-stream.sh"; stream_main "${cmd}" "$@" ;;
+    *) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

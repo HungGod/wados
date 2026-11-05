@@ -16,7 +16,8 @@
 //! | `POST /v1/remote/wadspaces/{id}/build` → `BuildAnswer` | my machines and trusted devices |
 //! | `POST /v1/remote/wadspaces/{id}/open` (`OpenRequest`) → `WadspaceRun` | my machines and trusted devices |
 //! | `POST /v1/remote/wadspaces/{id}/stop` → `WadspaceRun` | my machines and trusted devices |
-//! | `POST /v1/remote/wadspaces/{id}/stream` (`StreamRequest`) → `StreamShare`, once it's live | my machines and trusted devices |
+//! | `POST /v1/remote/wadspaces/{id}/stream` (`StreamRequest`) → `StreamShare`, once it's live (streaming it already in that mode: its share) | my machines and trusted devices |
+//! | `GET /v1/remote/wadspaces/{id}/stream` → its `StreamInfo` (404: none) | my machines and trusted devices |
 //! | `DELETE /v1/remote/wadspaces/{id}/stream` → `StreamInfo`, ended | my machines and trusted devices |
 //! | `GET /v1/remote/trust` → [`TrustBook`] | my machines |
 //! | `POST /v1/remote/trust` ([`TrustAnswer`]) → [`TrustBook`] | my machines |
@@ -129,7 +130,7 @@ pub fn router(r: Arc<Remote>) -> Router {
         .route("/v1/remote/wadspaces/{id}/build", post(build))
         .route("/v1/remote/wadspaces/{id}/open", post(open))
         .route("/v1/remote/wadspaces/{id}/stop", post(stop))
-        .route("/v1/remote/wadspaces/{id}/stream", post(stream).delete(stream_stop))
+        .route("/v1/remote/wadspaces/{id}/stream", get(stream_info).post(stream).delete(stream_stop))
         .route(TRUST, get(trust_book).post(trust_answer))
         .fallback(|| async { Failure(ApiError::not_found("no such endpoint")) })
         .layer(axum::extract::DefaultBodyLimit::max(BODY))
@@ -190,7 +191,7 @@ async fn open(
     Json(req): Json<OpenRequest>,
 ) -> Answer<WadspaceRun> {
     let w = live(&r, &id)?;
-    let run = r.app.runs.open(&id, req.display)?;
+    let run = crate::api_phase7::open(&r.app, &id, req.display).await?;
     notice(&r, format!("{} opened {}", c.name, w.name));
     Ok(Json(run))
 }
@@ -206,8 +207,15 @@ async fn stop(
     Ok(Json(run))
 }
 
+/// This machine's stream of `id` (not one it watches from another), if it has one.
+async fn stream_of(r: &Remote, id: &str) -> Result<Option<StreamInfo>, Failure> {
+    let list = r.app.streams.streams().await?;
+    Ok(list.streams.into_iter().find(|s| s.id == id && s.peer.is_none() && s.stage != wad_model::StreamStage::Ended))
+}
+
 /// Streams a wadspace for the device that asked: its share (one-tap link,
-/// link, a public one's sign-in) once it's live.
+/// link, a public one's sign-in) once it's live. Streaming it already in
+/// that mode (another device asked, or this one again): that stream's.
 async fn stream(
     State(r): State<Arc<Remote>>,
     Extension(c): Extension<Caller>,
@@ -215,12 +223,23 @@ async fn stream(
     Json(req): Json<StreamRequest>,
 ) -> Answer<StreamShare> {
     let w = live(&r, &id)?;
-    let job = r.app.streams.start(&id, req).await?;
-    crate::api_phase7::ended(&r.app, &job.job.id).await?;
+    let job = match stream_of(&r, &id).await? {
+        Some(s) if s.mode == req.mode => s.job,
+        _ => Some(r.app.streams.start(&id, req).await?.job.id),
+    };
+    if let Some(job) = job.filter(|j| r.app.jobs.info(j).is_some()) {
+        crate::api_phase7::ended(&r.app, &job).await?;
+    }
     let share = r.app.streams.share(&id).await?;
     let how = if req.mode.is_public() { "publicly" } else { "privately, on the tailnet" };
     notice(&r, format!("{} is streaming {} {how}", c.name, w.name));
     Ok(Json(share))
+}
+
+async fn stream_info(State(r): State<Arc<Remote>>, Path(id): Path<String>) -> Answer<StreamInfo> {
+    live(&r, &id)?;
+    let s = stream_of(&r, &id).await?;
+    Ok(Json(s.ok_or_else(|| Failure(ApiError::not_found(format!("{id:?} isn't streaming"))))?))
 }
 
 async fn stream_stop(

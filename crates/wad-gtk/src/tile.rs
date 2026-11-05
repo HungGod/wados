@@ -13,12 +13,31 @@ use wad_model::Wadspace;
 use crate::Icon;
 use crate::picture::Picture;
 
+/// A wadspace's stream, as its badge says.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Streaming {
+    /// Its Stream job is still going.
+    Starting,
+    /// Live: how many watch.
+    Live(u32),
+}
+
+impl Streaming {
+    /// The tile's badge (`WadspaceIcon.svelte`'s): `LIVE 2`, or `…` while it starts.
+    pub fn badge(self) -> String {
+        match self {
+            Streaming::Starting => "…".into(),
+            Streaming::Live(n) => format!("LIVE {n}"),
+        }
+    }
+}
+
 /// How a wadspace is on this machine, as its badges say.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct TileState {
     pub running: bool,
-    /// Streaming: how many watch.
-    pub streaming: Option<u32>,
+    /// Streaming: live (how many watch) or starting.
+    pub streaming: Option<Streaming>,
     /// Not built here, or out of date.
     pub unbuilt: bool,
     /// The last open didn't work.
@@ -131,8 +150,8 @@ impl WadspaceTile {
             self.dot.remove_css_class("ws-streaming");
         }
         match state.streaming {
-            Some(n) => {
-                self.live.set_label(&format!("LIVE {n}"));
+            Some(st) => {
+                self.live.set_label(&st.badge());
                 self.live.set_visible(true);
             }
             None => self.live.set_visible(false),
@@ -193,3 +212,15 @@ pub const CSS: &str = "
 .site-card { background: #fbf9ff; border-radius: 22%; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.08); }
 .web-initial { background: #2a1d47; border-radius: 22%; }
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_stream_badge_says_live_and_how_many_or_that_it_starts() {
+        assert_eq!(Streaming::Live(2).badge(), "LIVE 2");
+        assert_eq!(Streaming::Live(0).badge(), "LIVE 0");
+        assert_eq!(Streaming::Starting.badge(), "…");
+    }
+}

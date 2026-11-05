@@ -1,0 +1,84 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# A secure stream, inside its wadspace's own VM (libkrun: wad-gen's
+# secure_units mounts this service from the host image). What a sidecar
+# (images/stream) does next to a wadspace, done here, beside it:
+#
+#   PulseAudio and Selkies, from the stream image's files (read-only at
+#   /opt/wados-stream: an image volume), each run as abc in a chroot of
+#   them that sees this VM's /run, /tmp, /dev, /proc, /sys and /config;
+#   their sockets in /run/wadspaces-display, as in the sidecar
+#   (stream.pa's PulseAudio, Selkies' compositor: XDG_RUNTIME_DIR), and
+#   /run/wadspaces-stream pointing there, where svc-de draws when the
+#   extra folder's display says `stream`.
+#
+# Selkies' settings are the unit's SELKIES_* (the stream image's ENV,
+# which doesn't reach a chroot, and the stream's). Like the sidecar's
+# init-stream-display, it never serves without secure mode (a master
+# token and wadd's token table) and the stream's path: the VM halts.
+set -euo pipefail
+
+R=/opt/wados-stream
+D=/run/wadspaces-display
+S=/run/wadspaces-stream
+WHO="${PUID:-1000}:${PGID:-1000}"
+
+refuse() {
+    echo "[secure-stream] $*" >&2
+    exec /run/s6/basedir/bin/halt
+}
+
+missing=()
+for v in SELKIES_MASTER_TOKEN SELKIES_TOKENS_FILE SELKIES_SUBFOLDER; do
+    [[ -n "${!v:-}" ]] || missing+=("${v}")
+done
+[[ ${#missing[@]} -eq 0 ]] || refuse "no ${missing[*]}: not streaming without Selkies' tokens, under the stream's path"
+case "${SELKIES_SUBFOLDER}" in
+    /ws-?*) ;;
+    *) refuse "SELKIES_SUBFOLDER is ${SELKIES_SUBFOLDER}, not /ws-<guid>" ;;
+esac
+[[ -x "${R}/opt/selkies/bin/selkies" && -f "${R}/etc/wadspaces/stream.pa" ]] ||
+    refuse "no stream image at ${R} (Selkies, stream.pa)"
+
+# The chroot's view of this VM (once: s6 runs this again after a crash).
+for d in proc sys dev run tmp config; do
+    mountpoint -q "${R}/${d}" || mount --rbind "/${d}" "${R}/${d}"
+done
+
+# In the stream image's files, as abc, with nothing of this VM's
+# environment but what's given.
+as_stream() {
+    chroot --userspec="${WHO}" "${R}" /usr/bin/env -i \
+        HOME=/config LANG=en_US.UTF-8 TZ="${TZ:-Etc/UTC}" \
+        PATH=/opt/selkies/bin:/usr/local/bin:/usr/bin:/bin \
+        XDG_RUNTIME_DIR="${D}" PULSE_RUNTIME_PATH="${D}/pulse" \
+        "$@"
+}
+
+# The display's folder, abc's alone, and its sound: PulseAudio once per VM
+# (a socket left from before it started would look live, so they go first).
+if ! as_stream pulseaudio --check 2> /dev/null; then
+    mkdir -p "${D}/pulse"
+    rm -f "${D}"/wayland-* "${D}/pulse/native" "${D}/pulse/pid"
+    chown "${WHO}" "${D}" "${D}/pulse"
+    chmod 700 "${D}" "${D}/pulse"
+    [[ -e "${S}" ]] || ln -s "${D}" "${S}"
+    echo "[secure-stream] PulseAudio at ${D}/pulse/native"
+    as_stream pulseaudio --start --exit-idle-time=-1 --realtime=no --high-priority=no \
+        --log-level=error -n -F /etc/wadspaces/stream.pa
+fi
+for _ in $(seq 40); do
+    [[ -S "${D}/pulse/native" ]] && break
+    sleep 0.25
+done
+
+mapfile -t settings < <(env | grep -E '^SELKIES_[A-Z0-9_]+=' || true)
+echo "[secure-stream] Selkies under ${SELKIES_SUBFOLDER}/ (${#settings[@]} settings), its display in ${D}"
+exec chroot --userspec="${WHO}" "${R}" /usr/bin/env -i \
+    HOME=/config LANG=en_US.UTF-8 TZ="${TZ:-Etc/UTC}" \
+    PATH=/opt/selkies/bin:/usr/local/bin:/usr/bin:/bin \
+    XDG_RUNTIME_DIR="${D}" PULSE_SERVER="unix:${D}/pulse/native" \
+    XCURSOR_THEME=breeze_cursors XCURSOR_SIZE=24 \
+    "${settings[@]}" \
+    /bin/sh -c 'cd /config && exec /opt/selkies/bin/selkies'

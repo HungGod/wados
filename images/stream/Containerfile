@@ -1,0 +1,157 @@
+# The stream sidecar: localhost/wados-stream:44, beside a wadspace while
+# it's streamed.
+#
+# It's Selkies (upstream 2.2.1: its wheel, which brings its web client built
+# from the same tag, and pixelflux and pcmflux) and nothing else: no desktop
+# of its own. Selkies' Wayland compositor (pixelflux's) owns the display in
+# the volume the wadspace shares with it (/run/wadspaces-display here, its
+# runtime dir; /run/wadspaces-stream in the wadspace): its socket is there
+# (wayland-1, the first one it finds free), and the wadspace's labwc draws on
+# it as one window, as it draws on the machine's labwc on the screen
+# (images/base's svc-de; wadspaces-session moves a running desktop between
+# the two). Sound: a PulseAudio server whose socket is in the same volume
+# (pulse/native, the wadspace's PULSE_SERVER); what plays into its `output`
+# sink is what Selkies sends to viewers.
+#
+# wadd runs it (crates/wad-gen/src/units.rs, the sidecar's unit) with:
+#
+#   SELKIES_SUBFOLDER=/ws-<guid>  every route is under the stream's path
+#   SELKIES_MASTER_TOKEN          a podman secret: secure mode, no logins
+#   SELKIES_TOKENS_FILE           wadd's token table (who may watch: the
+#                                 stream's key), in a folder of wadd's
+#                                 mounted read-only
+#   SELKIES_MODE                  websockets (a private stream), or webrtc
+#                                 with dual mode and the mux ports (public)
+#   SELKIES_RTC_CONFIG_JSON       wadd's ICE servers (Cloudflare's STUN and
+#                                 TURN), in the same folder
+#
+# and publishes its port (3000, plain HTTP) on 127.0.0.1 only: wadd's proxy
+# is the way in. It won't start without a master token, a tokens file and a
+# subfolder (init-stream-display): it never serves an open desktop.
+#
+# Pinned: the base by digest (linuxserver's baseimage-fedora:44, as
+# images/base: s6-overlay, user abc), and Selkies and every wheel it needs by
+# version and sha256 (requirements.txt, written by lock.sh). Nothing secret
+# is in it. Build it with images/build.sh --only stream.
+FROM ghcr.io/linuxserver/baseimage-fedora:44@sha256:f262a934dd87c6d1e959f32a9af75207c4c67f6f7a9893f28077c0f1aba34fc4
+
+LABEL maintainer="dwadsworth"
+LABEL org.opencontainers.image.source="https://github.com/HungGod/wados"
+
+# Selkies' settings that are the same for every stream (the unit sets the
+# rest). One port, plain HTTP, on the container's own interfaces (the unit
+# publishes it on the machine's loopback alone); no Basic login (secure
+# mode's tokens instead); its own Wayland compositor; Cloudflare's TURN
+# only through the file wadd writes (SELKIES_ENABLE_CLOUDFLARE_TURN would
+# take its key into the container, and win over the file).
+#
+# Nothing that would land in the sidecar rather than the wadspace: no file
+# transfers, printing, webcam, apps catalog or commands, and the sidebar
+# doesn't offer them. Sharing links are WadOS's share sheet's, not Selkies'.
+# HOOK(gamepads): phase 10's Play together turns gamepads on: players' rows
+# in the tokens file (role controller, slot 2-4), SELKIES_GAMEPAD_ENABLED,
+# and the joystick interposer (Selkies' addons/input-interposer, built from
+# the same tag) preloaded in the wadspace's apps, with SELKIES_JS_SOCKET_PATH
+# on the display volume both containers share.
+ENV LSIO_FIRST_PARTY=false \
+    HOME="/config" \
+    LANG="en_US.UTF-8" \
+    PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin" \
+    VIRTUAL_ENV="" \
+    S6_BEHAVIOUR_IF_STAGE2_FAILS=2 \
+    XCURSOR_THEME=breeze_cursors \
+    XCURSOR_SIZE=24 \
+    SELKIES_PORT=3000 \
+    SELKIES_PUBLIC=true \
+    SELKIES_ENABLE_HTTPS=false \
+    SELKIES_ENABLE_BASIC_AUTH=false \
+    SELKIES_WAYLAND=true \
+    SELKIES_ENABLE_CLOUDFLARE_TURN=false \
+    SELKIES_FILE_TRANSFERS=none \
+    SELKIES_UI_SIDEBAR_SHOW_FILES=false \
+    SELKIES_PRINTING_ENABLED=false \
+    SELKIES_WEBCAM_ENABLED="false|locked" \
+    SELKIES_UI_SIDEBAR_SHOW_WEBCAM=false \
+    SELKIES_UI_SIDEBAR_SHOW_APPS=false \
+    SELKIES_COMMAND_ENABLED=false \
+    SELKIES_ENABLE_SHARING=false \
+    SELKIES_UI_SIDEBAR_SHOW_SHARING=false \
+    SELKIES_GAMEPAD_ENABLED="false|locked" \
+    SELKIES_GAMEPAD_ON_START=false \
+    SELKIES_UINPUT_GAMEPAD=false \
+    SELKIES_UI_SIDEBAR_SHOW_GAMEPADS=false \
+    SELKIES_ENABLE_PLAYER2="false|locked" \
+    SELKIES_ENABLE_PLAYER3="false|locked" \
+    SELKIES_ENABLE_PLAYER4="false|locked"
+
+# Python for Selkies' own environment (its wheels bring the rest); what
+# pixelflux and pcmflux load from the system (Selkies' own Fedora package's
+# list: the compositor's Wayland server, GBM and EGL to render on the GPU,
+# VA-API to encode on it, Mesa's and Intel's drivers); PulseAudio, the
+# stream's sound server; and the cursors the compositor draws before the
+# wadspace sets its own. Weak dependencies stay out.
+RUN \
+  echo "**** install packages ****" && \
+  dnf -y --setopt=install_weak_deps=False install \
+    breeze-cursor-theme \
+    glib2 \
+    libICE \
+    libSM \
+    libX11-xcb \
+    libXext \
+    libXfixes \
+    libdrm \
+    libva \
+    libva-intel-media-driver \
+    libwayland-server \
+    libxcb \
+    libxkbcommon \
+    mesa-dri-drivers \
+    mesa-libEGL \
+    mesa-libgbm \
+    pixman \
+    pulseaudio \
+    pulseaudio-libs \
+    pulseaudio-utils \
+    python3 \
+    python-pip-wheel && \
+  echo "**** cleanup ****" && \
+  dnf clean all && \
+  rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*
+
+# Selkies in a virtual environment of its own (/opt/selkies), from exactly
+# the wheels requirements.txt names: binary wheels only, each checked against
+# its sha256, nothing resolved (--no-deps: the file is the whole closure).
+# Then: it's the release asked for, its web client is the one its wheel
+# brought, and every library it and its extensions link is here.
+COPY requirements.txt /tmp/requirements.txt
+RUN \
+  echo "**** install selkies ****" && \
+  python3 -m venv /opt/selkies && \
+  /opt/selkies/bin/python -I -m pip install -q --no-cache-dir --disable-pip-version-check \
+    --no-deps --only-binary=:all: --require-hashes -r /tmp/requirements.txt && \
+  /opt/selkies/bin/python -I -m pip uninstall -q -y pip && \
+  echo "**** check it ****" && \
+  [ "$(/opt/selkies/bin/python -I -c 'import importlib.metadata as m; print(m.version("selkies"))')" = 2.2.1 ] && \
+  web="$(/opt/selkies/bin/python -I -c 'import importlib.resources as r; print(r.files("selkies.selkies_web"))')" && \
+  test -s "${web}/index.html" && test -s "${web}/selkies-core.js" && \
+  /opt/selkies/bin/python -I -c 'import pixelflux, pcmflux, pulsectl_asyncio, selkies.stream_server' && \
+  ! find /opt/selkies -name '*.so*' -type f -exec ldd {} + 2> /dev/null | grep 'not found' && \
+  /opt/selkies/bin/selkies --help > /dev/null && \
+  rm -rf /tmp/* /config/.cache
+
+COPY root/ /
+RUN chmod +x /etc/s6-overlay/s6-rc.d/*/run
+
+# The build's day, last: it changes every build, and nothing above waits on it.
+ARG BUILD_DATE
+ARG VERSION
+LABEL build_version="WadOS stream version:- ${VERSION} Build-date:- ${BUILD_DATE}"
+
+# What wadd reads off a stream image. io.wados.stream: this is one, on
+# Selkies' secure mode, served under a subfolder ("2": Selkies 2.x).
+LABEL io.wados.stream="2" \
+      io.wados.fedora="44" \
+      io.wados.selkies="2.2.1"
+
+EXPOSE 3000

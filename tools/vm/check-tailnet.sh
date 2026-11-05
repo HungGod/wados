@@ -1,4 +1,4 @@
-# tools/vm.sh tailnet-check [--plain]: two WadOS machines on a test tailnet
+# tools/vm.sh tailnet-check [--plain | --streams]: two WadOS machines on a test tailnet
 # (phase 6), sourced by tools/vm.sh, whose helpers it uses. The tailnet is
 # tools/tailnet.sh's: Headscale 0.29.7 on the laptop, never the real one.
 # Every step says ok or FAIL, and the check goes on after a FAIL where it can.
@@ -26,8 +26,9 @@
 #   8. wadd shares sam's home itself once it's Running (step 6 then checks it)
 #   9. peers: B's /v1/peers lists A; B lists A's wadspaces; Copy here (a
 #      CopyWadspace job), the copy in B's library, and it builds
-#  10. the device: only hello from A's :8087 (403 past it), and an ask in
-#      A's /v1/tailnet; trusted on A, it lists A's wadspaces; B follows
+#  10. the device: only hello from A's :8087 (403 past it, starting or
+#      reading a stream too), and an ask in A's /v1/tailnet; trusted on A,
+#      it lists A's wadspaces; B follows
 #  11. GitHub, a mock only (tools/vm/github-mock.py on the laptop, [github]
 #      web and api in wadd.toml): B's Github job emits signIn with the
 #      device page and code; the check approves the code; the token is the
@@ -41,12 +42,48 @@
 #  13. signing out of GitHub deletes the secret
 #  14. no SELinux denials on either, all along
 #  15. A off: B's wadspace opens without A's folder, and says why
+#  16. private streams (phase 7), A's wadspace:
+#      - private is available on A (the tailnet), public isn't (no tunnel);
+#      - as Headscale is, `tailscale serve --https` can't work (Headscale
+#        answers tailscaled's HTTPS feature query with 501): the Stream job
+#        fails at "Serving it on your tailnet" with the reason, and nothing
+#        is left of it (three times);
+#      - with the "https" node attribute granted (tools/tailnet.sh https on)
+#        the serve is configured and the stream goes live at
+#        https://wados-a.ts.test:<port>/ws-<guid>/; a TLS client still gets
+#        no certificate there (Headscale can't issue one: what only the real
+#        tailnet proves);
+#      - the test path to the stream's own listener: `tailscale serve
+#        --tcp=<port+1000>` to it on A (a raw TCP forward, the Host header
+#        kept), and the laptop's Chromium through the device's SOCKS5 proxy
+#        (tools/tailnet.sh socks), with http://<A's tailnet ip>:<port+1000>
+#        treated as a secure origin (WebCodecs, the Secure cookie): the
+#        one-tap link streams over WebSockets (a screenshot, a clock moving),
+#        wadd counts the viewer; no token, or a wrong one, streams nothing;
+#      - stopped: the serve is gone, nothing is left; the link is expired;
+#      - "Stream from wados-a": B starts it through A's remote API
+#        (POST /v1/peers/wados-a/wadspaces/<ws>/stream), gets its share, and
+#        lists it with peer wados-a; A lists it live; B stops it; three
+#        times, nothing left on A each time.
 # Then everything goes: the VMs, the pod and its volume, the CA and keys,
 # the mock and its repository.
 #
+#  17. secure streams (when A has krun and /dev/kvm): tools/krun/check-secure.sh
+#      on A, as Headscale is (the private-secure stream fails at serving it:
+#      how wadd says so, and that nothing is left) and with the "https"
+#      attribute (live in krun, streamed through an SSH forward to its port,
+#      nothing left after); then sound from it: a viewer through wadd's proxy
+#      and the tailnet types a tone into its desktop's Command line (Selkies'
+#      input), and counts Selkies' audio frames
+#
+# --streams: steps 0-10, 16, 17 and 14 only (no GitHub, projects or A off),
+# with A at 2048 MB and B at 1024 MB, B without a desktop session
+# (TAILNET_VM_MEM_A, TAILNET_VM_MEM_B).
+#
 # TAILNET_VM_MEM (MB, 1536: the session takes about 750 MB, and free page
-# reporting gives back what Linux frees), VM_KEEP=1 (leave the VMs and
-# Headscale running).
+# reporting gives back what Linux frees), TAILNET_VM_MEM_A (A's: 2560 but
+# with --plain: a stream's wadspace and sidecar, or its krun VM, run there), VM_KEEP=1
+# (leave the VMs and Headscale running).
 
 TN="${ROOT}/tools/tailnet.sh"
 HS_URL=https://hs.test:8443
@@ -164,8 +201,18 @@ tailnet_check() {
     set +e
     FAILED=0
     PLAIN=""
-    [[ "${1:-}" == --plain ]] && PLAIN=1
+    STREAMS_ONLY=""
+    case "${1:-}" in
+        --plain) PLAIN=1 ;;
+        --streams) STREAMS_ONLY=1 ;;
+    esac
     MEM="${TAILNET_VM_MEM:-1536}"
+    # A streams (a wadspace and its sidecar, or a krun VM): more for it.
+    MEM_A="${TAILNET_VM_MEM_A:-$([[ -n "${STREAMS_ONLY}" ]] && echo 2048 || { [[ -z "${PLAIN}" ]] && echo 2560 || echo "${MEM}"; })}"
+    # --streams: B without a desktop session (tailnet_sessions).
+    MEM_B="${TAILNET_VM_MEM_B:-$([[ -n "${STREAMS_ONLY}" ]] && echo 1024 || echo "${MEM}")}"
+    TN_PRIV=""
+    TN_RELAY=""
     SHOTS="${VM}/tailnet-shots"
     DEVICE_UP_PID=""
     GH_PID=""
@@ -201,19 +248,21 @@ tailnet_check() {
     fi
     step_time
 
-    say "1. A and B boot (fresh layers, ${MEM} MB each)"
+    say "1. A and B boot (fresh layers, A ${MEM_A} MB, B ${MEM_B} MB)"
     local n free_mb
     # Two VMs beside everything else on the laptop: a run that swaps the
     # VMs out stalls them (RCU stalls, SSH gone), and fails for no reason.
     free_mb="$(awk '/^MemAvailable:/ { a = $2 } /^SwapFree:/ { s = $2 } END { print int((a + s / 2) / 1024) }' /proc/meminfo)"
-    if ((free_mb < 2 * MEM + 512)); then
-        note "WARNING: the laptop has about ${free_mb} MB to spare (available, and half the free swap) for 2 × ${MEM} MB"
+    if ((free_mb < MEM_A + MEM_B + 512)); then
+        note "WARNING: the laptop has about ${free_mb} MB to spare (available, and half the free swap) for ${MEM_A} + ${MEM_B} MB"
     fi
     for n in a b; do
         on "${n}"
         stop > /dev/null
+        if [[ "${n}" == a ]]; then MEM="${MEM_A}"; else MEM="${MEM_B}"; fi
         boot --fresh
     done
+    MEM="${MEM_B}"
     # The laptop first: when it's nearly out of memory and swap, the VMs go
     # (they'd only stall) before anything else on it is killed for them.
     rm -f "${VM}/tailnet-starved"
@@ -275,16 +324,26 @@ tailnet_check() {
         alive a b && wadd_device
         step_time
 
-        say "11. GitHub (a mock): B signs in, and the token is the podman secret"
-        alive b && wadd_github b
+        if [[ -z "${STREAMS_ONLY}" ]]; then
+            say "11. GitHub (a mock): B signs in, and the token is the podman secret"
+            alive b && wadd_github b
+            step_time
+
+            say "12. projects on B: its folder and file, A's over Taildrive, the mock's repository"
+            alive a b && wadd_projects
+            step_time
+
+            say "13. GitHub: signing out"
+            alive b && wadd_github_out b
+            step_time
+        fi
+
+        say "16. private streams: A's wadspace on the tailnet, and from B"
+        alive a b && wadd_streams
         step_time
 
-        say "12. projects on B: its folder and file, A's over Taildrive, the mock's repository"
-        alive a b && wadd_projects
-        step_time
-
-        say "13. GitHub: signing out"
-        alive b && wadd_github_out b
+        say "17. secure streams: a private-secure stream on A (krun; tools/krun/check-secure.sh)"
+        alive a && wadd_secure
         step_time
     fi
 
@@ -304,7 +363,7 @@ tailnet_check() {
     done
     step_time
 
-    if [[ -z "${PLAIN}" && -n "${WSP:-}" ]]; then
+    if [[ -z "${PLAIN}${STREAMS_ONLY}" && -n "${WSP:-}" ]]; then
         say "15. A off: B's wadspace opens without A's folder, and says why"
         alive b && wadd_offline
         step_time
@@ -383,9 +442,12 @@ EOF
 # Sam's session on both (the shell's sign-in, trust dialog, Files): greetd
 # logs them in, locked; unlocked with their password.
 tailnet_sessions() {
-    local n
-    for n in a b; do root_on "${n}" 'systemctl reset-failed greetd 2> /dev/null; systemctl restart greetd' > /dev/null 2>&1; done
-    for n in a b; do
+    local n machines="a b"
+    # --streams: B needs only wadd and tailscaled ("Stream from wados-a"),
+    # not a desktop: its memory goes to A's stream and the laptop's browser.
+    [[ -n "${STREAMS_ONLY}" ]] && machines="a"
+    for n in ${machines}; do root_on "${n}" 'systemctl reset-failed greetd 2> /dev/null; systemctl restart greetd' > /dev/null 2>&1; done
+    for n in ${machines}; do
         if wait_for 240 eval '[[ "$(shell_on '"${n}"' locked)" == "ok true" ]]'; then
             qmp_on "${n}" keys "${SAM_PASSWORD}" && qmp_on "${n}" key ret
             if wait_for 30 eval '[[ "$(shell_on '"${n}"' locked)" == "ok false" ]]'; then
@@ -657,7 +719,7 @@ tailnet_drive() {
     procs="$(root_on a "ps -o user=,label=,args= -C sudo,tailscaled | grep serve-taildrive" 2>&1)"
     note "a serves it with: $(tr '\n' ';' <<< "${procs}")"
     # Files ▸ Machines on B (the Machines tile opens it so).
-    [[ -z "${PLAIN}" ]] && app_shot b files-machines b-6-files-machines.png wados-files --machines
+    [[ -z "${PLAIN}${STREAMS_ONLY}" ]] && app_shot b files-machines b-6-files-machines.png wados-files --machines
 }
 
 # ------------------------------------------------------------ 9. peers
@@ -770,10 +832,17 @@ wadd_device() {
     else
         fail "the device → a's hello: $(tr '\n' ' ' <<< "${r}")"
     fi
-    for p in /v1/remote/machine /v1/remote/wadspaces "/v1/remote/wadspaces/${WS:-x}" /v1/remote/trust; do
+    for p in /v1/remote/machine /v1/remote/wadspaces "/v1/remote/wadspaces/${WS:-x}" /v1/remote/trust "/v1/remote/wadspaces/${WS:-x}/stream"; do
         r="$(device_get "${p}")"
         if [[ "$(code_of "${r}")" == 403 ]]; then ok "the device → a's ${p}: 403"; else fail "the device → a's ${p}: $(tr '\n' ' ' <<< "${r}")"; fi
     done
+    # Streams (phase 7): an untrusted device can't start or stop one.
+    local m
+    for m in POST DELETE; do
+        r="$(dev curl -sS -m 20 -X "${m}" -H 'content-type: application/json' -d '{"mode": "private"}' -w '\n%{http_code}' "http://${A_IP}:8087/v1/remote/wadspaces/${WS:-x}/stream" 2>&1)"
+        if [[ "$(code_of "${r}")" == 403 ]]; then ok "the device → ${m} a's /v1/remote/wadspaces/${WS:-x}/stream: 403 (no stream started)"; else fail "the device → ${m} a's stream: $(tr '\n' ' ' <<< "${r}")"; fi
+    done
+    [[ "$(api_on a GET /v1/streams | jq '.streams | length' 2> /dev/null)" == 0 ]] && ok "a: and no stream there" || fail "a: /v1/streams after the device's try: $(api_on a GET /v1/streams)"
     if wait_for 30 eval '[[ "$(api_on a GET /v1/tailnet | jq -r --arg d "${DEVICE_ID}" "[.asks[]? | select(.id == \$d)] | length" 2> /dev/null)" == 1 ]]'; then
         ok "a: /v1/tailnet asks for the device ($(api_on a GET /v1/tailnet | jq -c --arg d "${DEVICE_ID}" '.asks[] | select(.id == $d)'))"
     else
@@ -804,7 +873,7 @@ wadd_device() {
     fi
     shot_on a a-10-trusted.png
     # Settings ▸ Accounts on B: the device among the trusted.
-    app_shot b settings-accounts b-10-settings-accounts.png wados-settings --page accounts
+    [[ -z "${STREAMS_ONLY}" ]] && app_shot b settings-accounts b-10-settings-accounts.png wados-settings --page accounts
 }
 
 # ------------------------------------------------------------ 11. GitHub
@@ -1049,6 +1118,403 @@ wadd_offline() {
     if [[ "${denials}" == asked ]]; then ok "b: still no SELinux denials"; else fail "b: SELinux: $(head -n 5 <<< "${denials%asked}")"; fi
 }
 
+# ------------------------------------------------------------ 16. streams
+
+# This wadspace's stream on n (empty: none), and another machine's here.
+stream_on() { api_on "$1" GET /v1/streams | jq -c --arg id "$2" '.streams[]? | select(.id == $id and (.peer == null))' 2> /dev/null; }
+peer_stream_on() { api_on "$1" GET /v1/streams | jq -c --arg id "$2" --arg p "$3" '.streams[]? | select(.id == $id and .peer == $p)' 2> /dev/null; }
+# The ports tailscale serves on n.
+served_on() { ts_on "$1" serve status --json 2> /dev/null | jq -r '(.TCP // {}) | keys | join(" ")' 2> /dev/null; }
+
+# A job's stages, from GET /v1/jobs/{id} (a JobLog) or a JobInfo.
+jstages_of() { jq -r '(.job // .) | .stages[]? | "\(.label): \(.state)\(if .error then " (" + .error + ")" else "" end)"' <<< "$1" 2> /dev/null; }
+
+# wadd's API with a long wait (a peer's stream answers once it's live there).
+api_long() {
+    local n="$1" m="$2" p="$3" body="${4:-}" out code
+    out="$(sam_on "${n}" "curl -sS --max-time 700 --unix-socket /run/wadd/wadd.sock -X ${m} -w '\n%{http_code}' -H 'content-type: application/json' --data-binary @- http://wadd${p}" <<< "${body}" 2>&1)"
+    code="${out##*$'\n'}"
+    out="${out%$'\n'*}"
+    [[ "${code}" == 2?? ]] && { printf '%s' "${out}"; return 0; }
+    printf 'HTTP %s: %s' "${code}" "$(head -c 300 <<< "${out}")"
+    return 1
+}
+
+# Nothing left of n's stream of ws (and nothing served for it). Its display
+# volume may go a little after the rest: up to 30 s is waited for, and said.
+tn_leftovers() {
+    local left t0=$(now)
+    # Up to 150 s (wadd waits up to 120 s for the containers to stop before
+    # it removes the volume): how long it took is said, and what's left shown.
+    for _ in $(seq 75); do
+        left="$(tn_left "$1" "$2")"
+        [[ -z "${left}" ]] && break
+        sleep 2
+    done
+    if [[ -z "${left}" && $(($(now) - t0)) -gt 2 ]]; then note "$1: (its last leftovers went $(($(now) - t0)) s after it ended)"; fi
+    if [[ -z "${left}" ]]; then
+        ok "$1: nothing left of the stream (units, sidecar, volume, secrets, folder)"
+    else
+        fail "$1: $(($(now) - t0)) s after it ended, still left of the stream: $(tr '\n' ';' <<< "${left}")"
+        root_on "$1" "podman ps -a --format '{{.Names}} {{.Status}}' | grep -E 'wad(stream)?-$2'; journalctl -u wadd -o cat --no-pager | grep -E '$2' | tail -n 25" 2>&1 | indent
+    fi
+}
+tn_left() {
+    local left
+    left="$(root_on "$1" bash -s -- "$2" << 'EOS' 2>&1
+id="$1"
+ls /run/containers/systemd 2> /dev/null | grep -E "^wadstream-${id}" | sed 's/^/unit /'
+podman ps -a --format '{{.Names}}' | grep -E "^wadstream-${id}" | sed 's/^/container /'
+podman volume ls --format '{{.Name}}' | grep -E "^wadstream-${id}" | sed 's/^/volume /'
+podman secret ls --format '{{.Name}}' | grep -E "^wad_stream_.*${id}$" | sed 's/^/secret /'
+test -e "/var/lib/wados/streams/${id}" && echo "folder /var/lib/wados/streams/${id}"
+systemctl list-units --plain --no-legend --all "wadstream-${id}*" 2> /dev/null | awk '$3 != "inactive" { print "systemd " $1 " " $3 }'
+true
+EOS
+)"
+    printf '%s' "${left}"
+}
+
+# A clock in n's wadspace ws, on whatever it draws on now.
+clock_on() {
+    local out
+    out="$(root_on "$1" "podman exec -i --user abc wad-$2 sh -s" 2>&1 << 'EOS'
+cd /config
+export XDG_RUNTIME_DIR=/config/.XDG
+WAYLAND_DISPLAY="$(basename "$(ls -t /config/.XDG/wayland-[0-9] 2> /dev/null | head -n 1)")"
+export WAYLAND_DISPLAY
+cat > /tmp/wados-clock.sh << 'CLOCK'
+while :; do printf '\033[2J\033[H\n\n   %s\n\n   WadOS private stream\n' "$(date +%H:%M:%S)"; sleep 1; done
+CLOCK
+setsid foot --title Clock --font=monospace:size=40 sh /tmp/wados-clock.sh < /dev/null > /dev/null 2>&1 &
+sleep 2
+pgrep -f wados-clock.sh > /dev/null && echo "running on ${WAYLAND_DISPLAY}" || echo "not running (display: ${WAYLAND_DISPLAY:-none})"
+EOS
+)"
+    if [[ "${out}" == running* ]]; then ok "$1: a clock in $2's terminal, ${out}"; else fail "$1: the clock in $2: ${out}"; fi
+}
+
+# A viewer on the laptop, onto the tailnet as the device: Playwright's
+# headless shell at http://localhost:<port> (a secure context), a relay
+# there (tools/vm/socks-relay.py) carrying each connection through the
+# device's SOCKS5 proxy to the test path on A (http://<A's ip>:<port+1000>).
+# tn_view NAME 'jq filter over the share, with $base'.
+tn_view() {
+    local name="$1" filter="$2" r
+    jq -c --arg out "${SHOTS}/${name}.png" --arg base "${TN_LOCAL}" \
+        "${filter} + {out: \$out}" "${TN_PRIV}/share.json" |
+        timeout 240 node "${HERE}/stream-view.mjs" > "${SHOTS}/${name}.json" 2> "${SHOTS}/${name}.err"
+    r=$?
+    VIEW="$(cat "${SHOTS}/${name}.json")"
+    note "${name}: $(jq -c '{page, card, secure, streaming, transport, held, colours, stddev, tokenInAddress, errors, error}' <<< "${VIEW}" 2> /dev/null || head -c 300 <<< "${VIEW}")"
+    [[ -s "${SHOTS}/${name}.err" ]] && head -n 3 "${SHOTS}/${name}.err" | indent
+    return "${r}"
+}
+
+wadd_streams() {
+    local list job id j err info link port guid served tls two r d sampler vmax
+    [[ -n "${WS:-}" ]] || { fail "no wadspace on A to stream (step 9)"; return; }
+    TN_PRIV="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/wados-tailnet-streams.XXXXXX")"
+    chmod 0700 "${TN_PRIV}"
+    list="$(api_on a GET /v1/streams)"
+    if [[ "$(jq -r '.available.private.available' <<< "${list}" 2> /dev/null)" == true && "$(jq -r '.available.public.available' <<< "${list}")" == false ]]; then
+        ok "a: private is available (on the tailnet); public isn't (\"$(jq -r .available.public.reason <<< "${list}")\")"
+    else
+        fail "a: /v1/streams' availability: $(jq -c .available <<< "${list}" 2> /dev/null || echo "${list}")"
+    fi
+    api_on a POST "/v1/wadspaces/${WS}/build" > /dev/null
+
+    # As Headscale is: tailscale serve --https can't be had. Three times:
+    # each fails at serving it, and leaves nothing.
+    "${TN}" https off > /dev/null
+    local try
+    for try in 1 2 3; do
+        if job="$(api_on a POST "/v1/wadspaces/${WS}/stream" '{"mode": "private", "takeover": true}')"; then
+            id="$(jq -r '.id // .job.id' <<< "${job}")"
+            if j="$(job_done a "${id}" 420)"; then
+                fail "a: #${try}: a private stream went live on Headscale without HTTPS ($(job_summary "${j}"))"
+                api_on a DELETE "/v1/wadspaces/${WS}/stream" > /dev/null
+            else
+                err="$(jq -r '(.job // .) | .error // empty' <<< "${j}" 2> /dev/null)"
+                [[ "${try}" == 1 ]] && jstages_of "${j}" | indent
+                if [[ "${err}" == *"tailnet won't serve it"* ]]; then
+                    ok "a: #${try}: as Headscale is, the private stream fails cleanly at serving it: \"${err}\""
+                else
+                    fail "a: #${try}: the private stream on Headscale: $(job_summary "${j}")"
+                    journal_on a -u wadd
+                fi
+            fi
+        else
+            fail "a: #${try}: POST /v1/wadspaces/${WS}/stream {private}: ${job}"
+        fi
+        wait_for 60 eval '[[ -z "$(stream_on a "${WS}")" ]]' || fail "a: #${try}: the failed stream is still listed: $(stream_on a "${WS}")"
+        tn_leftovers a "${WS}"
+        served="$(served_on a)"
+        [[ -z "${served}" ]] && ok "a: #${try}: and nothing is served on the tailnet (tailscale serve status: none)" || fail "a: #${try}: still served: ${served}"
+    done
+
+    # With the "https" node attribute, the serve is configured.
+    "${TN}" https on | indent
+    if wait_for 90 eval '[[ "$(ts_on a status --json 2> /dev/null | jq -r ".Self.CapMap | has(\"https\")")" == true ]]'; then
+        ok "a: has the \"https\" node attribute now (Headscale's policy, reloaded)"
+    else
+        fail "a: no \"https\" node attribute within 90 s"
+    fi
+    if ! job="$(api_on a POST "/v1/wadspaces/${WS}/stream" '{"mode": "private", "takeover": true}')"; then
+        fail "a: POST /v1/wadspaces/${WS}/stream {private} again: ${job}"
+        return
+    fi
+    id="$(jq -r '.id // .job.id' <<< "${job}")"
+    if j="$(job_done a "${id}" 420)"; then
+        ok "a: with the attribute, the private stream is live ($(job_summary "${j}"))"
+        jstages_of "${j}" | indent
+    else
+        fail "a: the private stream with the attribute: $(job_summary "${j}")"
+        jstages_of "${j}" | indent
+        journal_on a -u wadd
+        return
+    fi
+    info="$(stream_on a "${WS}")"
+    note "a: ${info}"
+    link="$(jq -r .link <<< "${info}")"
+    port="$(sed -n 's|^https://wados-a\.ts\.test:\([0-9]*\)/ws-.*|\1|p' <<< "${link}")"
+    guid="$(sed -n 's|.*/ws-\([0-9a-z]*\)/$|\1|p' <<< "${link}")"
+    if [[ -n "${port}" && -n "${guid}" && "$(jq -r '.mode, .transport' <<< "${info}" | tr '\n' ' ')" == "private websocket "* ]]; then
+        ok "a: its link is https://wados-a.ts.test:${port}/ws-<guid>/ (private, WebSockets)"
+    else
+        fail "a: its link or transport: ${info}"
+    fi
+    served="$(served_on a)"
+    if [[ " ${served} " == *" ${port} "* ]]; then ok "a: tailscale serves :${port} (serve status: ${served})"; else fail "a: :${port} isn't served (${served:-none})"; fi
+    sam_on a "curl -sS --unix-socket /run/wadd/wadd.sock http://wadd/v1/streams/${WS}/share" < /dev/null > "${TN_PRIV}/share.json" 2> /dev/null
+    if jq -e --arg l "${link}" '.mode == "private" and .link == $l and (.openLink | startswith($l + "#token=")) and .password == null' "${TN_PRIV}/share.json" > /dev/null 2>&1; then
+        ok "a: its share: the one-tap link (${link}#token=…), no password (private)"
+    else
+        fail "a: its share: $(jq -c '{mode, link, openLink: (.openLink | sub("token=.*"; "token=…")), user}' "${TN_PRIV}/share.json" 2> /dev/null)"
+    fi
+    # What only the real tailnet does: a certificate for it.
+    tls="$(dev curl -sS -m 20 -o /dev/null -w '%{http_code}' "https://wados-a.ts.test:${port}/ws-${guid}/" 2>&1 | tail -1)"
+    note "the device → https://wados-a.ts.test:${port}/: ${tls} (Headscale has no certificate to give tailscaled: the real tailnet's HTTPS is what makes this link open)"
+    # The public listener doesn't serve a private route.
+    r="$(root_on a "curl -s -m 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8085/ws-${guid}/" 2>&1)"
+    [[ "${r}" == 404 ]] && ok "a: the public listener (8085) gives this private route the expired page (404)" || fail "a: 127.0.0.1:8085/ws-<guid>/: ${r}"
+
+    # The test path: a raw TCP forward on the tailnet to the stream's own listener.
+    two=$((port + 1000))
+    ts_on a serve --bg --yes --tcp="${two}" "tcp://127.0.0.1:${port}" 2>&1 | tail -2 | indent
+    TN_BASE="http://${A_IP}:${two}"
+    r="$(dev curl -sS -m 20 -w '\n%{http_code}' "${TN_BASE}/ws-${guid}/" 2>&1)"
+    if [[ "$(code_of "${r}")" == 200 && "${r}" == *"is shared with you"* && "${r}" != *"<form"* ]]; then
+        ok "the device → the stream's listener, over the tailnet (${TN_BASE}): the private card, no password form"
+    else
+        fail "the device → ${TN_BASE}/ws-<guid>/: $(code_of "${r}") $(head -c 200 <<< "${r}")"
+    fi
+    r="$(dev curl -sS -m 20 -o /dev/null -w '%{http_code}' "${TN_BASE}/ws-00000000000000000000000000000000/" 2>&1)"
+    [[ "${r}" == 404 ]] && ok "its listener serves its guid only: another gets the expired page (404)" || fail "its listener, another guid: ${r}"
+    r="$(dev curl -sS -m 20 -o /dev/null -w '%{http_code}' "${TN_BASE}/ws-${guid}/api/websockets" 2>&1)"
+    [[ "${r}" == 401 ]] && ok "api/websockets without the key: 401" || fail "api/websockets without the key: ${r}"
+    # The laptop's end of it: a relay through the device (as a phone on the tailnet would come).
+    python3 -I "${HERE}/socks-relay.py" "$("${TN}" socks)" "${A_IP}:${two}" > "${TN_PRIV}/relay.out" 2> "${TN_PRIV}/relay.err" &
+    TN_RELAY=$!
+    wait_for 10 test -s "${TN_PRIV}/relay.out"
+    TN_LOCAL="http://localhost:$(head -1 "${TN_PRIV}/relay.out")"
+    r="$(curl -sS -m 20 -o /dev/null -w '%{http_code}' "${TN_LOCAL}/ws-${guid}/" 2>&1)"
+    if [[ "${r}" == 200 ]]; then ok "the laptop reaches it as the device (${TN_LOCAL} → the device's SOCKS5 → ${TN_BASE#http://} over the tailnet): 200"; else fail "through the relay: ${r} ($(tail -n 2 "${TN_PRIV}/relay.err" | tr '\n' ' '))"; fi
+    clock_on a "${WS}"
+    (
+        for _ in $(seq 30); do
+            sleep 3
+            stream_on a "${WS}" | jq -r .viewers 2> /dev/null
+        done
+    ) > "${TN_PRIV}/viewers" 2> /dev/null &
+    sampler=$!
+    if tn_view 16-private-one-tap '{url: (.openLink | sub("^https://[^/]+"; $base)), expect: "stream", wait: 60, hold: 20}' && [[ "$(jq -r .transport <<< "${VIEW}")" == websockets ]]; then
+        ok "the laptop's Chromium, as the device (the relay, its SOCKS5, the tailnet), with the one-tap link: it streams over WebSockets (secure context: $(jq -r .secure <<< "${VIEW}"), $(jq -c .held <<< "${VIEW}"))"
+    else
+        fail "the one-tap link over the tailnet: $(jq -c '{page, card, secure, streaming, transport, sockets, errors, consoleErrors, error}' <<< "${VIEW}" 2> /dev/null)"
+    fi
+    kill "${sampler}" 2> /dev/null
+    note "the one-tap flow: its POST $(jq -r .oneTap <<< "${VIEW}"), sockets $(jq -c '[.sockets[]? | {url, frames, closed}][:3]' <<< "${VIEW}"), console $(jq -c '.consoleErrors[:3]' <<< "${VIEW}")"
+    if [[ ! -f "${SHOTS}/16-private-one-tap.png" ]]; then
+        fail "no screenshot of the one-tap view"
+    elif d="$(python3 "${HERE}/screen.py" "${SHOTS}/16-private-one-tap.png" 2>&1)"; then ok "its screenshot isn't blank (${d}; ${SHOTS}/16-private-one-tap.png)"; else fail "its screenshot is blank (${d})"; fi
+    [[ "$(jq -r .tokenInAddress <<< "${VIEW}")" == false ]] && ok "the address bar keeps no token" || fail "the token is still in the address bar"
+    vmax="$(sort -n "${TN_PRIV}/viewers" | tail -1)"
+    [[ "${vmax:-0}" -ge 1 ]] && ok "a: wadd counted the viewer (viewers: ${vmax})" || fail "a: viewers stayed ${vmax:-0} while it was watched"
+    if tn_view 16-private-no-token '{url: (.link | sub("^https://[^/]+"; $base)), expect: "none", wait: 20}'; then ok "with no token, the card, and nothing streams"; else fail "no token: $(jq -c '{page, streaming, error}' <<< "${VIEW}")"; fi
+    if tn_view 16-private-wrong-token '{url: ((.link | sub("^https://[^/]+"; $base)) + "#token=not-the-key"), expect: "none", wait: 20}'; then ok "a wrong token streams nothing"; else fail "a wrong token: $(jq -c '{page, streaming, error}' <<< "${VIEW}")"; fi
+    shot_on a a-16-streaming.png
+    [[ -s "${TN_PRIV}/relay.err" ]] && note "the relay said: $(sort < "${TN_PRIV}/relay.err" | uniq -c | head -3 | tr '\n' ' ')"
+    kill "${TN_RELAY}" 2> /dev/null
+    wait "${TN_RELAY}" 2> /dev/null
+    TN_RELAY=""
+
+    # Stopped: its serve and everything else go.
+    if r="$(api_on a DELETE "/v1/wadspaces/${WS}/stream")"; then ok "a: stopped ($(jq -c '{stage, live}' <<< "${r}"))"; else fail "a: stopping: ${r}"; fi
+    wait_for 30 eval '[[ -z "$(stream_on a "${WS}")" ]]' || fail "a: still listed after the stop"
+    ts_on a serve --tcp="${two}" off > /dev/null 2>&1
+    served="$(served_on a)"
+    [[ " ${served} " != *" ${port} "* ]] && ok "a: :${port} isn't served any more (serve status: ${served:-none})" || fail "a: :${port} is still served"
+    tn_leftovers a "${WS}"
+
+    # Stream from wados-a: B asks A's remote API, and keeps it in its list;
+    # B stops it there. Three times: nothing left on A each time.
+    local share peer_info try
+    for try in 1 2 3; do
+        if share="$(api_long b POST "/v1/peers/wados-a/wadspaces/${WS}/stream" '{"mode": "private"}')"; then
+            if jq -e '.mode == "private" and (.openLink | test("^https://wados-a\\.ts\\.test:[0-9]+/ws-[0-9a-z]+/#token="))' <<< "${share}" > /dev/null; then
+                ok "b: #${try}: \"Stream from wados-a\": A's share came back once it was live ($(jq -r .link <<< "${share}"), its key in the one-tap link)"
+            else
+                fail "b: #${try}: the peer stream's share: $(jq -c '{mode, link}' <<< "${share}" 2> /dev/null)"
+            fi
+        else
+            fail "b: #${try}: POST /v1/peers/wados-a/wadspaces/${WS}/stream: ${share}"
+        fi
+        share=""
+        if wait_for 30 eval '[[ -n "$(peer_stream_on b "${WS}" wados-a)" ]]'; then
+            peer_info="$(peer_stream_on b "${WS}" wados-a)"
+            ok "b: #${try}: /v1/streams has it, with peer wados-a ($(jq -c '{id, peer, mode, live, link}' <<< "${peer_info}"))"
+        else
+            fail "b: #${try}: /v1/streams hasn't A's stream: $(api_on b GET /v1/streams | jq -c .streams 2> /dev/null)"
+        fi
+        [[ "$(stream_on a "${WS}" | jq -r .live)" == true ]] && ok "a: #${try}: it's A's stream, live" || fail "a: #${try}: not live on A: $(stream_on a "${WS}")"
+        if r="$(api_on b DELETE "/v1/peers/wados-a/wadspaces/${WS}/stream")"; then ok "b: #${try}: stopped it there ($(jq -c '{stage, live, peer}' <<< "${r}"))"; else fail "b: #${try}: DELETE /v1/peers/wados-a/wadspaces/${WS}/stream: ${r}"; fi
+        wait_for 40 eval '[[ -z "$(stream_on a "${WS}")" && -z "$(peer_stream_on b "${WS}" wados-a)" ]]' && ok "#${try}: gone from A's list and B's" || fail "#${try}: still listed: a $(stream_on a "${WS}"), b $(peer_stream_on b "${WS}" wados-a)"
+        tn_leftovers a "${WS}"
+    done
+    "${TN}" https off > /dev/null
+    rm -rf "${TN_PRIV}"
+    TN_PRIV=""
+}
+
+# ------------------------------------------------------------ 17. secure streams
+
+# tools/krun/check-secure.sh on A (a private-secure stream through wadd, in
+# krun, viewed through an SSH forward to its port), as Headscale is and with
+# the "https" attribute: its result lines, indented; true if all ok.
+secure_on_a() {
+    local name="$1" out
+    out="$("${ROOT}/tools/krun/check-secure.sh" --name a 2>&1 | sed -E 's/token=[^& "]*/token=…/g')"
+    printf '%s\n' "${out}" > "${SHOTS}/${name}.txt"
+    grep -E '^(ok|FAIL|==|secure stream:)|^      [a-z]' <<< "${out}" | indent
+    [[ "${out}" == *"secure stream: all ok"* ]]
+}
+
+wadd_secure() {
+    local j
+    if ! root_on a 'command -v krun && test -c /dev/kvm' > /dev/null 2>&1; then
+        skip_note "a: no krun or /dev/kvm: no secure streams here"
+        return
+    fi
+    # As Headscale is: no HTTPS for tailscale serve.
+    "${TN}" https off > /dev/null
+    wait_for 60 eval '[[ "$(ts_on a status --json 2> /dev/null | jq -r ".Self.CapMap | has(\"https\")")" == false ]]'
+    note "as Headscale is (no \"https\" attribute):"
+    local sid left t0 waited
+    if secure_on_a 17-secure-headscale; then
+        fail "a: a private-secure stream went live without HTTPS on Headscale"
+    else
+        # Its wadspace (check-secure.sh's "<id>: built") and its own Stream job.
+        sid="$(sed -n 's/^ok    \([a-z0-9-]*\): built$/\1/p' "${SHOTS}/17-secure-headscale.txt" | head -1)"
+        # Its job ends once the teardown is done (the stream is listed ended first).
+        local jid
+        jid="$(grep -o '"id":"job-[a-z0-9]*"' "${SHOTS}/17-secure-headscale.txt" | head -1 | cut -d'"' -f4)"
+        [[ -n "${jid}" ]] && job_done a "${jid}" 120 > /dev/null
+        j="$(api_on a GET /v1/jobs | jq -c --arg id "${sid}" '[.[] | select(.kind == "stream" and .subject == $id)] | last | {title, status, error, stages: [.stages[]? | "\(.label): \(.state)\(if .error then " (" + .error + ")" else "" end)"]}' 2> /dev/null)"
+        note "a: ${sid}'s Stream job: ${j}"
+        if [[ "${j}" == *"tailnet won't serve it"* ]]; then
+            ok "a: as Headscale is, the private-secure stream fails at serving it, and its job says why"
+        else
+            fail "a: the private-secure stream on Headscale: ${j}"
+        fi
+        # A krun wadspace takes 10-13 s to stop: what's left after 90 s is left.
+        t0=$(now)
+        for _ in $(seq 30); do
+            left="$(root_on a "podman ps -a --format '{{.Names}} {{.Status}}' | grep -E '^(wad|wadstream|wadsecure)-${sid} '; podman volume ls --format '{{.Name}}' | grep -E '^wad(secure|stream)-${sid}\$'; podman secret ls --format '{{.Name}}' | grep -E '^wad_stream_.*_${sid}\$'; test -e /var/lib/wados/streams/${sid} && echo 'folder streams/${sid}'; ps -eo label | grep -q container_kvm_t && echo 'a krun VMM running'; ss -ltnH | grep -oE '127.0.0.1:48[0-9]{3}' | sed 's/^/listening /'; tailscale serve status --json 2> /dev/null | jq -r '(.TCP // {}) | keys[]' | sed 's/^/served :/'" 2>&1)"
+            [[ -z "${left}" ]] && break
+            sleep 3
+        done
+        waited=$(($(now) - t0))
+        if [[ -z "${left}" ]]; then
+            ok "a: and nothing is left of it after ${waited} s (no container, VMM, image volume, secret, folder, listener or serve)"
+        else
+            fail "a: ${waited} s after the failed secure stream, still there: $(tr '\n' ';' <<< "${left}")"
+            root_on a "journalctl -u wadd --no-pager -o cat --since -4min | grep -E '${sid}' | tail -n 8" 2>&1 | indent
+        fi
+        api_on a POST /v1/ops "{\"op\": {\"op\": \"ws.trash\", \"ws\": \"${sid}\"}}" > /dev/null 2>&1
+    fi
+    # With the attribute: the serve is configured, and the stream goes live.
+    "${TN}" https on > /dev/null
+    wait_for 90 eval '[[ "$(ts_on a status --json 2> /dev/null | jq -r ".Self.CapMap | has(\"https\")")" == true ]]'
+    note "with the \"https\" attribute:"
+    if secure_on_a 17-secure-https; then
+        ok "a: a private-secure stream (krun) goes live, streams through the SSH forward to its port, and leaves nothing (tools/krun/check-secure.sh: all ok; ${ROOT}/.build/krun/check-secure/)"
+    else
+        fail "a: the private-secure stream with the attribute (tools/krun/check-secure.sh; ${SHOTS}/17-secure-https.txt)"
+    fi
+    note "17b. sound from an app in a secure stream's VM:"
+    secure_sound
+    "${TN}" https off > /dev/null
+}
+skip_note() { printf 'skip  %s\n' "$*"; }
+
+# 17b. Sound from an app in a secure stream's VM (podman exec can't reach
+# into krun): a viewer through wadd's proxy and the tailnet (as in 16)
+# double-clicks its desktop's Command line, types a tone into it through
+# Selkies' input, and counts Selkies' audio frames on its data socket.
+secure_sound() {
+    local ws job id j info link port guid two r
+    TN_PRIV="$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/wados-tailnet-streams.XXXXXX")"
+    chmod 0700 "${TN_PRIV}"
+    ws="$(api_on a POST /v1/ops '{"op": {"op": "space.create", "name": "Secure Sound"}}' | jq -r .created 2> /dev/null)"
+    [[ -n "${ws}" && "${ws}" != null ]] || { fail "a: no wadspace for the secure sound"; return; }
+    api_on a POST /v1/ops "{\"op\": {\"op\": \"apps.add\", \"ws\": \"${ws}\", \"app\": \"terminal\"}}" > /dev/null
+    api_on a POST "/v1/wadspaces/${ws}/build" > /dev/null
+    if ! job="$(api_on a POST "/v1/wadspaces/${ws}/stream" '{"mode": "private-secure"}')"; then
+        fail "a: streaming ${ws} (private-secure): ${job}"
+        return
+    fi
+    id="$(jq -r '.id // .job.id' <<< "${job}")"
+    if ! j="$(job_done a "${id}" 420)"; then
+        fail "a: ${ws}'s secure stream: $(job_summary "${j}")"
+        return
+    fi
+    info="$(stream_on a "${ws}")"
+    link="$(jq -r .link <<< "${info}")"
+    port="$(sed -n 's|^https://wados-a\.ts\.test:\([0-9]*\)/ws-.*|\1|p' <<< "${link}")"
+    guid="$(sed -n 's|.*/ws-\([0-9a-z]*\)/$|\1|p' <<< "${link}")"
+    ok "a: ${ws} streams securely ($(jq -c '{mode, transport, link}' <<< "${info}"))"
+    sam_on a "curl -sS --unix-socket /run/wadd/wadd.sock http://wadd/v1/streams/${ws}/share" < /dev/null > "${TN_PRIV}/share.json" 2> /dev/null
+    two=$((port + 1000))
+    ts_on a serve --bg --yes --tcp="${two}" "tcp://127.0.0.1:${port}" > /dev/null 2>&1
+    python3 -I "${HERE}/socks-relay.py" "$("${TN}" socks)" "${A_IP}:${two}" > "${TN_PRIV}/relay.out" 2> "${TN_PRIV}/relay.err" &
+    TN_RELAY=$!
+    wait_for 10 test -s "${TN_PRIV}/relay.out"
+    TN_LOCAL="http://localhost:$(head -1 "${TN_PRIV}/relay.out")"
+    # Its desktop's Command line (top left: tools/krun/check-secure.sh's
+    # screenshot), then a 30 s tone into the VM's own PulseAudio.
+    tn_view 17b-secure-sound '{url: (.openLink | sub("^https://[^/]+"; $base)), expect: "stream", wait: 90, hold: 20,
+        actions: [{wait: 4000}, {dblclick: [57, 45]}, {wait: 6000},
+                  {type: "gst-launch-1.0 -q audiotestsrc num-buffers=1300 ! audioconvert ! pulsesink"}, {press: "Enter"}, {wait: 3000}]}'
+    r="$(jq '.held.socketAudioFrames // 0' <<< "${VIEW}")"
+    note "data socket frames by kind (1 audio, 3/4 video): $(jq -c '[.sockets[]? | select(.url | test("api/websockets")) | .kinds]' <<< "${VIEW}"); ${SHOTS}/17b-secure-sound.png"
+    if [[ "$(jq -r .streaming <<< "${VIEW}")" == true && "${r:-0}" -gt 0 ]]; then
+        ok "sound from an app in the secure stream's VM reached the viewer (${r} audio frames in 20 s, through wadd's proxy and the tailnet)"
+    else
+        fail "no sound from the secure stream's VM: streaming $(jq -r .streaming <<< "${VIEW}"), audio frames ${r:-0} (the tone was typed into its Command line: ${SHOTS}/17b-secure-sound.png)"
+    fi
+    kill "${TN_RELAY}" 2> /dev/null
+    wait "${TN_RELAY}" 2> /dev/null
+    TN_RELAY=""
+    ts_on a serve --tcp="${two}" off > /dev/null 2>&1
+    api_on a DELETE "/v1/wadspaces/${ws}/stream" > /dev/null
+    wait_for 60 eval '[[ -z "$(stream_on a "${ws}")" ]]'
+    api_on a POST /v1/ops "{\"op\": {\"op\": \"ws.trash\", \"ws\": \"${ws}\"}}" > /dev/null 2>&1
+    rm -rf "${TN_PRIV}"
+    TN_PRIV=""
+}
+
+
 # ------------------------------------------------------------ the end
 
 tailnet_finish() {
@@ -1065,6 +1531,8 @@ tailnet_cleanup() {
     trap - EXIT
     [[ -n "${DEVICE_UP_PID:-}" ]] && kill "${DEVICE_UP_PID}" 2> /dev/null
     [[ -n "${WATCHDOG_PID:-}" ]] && kill "${WATCHDOG_PID}" 2> /dev/null
+    [[ -n "${TN_RELAY:-}" ]] && kill "${TN_RELAY}" 2> /dev/null
+    [[ -n "${TN_PRIV:-}" ]] && rm -rf "${TN_PRIV}"
     if [[ -n "${GH_PID:-}" && "${VM_KEEP:-0}" != 1 ]]; then
         kill "${GH_PID}" 2> /dev/null
         wait "${GH_PID}" 2> /dev/null

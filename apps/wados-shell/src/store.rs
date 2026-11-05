@@ -20,10 +20,12 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use indexmap::IndexMap;
+use wad_model::StreamStage;
 use wad_model::edit::Library;
 use wad_model::{Phase, SessionDisplay, Wadspace};
 use wad_proto::{
-    Event, JobInfo, Level, MachineInfo, PeerInfo, ScreenInfo, SignInProvider, Tailnet, WadspaceBuild, WadspaceRun,
+    Event, JobInfo, Level, MachineInfo, PeerInfo, ScreenInfo, SignInProvider, StreamInfo, StreamsAvailability, Tailnet,
+    WadspaceBuild, WadspaceRun,
 };
 
 /// What changed, for watchers.
@@ -56,6 +58,8 @@ pub enum Change {
     SignIn(SignInProvider),
     /// A peer's wadspaces came (or couldn't).
     PeerSpaces(String),
+    /// The streams, or which modes can start.
+    Streams,
 }
 
 /// The key a peer's wadspace is kept under: `<peer id>:<its id there>`.
@@ -66,6 +70,14 @@ pub fn peer_key(peer: &str, ws: &str) -> String {
 /// A peer's wadspace's key, as its machine and its id there (none: one of this machine's ids).
 pub fn split_key(key: &str) -> Option<(&str, &str)> {
     key.split_once(':').filter(|(p, w)| !p.is_empty() && !w.is_empty())
+}
+
+/// A stream's key: its wadspace's (this machine's id, or a peer's key, [`peer_key`]).
+pub fn stream_key(s: &StreamInfo) -> String {
+    match &s.peer {
+        Some(p) => peer_key(p, &s.id),
+        None => s.id.clone(),
+    }
 }
 
 /// A sign-in waiting in the browser (wadd's `signIn`): where, and GitHub's code.
@@ -105,6 +117,11 @@ pub struct Store {
     peer_spaces: RefCell<IndexMap<String, PeerSpaces>>,
     /// Copies this shell started: each job's wadspace's key.
     copies: RefCell<IndexMap<String, String>>,
+    streams: RefCell<Vec<StreamInfo>>,
+    /// Which modes can start (none: wadd hasn't said).
+    stream_modes: RefCell<Option<StreamsAvailability>>,
+    /// How many `streams` events have come (a list asked for is only taken if none came meanwhile).
+    streams_said: Cell<u64>,
     watchers: RefCell<Vec<Watcher>>,
 }
 
@@ -202,8 +219,12 @@ impl Store {
                 self.signins.borrow_mut().shift_remove(&provider);
                 Change::SignIn(provider)
             }
-            // Phase 7's shell keeps and shows them (the tray's Streams, card badges).
-            Event::Streams { .. } => return,
+            Event::Streams { streams, available } => {
+                *self.streams.borrow_mut() = streams;
+                *self.stream_modes.borrow_mut() = Some(available);
+                self.streams_said.set(self.streams_said.get() + 1);
+                Change::Streams
+            }
         };
         self.tell(change);
     }
@@ -248,6 +269,38 @@ impl Store {
 
     pub fn screen(&self) -> Option<ScreenInfo> {
         self.screen.borrow().clone()
+    }
+
+    // ------------------------------------------------------------ phase 7
+
+    /// The streams (not ended), here and from my other machines, newest last.
+    pub fn streams(&self) -> Vec<StreamInfo> {
+        self.streams.borrow().iter().filter(|s| s.stage != StreamStage::Ended).cloned().collect()
+    }
+
+    /// The stream of a wadspace (this machine's by its id, a peer's by its key), if it streams.
+    pub fn stream(&self, key: &str) -> Option<StreamInfo> {
+        self.streams.borrow().iter().find(|s| s.stage != StreamStage::Ended && stream_key(s) == key).cloned()
+    }
+
+    /// Which modes can start here (none: wadd hasn't said).
+    pub fn stream_modes(&self) -> Option<StreamsAvailability> {
+        self.stream_modes.borrow().clone()
+    }
+
+    /// How many `streams` events have come so far.
+    pub fn streams_said(&self) -> u64 {
+        self.streams_said.get()
+    }
+
+    /// The streams as `GET /v1/streams` answered (asked for when `asked` of
+    /// them had come): taken unless an event said them since (it's newer).
+    pub fn set_streams(&self, list: wad_proto::StreamList, asked: u64) -> bool {
+        if self.streams_said.get() != asked {
+            return false;
+        }
+        self.apply(list.into());
+        true
     }
 
     // ------------------------------------------------------------ phase 6
@@ -392,9 +445,13 @@ impl Store {
             build.as_ref().and_then(|b| b.job.as_deref()).and_then(|j| self.job(j)).map(|j| j.job.progress).or_else(
                 || run.as_ref().filter(|r| matches!(r.state.phase, Phase::Starting | Phase::Waiting)).map(|_| 0.0),
             );
+        let streaming = self.stream(id).map(|s| match s.live {
+            true => wad_gtk::Streaming::Live(s.viewers),
+            false => wad_gtk::Streaming::Starting,
+        });
         wad_gtk::TileState {
             running: self.is_running(id),
-            streaming: None,
+            streaming,
             unbuilt: build.as_ref().is_some_and(|b| b.state.needs_build()),
             failed: run.is_some_and(|r| r.state.phase == Phase::Error),
             busy,
@@ -482,6 +539,68 @@ mod tests {
         // Done: nothing shows.
         s.apply(job("j1", "wadspaces", "done", 1.0, None));
         assert_eq!(s.copying("m-desk:wadspaces"), None);
+    }
+
+    fn stream(id: &str, peer: Option<&str>, live: bool, stage: StreamStage) -> StreamInfo {
+        StreamInfo {
+            id: id.into(),
+            mode: wad_model::StreamMode::Private,
+            transport: wad_model::Transport::Websocket,
+            stage,
+            live,
+            viewers: 3,
+            started: 1,
+            last_active: 1,
+            link: "https://x.invalid/ws-1/".into(),
+            turn_down: false,
+            warnings: vec![],
+            job: None,
+            peer: peer.map(String::from),
+        }
+    }
+
+    #[test]
+    fn a_peers_stream_is_never_taken_for_this_machines_of_the_same_id() {
+        let s = two_starters();
+        s.apply(Event::Streams {
+            streams: vec![
+                stream("wadspaces", Some("m-desk"), false, StreamStage::Sidecar),
+                stream("pixel-art", None, true, StreamStage::Ended),
+            ],
+            available: StreamsAvailability::of(true, false, false),
+        });
+        assert!(s.stream("wadspaces").is_none(), "Desk's isn't this machine's");
+        assert_eq!(s.stream("m-desk:wadspaces").map(|x| x.live), Some(false));
+        assert_eq!(s.tile_state("wadspaces").streaming, None);
+        // One that ended isn't streaming.
+        assert!(s.stream("pixel-art").is_none());
+        assert_eq!(s.streams().len(), 1);
+        assert!(!s.stream_modes().unwrap().public.available);
+        s.apply(Event::Streams {
+            streams: vec![stream("wadspaces", None, true, StreamStage::Live)],
+            available: StreamsAvailability::of(true, true, false),
+        });
+        assert_eq!(s.tile_state("wadspaces").streaming, Some(wad_gtk::Streaming::Live(3)));
+        assert_eq!(stream_key(&stream("notes", Some("m-desk"), true, StreamStage::Live)), "m-desk:notes");
+    }
+
+    #[test]
+    fn a_list_asked_for_is_taken_unless_an_event_said_it_since() {
+        let s = Store::default();
+        let list = |public: bool| wad_proto::StreamList {
+            streams: vec![],
+            available: StreamsAvailability::of(true, public, false),
+        };
+        // Connected (after a restart): nothing said yet, the list answers it.
+        assert!(s.stream_modes().is_none());
+        let asked = s.streams_said();
+        assert!(s.set_streams(list(true), asked));
+        assert!(s.stream_modes().unwrap().public.available);
+        // An event came while another list was on its way: the event's newer.
+        let asked = s.streams_said();
+        s.apply(Event::Streams { streams: vec![], available: StreamsAvailability::of(true, false, false) });
+        assert!(!s.set_streams(list(true), asked));
+        assert!(!s.stream_modes().unwrap().public.available);
     }
 
     #[test]

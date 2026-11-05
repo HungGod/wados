@@ -161,6 +161,13 @@ RUN kver="$(ls /usr/lib/modules)" \
     && echo "initramfs: $(du -h "/usr/lib/modules/${kver}/initramfs.img" | cut -f1), with the Surface's drivers" \
     && rm -rf /tmp/initrd.txt /var/roothome
 
+# Secure streams: a wadspace in a libkrun micro-VM of its own (podman
+# --runtime=krun: crun-krun, with libkrun, libkrunfw's kernel and crun to
+# match). container-selinux runs its VMM as container_kvm_t; it needs
+# /dev/kvm, which wadd checks before it offers Secure (tools/krun/NOTES.md).
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs crun-krun && dnf clean all \
+    && rpm -q crun-krun libkrun libkrunfw && krun --version | head -1
+
 # WadOS's own: its config and units (host/etc, host/usr), the cursors,
 # the binaries (wadd's clipboard bridge where it looks for it:
 # apps/wadd/src/clip.rs), WadBrowser's launcher and icon, and WadSpaces'
@@ -183,6 +190,13 @@ RUN mkdir -p /usr/share/fonts/wados \
     && fc-cache -f /usr/share/fonts/wados \
     && fc-list : family | grep -q '^Inter' \
     && fc-list : family | grep -q 'Space Grotesk'
+
+# A secure stream's side inside its VM (host/usr/lib/wados/secure, which
+# wad-gen's secure_units mounts read-only): s6's entrypoint and its service.
+RUN d=/usr/lib/wados/secure \
+    && test -x "${d}/secure-init" && test -x "${d}/svc-secure-stream/run" && test -f "${d}/empty" \
+    && grep -qx longrun "${d}/svc-secure-stream/type" \
+    && sh -n "${d}/secure-init" && bash -n "${d}/svc-secure-stream/run"
 
 # SELinux stays on: WadOS's module (usr/share/selinux/packages/wados) lets
 # wadspaces on the screen use the session's PulseAudio socket, and labels

@@ -1,0 +1,35 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# Before anything serves: refuse to stream without Selkies' secure mode (a
+# master token and wadd's token table) and the stream's own path, so the
+# sidecar never serves an open desktop, or one at the root of wadd's proxy.
+# S6_BEHAVIOUR_IF_STAGE2_FAILS=2 halts the container when this fails.
+#
+# Then the display volume shared with the wadspace, /run/wadspaces-display:
+# Selkies' compositor puts its socket there (wayland-*, the first it finds
+# free: XDG_RUNTIME_DIR, below), and PulseAudio its (pulse/native). A
+# socket left over from the last run would look live to the wadspace, so
+# they go first.
+missing=()
+for v in SELKIES_MASTER_TOKEN SELKIES_TOKENS_FILE SELKIES_SUBFOLDER; do
+    [[ -n "${!v:-}" ]] || missing+=("${v}")
+done
+if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "[stream-display] no ${missing[*]}: not streaming without Selkies' tokens, under the stream's path" >&2
+    exit 1
+fi
+case "${SELKIES_SUBFOLDER}" in
+    /ws-?*) ;;
+    *) echo "[stream-display] SELKIES_SUBFOLDER is ${SELKIES_SUBFOLDER}, not /ws-<guid>" >&2; exit 1 ;;
+esac
+
+DIR=/run/wadspaces-display
+mkdir -p "${DIR}"
+rm -f "${DIR}"/wayland-* "${DIR}/pulse/native" "${DIR}/pulse/pid"
+mkdir -p "${DIR}/pulse"
+chown abc:abc "${DIR}" "${DIR}/pulse"
+chmod 700 "${DIR}" "${DIR}/pulse"
+printf '%s' "${DIR}" > /run/s6/container_environment/XDG_RUNTIME_DIR
+printf '%s' "unix:${DIR}/pulse/native" > /run/s6/container_environment/PULSE_SERVER
+echo "[stream-display] the display and its sound go in ${DIR}; served under ${SELKIES_SUBFOLDER}/"

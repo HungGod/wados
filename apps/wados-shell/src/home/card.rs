@@ -1,7 +1,8 @@
 //! One of the carousel's square cards (Home.svelte's `.card`): the
 //! wadspace's picture, cut out as its icon says (glass when it has none),
-//! shaded toward the bottom, its badges at the top left (Running, Not built
-//! yet, Rebuilds, Didn't open; another machine's, its machine), a ring
+//! shaded toward the bottom, its badges at the top left (`LIVE · n` or
+//! Starting stream, else Running; Not built yet, Rebuilds, Didn't open;
+//! another machine's, its machine), a ring
 //! while it builds, starts or copies here, and at the bottom its apps and
 //! its name. The launcher scales it (62% beside the one
 //! in focus) and rings the one in focus.
@@ -55,11 +56,30 @@ pub struct CardData {
     pub busy: Option<f64>,
     /// Another machine's: its glyph and name.
     pub machine: Option<(&'static str, String)>,
+    /// Streaming: its badge.
+    pub stream: Option<StreamBadge>,
+}
+
+/// A streaming card's badge: `LIVE · n` or `Starting stream`, the accent for a private one, a shield for a secure one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamBadge {
+    pub text: String,
+    pub private: bool,
+    pub secure: bool,
+}
+
+impl StreamBadge {
+    pub fn of(s: &wad_proto::StreamInfo) -> Self {
+        Self { text: crate::streams::card_badge(s), private: !s.mode.is_public(), secure: s.mode.is_secure() }
+    }
 }
 
 pub struct Card {
     pub root: gtk::Overlay,
     picture: wad_gtk::Picture,
+    live: gtk::Box,
+    live_shield: wad_gtk::Icon,
+    live_label: gtk::Label,
     running: gtk::Label,
     unbuilt: gtk::Box,
     unbuilt_label: gtk::Label,
@@ -96,6 +116,12 @@ impl Card {
             .margin_start(14)
             .can_target(false)
             .build();
+        let live = gtk::Box::builder().spacing(4).css_classes(["home-badge", "live"]).visible(false).build();
+        let live_shield = wad_gtk::Icon::new("shield-check", 11);
+        live_shield.set_valign(gtk::Align::Center);
+        live.append(&live_shield);
+        let live_label = gtk::Label::new(None);
+        live.append(&live_label);
         let running = gtk::Label::builder().label("Running").css_classes(["home-badge", "run"]).visible(false).build();
         let unbuilt = gtk::Box::builder().spacing(4).css_classes(["home-badge", "unbuilt"]).visible(false).build();
         unbuilt.append(&wad_gtk::Icon::new("hammer", 11));
@@ -109,6 +135,7 @@ impl Card {
         machine.append(&machine_icon);
         let machine_name = gtk::Label::new(None);
         machine.append(&machine_name);
+        badges.append(&live);
         badges.append(&running);
         badges.append(&unbuilt);
         badges.append(&failed);
@@ -153,6 +180,9 @@ impl Card {
         Rc::new(Self {
             root,
             picture,
+            live,
+            live_shield,
+            live_label,
             running,
             unbuilt,
             unbuilt_label,
@@ -211,7 +241,20 @@ impl Card {
             self.apps.set_visible(!d.apps.is_empty());
         }
         self.name.set_label(&d.name);
-        self.running.set_visible(d.running);
+        match &d.stream {
+            Some(b) => {
+                self.live_label.set_label(&b.text);
+                self.live_shield.set_visible(b.secure);
+                if b.private {
+                    self.live.add_css_class("private");
+                } else {
+                    self.live.remove_css_class("private");
+                }
+                self.live.set_visible(true);
+            }
+            None => self.live.set_visible(false),
+        }
+        self.running.set_visible(d.running && d.stream.is_none());
         let unbuilt = match d.built {
             Some(Built::Never) => Some("Not built yet"),
             Some(Built::Update) => Some("Rebuilds"),

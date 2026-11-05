@@ -66,6 +66,19 @@ async fn machine_with(
     port: u16,
     refuse_drive: bool,
 ) -> Machine {
+    machine_on(net, node, id, ip, port, refuse_drive, Arc::new(Fake::new())).await
+}
+
+/// On this podman (images there already).
+async fn machine_on(
+    net: &FakeTailnet,
+    node: &str,
+    id: &str,
+    ip: &'static str,
+    port: u16,
+    refuse_drive: bool,
+    fake: Arc<Fake>,
+) -> Machine {
     let dir = tempfile::tempdir().unwrap();
     let ts = dir.path().join("tailscaled.sock");
     let tailscaled = net.serve(node, &ts).unwrap();
@@ -88,8 +101,11 @@ async fn machine_with(
     t.port = port;
     t.bind_device = String::new();
     t.poll_s = 1;
+    // Streams: no public listener (the machines share an address space), no VM runtime.
+    config.streaming.listen = vec![];
+    config.streaming.secure_runtime = String::new();
     let parts = wadd::Parts {
-        backend: Arc::new(Fake::new()),
+        backend: fake,
         hands: Arc::new(FakeHands::default()),
         poll: Duration::from_millis(20),
         sample: None,
@@ -461,19 +477,73 @@ async fn streams_on_the_remote_api_are_for_my_machines_and_trusted_devices() {
         let (status, e) = phone.send(&desk, port, method.clone(), path, &body).await;
         assert_eq!((status, e["code"].as_str()), (403, Some("forbidden")), "{method}");
     }
-    // My machine gets past the gate: streams aren't made yet on the machine.
+    // My machine gets past the gate, to the streams: the starter isn't built
+    // there, and isn't streaming.
     let laptop = Device::at("127.0.0.2");
-    for method in [Method::POST, Method::DELETE] {
-        let (status, e) = laptop.send(&desk, port, method.clone(), path, &body).await;
-        assert_eq!((status, e["code"].as_str()), (501, Some("not_implemented")), "{method}: {e}");
-    }
+    let (status, e) = laptop.send(&desk, port, Method::POST, path, &body).await;
+    assert_eq!((status, e["code"].as_str()), (409, Some("conflict")), "{e}");
+    assert!(e["message"].as_str().unwrap().contains("build it first"), "{e}");
+    let (status, e) = laptop.send(&desk, port, Method::DELETE, path, &body).await;
+    assert_eq!((status, e["code"].as_str()), (404, Some("not_found")), "{e}");
+    assert_eq!(laptop.get(&desk, port, path).await.0, 404);
     // So does a trusted device.
     until("the phone's ask", async || desk.w.tailnet().await.unwrap().asks.into_iter().find(|a| a.id == "nPhone"))
         .await;
     desk.w.trust_device("nPhone").await.unwrap();
     let (status, e) = phone.send(&desk, port, Method::POST, path, &body).await;
-    assert_eq!(status, 501, "{e}");
+    assert_eq!(status, 409, "{e}");
     // No such wadspace there.
     let (status, _) = laptop.send(&desk, port, Method::POST, "/v1/remote/wadspaces/nope/stream", &body).await;
     assert_eq!(status, 404);
+}
+
+#[tokio::test]
+async fn a_wadspace_streams_from_another_machine_of_mine() {
+    use wad_model::{StreamMode, StreamStage};
+    use wad_proto::StreamRequest;
+    let net = tailnet();
+    let port = free_port();
+    // The desk has the base and the stream sidecar's image.
+    let fake = Arc::new(Fake::new());
+    fake.add_image(wad_gen::BASE_IMAGE, &[(wad_gen::labels::ABI, "fedora44.1"), (wad_gen::labels::EXTRAS, "1")]);
+    fake.add_image("localhost/wados-stream:44", &[]);
+    let desk = machine_on(&net, "nDesk", "m-desk", "127.0.0.1", port, false, fake).await;
+    let laptop = machine(&net, "nLaptop", "m-laptop", "127.0.0.2", port).await;
+    let op = serde_json::from_value(serde_json::json!({"op": "space.create", "name": "Studio"})).unwrap();
+    let id = desk.w.op(op).await.unwrap().created.unwrap();
+    sees(&laptop, "m-desk").await;
+    until("the desk's Studio built, and on its tailnet", async || {
+        let built = desk.w.builds().await.unwrap().into_iter().any(|b| b.id == id && b.state.built == Built::Built);
+        (built && desk.w.streams().await.unwrap().available.private.available).then_some(())
+    })
+    .await;
+
+    // From the laptop: the desk streams it privately, and the laptop has its share.
+    let req = StreamRequest { mode: StreamMode::Private, takeover: false };
+    let share = laptop.w.start_peer_stream("m-desk", &id, &req).await.unwrap();
+    assert_eq!((share.mode, share.user.as_deref(), share.password.as_deref()), (StreamMode::Private, None, None));
+    assert!(share.link.starts_with("https://desk.ts.test:") && share.link.contains("/ws-"), "{}", share.link);
+    assert!(share.open_link.starts_with(&format!("{}#token=", share.link)), "{share:?}");
+    let here = laptop.w.streams().await.unwrap().streams;
+    let s = here.iter().find(|s| s.id == id).expect("it's in the laptop's list");
+    assert_eq!((s.peer.as_deref(), s.live, s.link.as_str()), (Some("m-desk"), true, share.link.as_str()));
+    let there = desk.w.streams().await.unwrap().streams;
+    let s = there.iter().find(|s| s.id == id).expect("and the desk's");
+    assert_eq!((s.peer.as_deref(), s.live, s.stage), (None, true, StreamStage::Live));
+    assert!(desk.cli.runs().iter().any(|r| r.contains("serve --bg --yes --https=")), "{:?}", desk.cli.runs());
+    assert!(laptop.cli.runs().iter().all(|r| !r.contains("serve")), "the laptop serves nothing");
+    // Asked again: the same stream.
+    assert_eq!(laptop.w.start_peer_stream("m-desk", &id, &req).await.unwrap().open_link, share.open_link);
+
+    // The laptop's own wadspace of the same id is another: no stream of it to stop here.
+    assert_eq!(laptop.w.stop_stream(&id).await.unwrap_err().status, 404);
+    // Stopped from the laptop: ended there, and gone here.
+    let ended = laptop.w.stop_peer_stream("m-desk", &id).await.unwrap();
+    assert_eq!((ended.stage, ended.live, ended.peer.as_deref()), (StreamStage::Ended, false, Some("m-desk")));
+    assert!(!laptop.w.streams().await.unwrap().streams.iter().any(|s| s.id == id));
+    let s = desk.w.streams().await.unwrap().streams.into_iter().find(|s| s.id == id);
+    assert!(s.as_ref().is_none_or(|s| s.stage == StreamStage::Ended), "{s:?}");
+    assert!(desk.cli.runs().iter().any(|r| r.ends_with(" off")), "{:?}", desk.cli.runs());
+    assert_eq!(laptop.w.stop_peer_stream("m-desk", &id).await.unwrap_err().status, 404);
+    assert_eq!(laptop.w.start_peer_stream("m-nope", &id, &req).await.unwrap_err().status, 404);
 }

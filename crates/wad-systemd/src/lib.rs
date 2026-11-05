@@ -25,6 +25,7 @@ trait Manager {
     fn reload(&self) -> zbus::Result<()>;
     fn subscribe(&self) -> zbus::Result<()>;
     fn load_unit(&self, name: &str) -> zbus::Result<OwnedObjectPath>;
+    fn reset_failed_unit(&self, name: &str) -> zbus::Result<()>;
     fn start_transient_unit(
         &self,
         name: &str,
@@ -157,6 +158,12 @@ impl Systemd {
     /// of that name is still loaded (running, or stopping).
     pub async fn start_transient(&self, unit: &str, spec: &TransientSpec, timeout: Duration) -> Result<(), Error> {
         self.job(Op::Transient(spec), unit, timeout).await
+    }
+
+    /// Forgets a unit's failure (`systemctl reset-failed`), so one whose
+    /// file is gone unloads.
+    pub async fn reset_failed(&self, unit: &str) -> Result<(), Error> {
+        Ok(self.manager().await?.reset_failed_unit(unit).await?)
     }
 
     /// "active", "inactive", "failed", "activating", ...

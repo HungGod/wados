@@ -1702,6 +1702,27 @@ impl Desktop {
             })
             .entry(),
         );
+        // Stream: the stream sheet (Private | Public), or its link while it streams.
+        let streaming = self.shell.store.stream(id);
+        out.push(
+            MenuItem::new("stream", "Stream", "radio", {
+                let (i, on) = (i.clone(), streaming.is_some());
+                move || {
+                    if on {
+                        crate::streams::share(&i);
+                    } else {
+                        crate::streams::sheet(&i, wad_model::StreamMode::Private);
+                    }
+                }
+            })
+            .hint(match &streaming {
+                Some(s) if s.live => "Streaming now: show its link",
+                Some(_) => "Starting…",
+                None => "Privately on your tailnet, or publicly",
+            })
+            .checked(streaming.is_some())
+            .entry(),
+        );
         out.push(
             MenuItem::new("edit", "Edit in the Builder", "blocks", {
                 let i = i.clone();

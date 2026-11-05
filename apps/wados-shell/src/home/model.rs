@@ -6,6 +6,8 @@
 
 use wad_model::{Built, Category, Tag};
 
+use crate::streams::Button as StreamButton;
+
 /// Recent's length: the five launched most lately.
 pub const RECENT: usize = 5;
 
@@ -160,27 +162,22 @@ pub struct Action {
     pub icon: &'static str,
     pub primary: bool,
     pub danger: bool,
-    /// What isn't here yet (Focus, streams) shows, but does nothing.
+    /// What isn't here yet (Focus) or can't be now (a stream that can't
+    /// start: its tooltip says why) shows, but does nothing.
     pub enabled: bool,
 }
 
 /// When Focus comes, for its tooltip.
 pub const FOCUS_LATER: &str = "Focus comes in a later phase";
-/// When streams come, for their tooltips.
-pub const STREAMS_LATER: &str = "streams come in phase 7";
 
 /// Another machine's card's buttons (`peer` its name): Launch (it streams
-/// from there: phase 7, so it shows, dimmed), Focus (which runs here: it
+/// from there, privately, into a window here), Focus (which runs here: it
 /// asks to copy it first) and Copy here.
 pub fn peer_actions(name: &str, peer: &str) -> Vec<Action> {
     let act =
         |id, label, hint: String, icon| Action { id, label, hint, icon, primary: false, danger: false, enabled: true };
     vec![
-        Action {
-            primary: true,
-            enabled: false,
-            ..act(ActId::Launch, "Launch", format!("Stream {name} here from {peer} ({STREAMS_LATER})"), "play")
-        },
+        Action { primary: true, ..act(ActId::Launch, "Launch", format!("Stream {name} here from {peer}"), "play") },
         act(ActId::Focus, "Focus", format!("Focus runs here: copy {name} to this machine first"), "timer"),
         act(ActId::Copy, "Copy here", "Copy it to this machine".into(), "download"),
     ]
@@ -210,9 +207,16 @@ pub fn peer_wait_text(peer: &str, error: Option<&str>) -> (String, String) {
     }
 }
 
-/// The card's buttons: Launch (or Show), Focus, the two streams, an update
-/// check (or a build) and the Trash. `built`: its image here (none: not said yet).
-pub fn actions(name: &str, running: bool, built: Option<Built>) -> Vec<Action> {
+/// The card's buttons: Launch (or Show), Focus, the two streams (`public`,
+/// `private`: streams.rs's), an update check (or a build) and the Trash.
+/// `built`: its image here (none: not said yet).
+pub fn actions(
+    name: &str,
+    running: bool,
+    built: Option<Built>,
+    public: StreamButton,
+    private: StreamButton,
+) -> Vec<Action> {
     let act =
         |id, label, hint: String, icon| Action { id, label, hint, icon, primary: false, danger: false, enabled: true };
     let update = match built {
@@ -239,19 +243,8 @@ pub fn actions(name: &str, running: bool, built: Option<Built>) -> Vec<Action> {
                 "timer",
             )
         },
-        Action {
-            enabled: false,
-            ..act(ActId::Stream, "Stream", format!("Stream it publicly ({STREAMS_LATER})"), "radio")
-        },
-        Action {
-            enabled: false,
-            ..act(
-                ActId::Private,
-                "Private",
-                format!("Stream it privately, on your tailnet ({STREAMS_LATER})"),
-                "tailscale",
-            )
-        },
+        Action { enabled: public.enabled, ..act(ActId::Stream, "Stream", public.hint, "radio") },
+        Action { enabled: private.enabled, ..act(ActId::Private, "Private", private.hint, "tailscale") },
         update,
         Action { danger: true, ..act(ActId::Trash, "Trash", "Move it to the Trash".into(), "trash") },
     ]
@@ -386,12 +379,12 @@ mod tests {
     }
 
     #[test]
-    fn another_machines_card_copies_here_and_streams_later() {
+    fn another_machines_card_streams_from_there_or_copies_here() {
         let a = peer_actions("Pixel Art", "Desk");
         let names = a.iter().map(|x| x.label).collect::<Vec<_>>();
         assert_eq!(names, ["Launch", "Focus", "Copy here"]);
-        assert_eq!(a[0].hint, "Stream Pixel Art here from Desk (streams come in phase 7)");
-        assert!(a[0].primary && !a[0].enabled);
+        assert_eq!(a[0].hint, "Stream Pixel Art here from Desk");
+        assert!(a[0].primary && a[0].enabled);
         assert_eq!(a[1].hint, "Focus runs here: copy Pixel Art to this machine first");
         assert!(a[1].enabled && a[2].enabled);
         assert_eq!((a[2].id, a[2].hint.as_str(), a[2].icon), (ActId::Copy, "Copy it to this machine", "download"));
@@ -418,21 +411,36 @@ mod tests {
         );
     }
 
+    fn can(mode: wad_model::StreamMode) -> StreamButton {
+        let all = wad_proto::StreamsAvailability::of(true, true, false);
+        crate::streams::card_button(mode, None, Some(&all))
+    }
+
     #[test]
     fn the_buttons_say_launch_or_show_and_build_or_update() {
+        use wad_model::StreamMode::{Private, Public};
         let names = |a: &[Action]| a.iter().map(|x| x.label).collect::<Vec<_>>();
-        let a = actions("WadOS", false, Some(Built::Built));
+        let a = actions("WadOS", false, Some(Built::Built), can(Public), can(Private));
         assert_eq!(names(&a), ["Launch", "Focus", "Stream", "Private", "Update", "Trash"]);
         assert_eq!(a[0].hint, "Open WadOS");
         assert!(a[0].primary && a[5].danger);
-        let a = actions("WadOS", true, Some(Built::Never));
+        let a = actions("WadOS", true, Some(Built::Never), can(Public), can(Private));
         assert_eq!(names(&a), ["Show", "Focus", "Stream", "Private", "Build", "Trash"]);
         assert_eq!((a[0].hint.as_str(), a[4].hint.as_str(), a[4].icon), ("Show WadOS", "Build it", "hammer"));
-        assert_eq!(actions("X", false, Some(Built::Update))[4].hint, "Rebuild it (it’s out of date)");
-        // Focus and the streams aren't here yet: shown, not working, and their tooltips say when.
+        assert_eq!(
+            actions("X", false, Some(Built::Update), can(Public), can(Private))[4].hint,
+            "Rebuild it (it’s out of date)"
+        );
+        // Focus isn't here yet: shown, not working, and its tooltip says when.
         let off: Vec<ActId> = a.iter().filter(|x| !x.enabled).map(|x| x.id).collect();
-        assert_eq!(off, [ActId::Focus, ActId::Stream, ActId::Private]);
-        assert!(a[1].hint.contains(FOCUS_LATER) && a[2].hint.contains("phase 7") && a[3].hint.contains("phase 7"));
-        assert_eq!(a[3].icon, "tailscale");
+        assert_eq!(off, [ActId::Focus]);
+        assert!(a[1].hint.contains(FOCUS_LATER));
+        // The streams: publicly (radio) and privately (Tailscale's mark).
+        assert_eq!((a[2].hint.as_str(), a[2].icon), ("Stream it publicly", "radio"));
+        assert_eq!((a[3].hint.as_str(), a[3].icon), ("Stream it privately, on your tailnet", "tailscale"));
+        // One that can't start here is off, its tooltip saying why.
+        let none = wad_proto::StreamsAvailability::of(true, false, false);
+        let a = actions("WadOS", false, None, crate::streams::card_button(Public, None, Some(&none)), can(Private));
+        assert!(!a[2].enabled && a[2].hint.contains("Cloudflare tunnel"), "{}", a[2].hint);
     }
 }

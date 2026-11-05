@@ -2,8 +2,13 @@
 //! registry to pull from, systemd's units. A build makes an image from its
 //! Dockerfile's last stage (the labels of the image it's FROM, its LABEL
 //! lines, the labels it's given); starting `wad-<id>.service` runs
-//! `wad-<id>` from its unit's `Image=`. Every call that changes something
-//! is in `calls`, in order.
+//! `wad-<id>` from its unit's `Image=`, and first the units it's bound to
+//! (`BindsTo=`: a streamed wadspace's sidecar), which stop with it (they're
+//! `StopWhenUnneeded`) as it stops with them. A running container's
+//! `PublishPort=127.0.0.1:<port>:` answers `fetch` at `http://127.0.0.1:<port>/`
+//! (a sidecar's health). A container whose unit runs it in a VM
+//! (`GlobalArgs=--runtime=`) can't be exec'd into, as under crun-krun. Every
+//! call that changes something is in `calls`, in order.
 
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -13,7 +18,7 @@ use async_trait::async_trait;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
-use crate::backend::{Backend, ImageInfo, MISSING, OnBytes, OnLine, RUNNING, Res};
+use crate::backend::{Backend, ExecOut, ImageInfo, MISSING, OnBytes, OnLine, RUNNING, Res};
 
 #[derive(Debug, Clone, Default)]
 pub struct FakeContainer {
@@ -22,6 +27,10 @@ pub struct FakeContainer {
     /// Polls of `desktop_up` left before its desktop is up.
     pub desktop_in: u32,
     pub pid: u32,
+    /// The volumes it mounts (its unit's `Volume=<x>.volume:`): in use while it's there.
+    pub volumes: Vec<String>,
+    /// Stopping: polls of its status left before podman has removed it.
+    pub gone_in: u32,
 }
 
 /// One build, as it was asked for.
@@ -57,6 +66,20 @@ pub struct State {
     pub down: bool,
     /// Polls before a started wadspace's desktop is up.
     pub desktop_after: u32,
+    /// Running sidecars don't answer on their ports.
+    pub sidecars_silent: bool,
+    /// What a running sidecar's `/api/status` answers (else `ok`).
+    pub sidecar_status: Option<String>,
+    /// Podman's volumes (a quadlet `.volume`'s made as a container using it starts).
+    pub volumes: std::collections::BTreeSet<String>,
+    /// The `<x>-volume.service` oneshots active (they stay active, RemainAfterExit).
+    pub volume_units: std::collections::BTreeSet<String>,
+    /// A stopped container lingers (stopping, its volumes in use) this many
+    /// polls of its status before podman has removed it.
+    pub slow_stops: u32,
+    /// What an exec answers (code, stdout), by the start of its command
+    /// (`wadspaces-session switch`); else 0 and `{"still_open": []}`.
+    pub exec_answers: Vec<(String, i64, String)>,
     pub free_gb: Option<f64>,
 }
 
@@ -67,6 +90,9 @@ pub struct Fake {
     pub hold: tokio::sync::Semaphore,
     holding: std::sync::atomic::AtomicBool,
 }
+
+/// A container stopped that podman hasn't removed yet ([`State::slow_stops`]).
+pub const STOPPING: &str = "stopping";
 
 fn short(id: &str) -> &str {
     id.trim_start_matches("sha256:")
@@ -134,7 +160,7 @@ impl Fake {
     pub fn run_container(&self, name: &str, image: &str) {
         self.state.lock().unwrap().containers.insert(
             name.to_string(),
-            FakeContainer { image: image.into(), status: RUNNING.into(), desktop_in: 0, pid: 9000 },
+            FakeContainer { image: image.into(), status: RUNNING.into(), pid: 9000, ..Default::default() },
         );
     }
 
@@ -407,6 +433,26 @@ impl Backend for Fake {
     }
 
     async fn fetch(&self, url: &str) -> Res<Vec<u8>> {
+        // A container's published port (not a call: it's polled).
+        if let Some(rest) = url.strip_prefix("http://127.0.0.1:") {
+            let port = rest.split('/').next().unwrap_or_default();
+            let st = self.state.lock().unwrap();
+            let publish = format!("PublishPort=127.0.0.1:{port}:");
+            let up = !st.sidecars_silent
+                && st.containers.iter().any(|(name, c)| {
+                    c.status == RUNNING
+                        && st
+                            .units
+                            .get(&format!("{name}.container"))
+                            .is_some_and(|u| u.lines().any(|l| l.starts_with(&publish)))
+                });
+            // Selkies' `/api/status` says what it's set to answer.
+            let answer = match (url.ends_with("/api/status"), &st.sidecar_status) {
+                (true, Some(status)) => status.clone().into_bytes(),
+                _ => b"ok".to_vec(),
+            };
+            return if up { Ok(answer) } else { Err(format!("{url}: connection refused")) };
+        }
         self.call(format!("fetch {url}"));
         let st = self.state.lock().unwrap();
         if st.offline {
@@ -416,9 +462,18 @@ impl Backend for Fake {
     }
 
     async fn container_status(&self, name: &str) -> Res<String> {
-        let st = self.state.lock().unwrap();
+        let mut st = self.state.lock().unwrap();
         if st.down {
             return Err("podman isn't answering".into());
+        }
+        // A stopping one goes after a few looks.
+        if let Some(c) = st.containers.get_mut(name)
+            && c.status == STOPPING
+        {
+            c.gone_in = c.gone_in.saturating_sub(1);
+            if c.gone_in == 0 {
+                st.containers.remove(name);
+            }
         }
         Ok(st.containers.get(name).map_or(MISSING.to_string(), |c| c.status.clone()))
     }
@@ -433,6 +488,7 @@ impl Backend for Fake {
 
     async fn desktop_up(&self, name: &str) -> Res<bool> {
         let mut st = self.state.lock().unwrap();
+        in_vm(&st, name)?;
         let c = st.containers.get_mut(name).ok_or_else(|| format!("no container {name}"))?;
         if c.desktop_in == 0 {
             return Ok(true);
@@ -462,26 +518,138 @@ impl Backend for Fake {
         Ok(changed)
     }
 
+    async fn remove_volume(&self, name: &str) -> Res<bool> {
+        self.call(format!("volume rm {name}"));
+        let mut st = self.state.lock().unwrap();
+        if let Some((c, _)) = st.containers.iter().find(|(_, c)| c.volumes.iter().any(|v| v == name)) {
+            return Err(format!("volume {name} is being used by the following container(s): {c}"));
+        }
+        Ok(st.volumes.remove(name))
+    }
+
+    async fn volume_names(&self) -> Res<Vec<String>> {
+        Ok(self.state.lock().unwrap().volumes.iter().cloned().collect())
+    }
+
+    async fn reset_failed(&self, unit: &str) -> Res<()> {
+        self.call(format!("reset-failed {unit}"));
+        Ok(())
+    }
+
+    async fn exec(&self, name: &str, user: &str, cmd: &[&str]) -> Res<ExecOut> {
+        let line = cmd.join(" ");
+        self.call(format!("exec {name} {user} {line}"));
+        let st = self.state.lock().unwrap();
+        if st.containers.get(name).is_none_or(|c| c.status != RUNNING) {
+            return Err(format!("{name} isn't running"));
+        }
+        in_vm(&st, name)?;
+        let (code, stdout) = st
+            .exec_answers
+            .iter()
+            .find(|(start, _, _)| line.starts_with(start.as_str()))
+            .map(|(_, c, o)| (*c, o.clone()))
+            .unwrap_or((0, "{\"still_open\": []}".into()));
+        Ok(ExecOut { code, stdout: stdout.into_bytes(), stderr: String::new() })
+    }
+
     async fn start(&self, unit: &str) -> Res<()> {
         self.call(format!("start {unit}"));
         let mut st = self.state.lock().unwrap();
         let name = unit.strip_suffix(".service").ok_or("not a service")?;
-        let text = st.units.get(&format!("{name}.container")).ok_or_else(|| format!("{unit}: not found"))?;
-        let image = text.lines().find_map(|l| l.strip_prefix("Image=")).unwrap_or_default().to_string();
-        if find(&st, &image).is_none() {
-            return Err(format!("{unit}: failed (its image {image} isn't here)"));
-        }
-        let desktop_in = st.desktop_after;
-        let pid = 4000 + st.containers.len() as u32;
-        st.containers.insert(name.to_string(), FakeContainer { image, status: RUNNING.into(), desktop_in, pid });
-        Ok(())
+        start_unit(&mut st, name, 0)
     }
 
     async fn stop(&self, unit: &str) -> Res<()> {
         self.call(format!("stop {unit}"));
         let name = unit.strip_suffix(".service").unwrap_or(unit);
-        self.state.lock().unwrap().containers.remove(name);
+        let mut st = self.state.lock().unwrap();
+        if let Some(v) = name.strip_suffix("-volume")
+            && st.volume_units.remove(v)
+        {
+            return Ok(());
+        }
+        stop_unit(&mut st, name);
         Ok(())
+    }
+}
+
+/// A container running in a VM (its unit's `GlobalArgs=--runtime=`: a
+/// secure stream's, libkrun) has no `podman exec`, as crun-krun hasn't.
+fn in_vm(st: &State, name: &str) -> Res<()> {
+    let vm = st
+        .units
+        .get(&format!("{name}.container"))
+        .is_some_and(|u| u.lines().any(|l| l.starts_with("GlobalArgs=--runtime=")));
+    if vm { Err(format!("{name}: OCI runtime error: the handler does not support exec")) } else { Ok(()) }
+}
+
+/// The units `name`'s is bound to (`BindsTo=<it>.service`).
+fn bound_to(st: &State, name: &str) -> Vec<String> {
+    let Some(text) = st.units.get(&format!("{name}.container")) else { return vec![] };
+    text.lines().filter_map(|l| l.strip_prefix("BindsTo=")?.strip_suffix(".service")).map(String::from).collect()
+}
+
+/// Starts `name`'s container, after the units it's bound to (as systemd does).
+fn start_unit(st: &mut State, name: &str, depth: u32) -> Res<()> {
+    for b in bound_to(st, name) {
+        if depth < 4 && st.containers.get(&b).is_none_or(|c| c.status != RUNNING) {
+            start_unit(st, &b, depth + 1)?;
+        }
+    }
+    let unit = format!("{name}.service");
+    let text = st.units.get(&format!("{name}.container")).ok_or_else(|| format!("{unit}: not found"))?;
+    let image = text.lines().find_map(|l| l.strip_prefix("Image=")).unwrap_or_default().to_string();
+    if find(st, &image).is_none() {
+        return Err(format!("{unit}: failed (its image {image} isn't here)"));
+    }
+    // Its quadlet volumes: each made (its oneshot active) as it starts.
+    let mut volumes = vec![];
+    for unit in text.lines().filter_map(|l| l.strip_prefix("Volume=")?.split(':').next()?.strip_suffix(".volume")) {
+        let named = st
+            .units
+            .get(&format!("{unit}.volume"))
+            .and_then(|v| v.lines().find_map(|l| l.strip_prefix("VolumeName=")).map(String::from));
+        volumes.push(named.unwrap_or_else(|| format!("systemd-{unit}")));
+        st.volume_units.insert(unit.to_string());
+    }
+    st.volumes.extend(volumes.iter().cloned());
+    let desktop_in = st.desktop_after;
+    let pid = 4000 + st.containers.len() as u32;
+    let c = FakeContainer { image, status: RUNNING.into(), desktop_in, pid, volumes, gone_in: 0 };
+    st.containers.insert(name.to_string(), c);
+    Ok(())
+}
+
+/// Stops `name`'s container, what's bound to it, and what it's bound to that
+/// nothing running needs now (`StopWhenUnneeded`).
+fn stop_unit(st: &mut State, name: &str) {
+    if st.containers.get(name).is_none_or(|c| c.status != RUNNING) {
+        return;
+    }
+    // Gone at once, or (slow) once its status has been asked a few times.
+    match st.slow_stops {
+        0 => {
+            st.containers.remove(name);
+        }
+        n => {
+            let c = st.containers.get_mut(name).expect("there");
+            (c.status, c.gone_in) = (STOPPING.into(), n);
+        }
+    }
+    let running = |st: &State| -> Vec<String> {
+        st.containers.iter().filter(|(_, c)| c.status == RUNNING).map(|(n, _)| n.clone()).collect()
+    };
+    let needing: Vec<String> = running(st).into_iter().filter(|c| bound_to(st, c).iter().any(|b| b == name)).collect();
+    for c in needing {
+        stop_unit(st, &c);
+    }
+    for b in bound_to(st, name) {
+        let unneeded = st.units.get(&format!("{b}.container")).is_some_and(|t| t.contains("StopWhenUnneeded=yes"));
+        let needed = running(st).iter().any(|c| bound_to(st, c).contains(&b));
+        if unneeded && !needed {
+            stop_unit(st, &b);
+        }
     }
 }
 

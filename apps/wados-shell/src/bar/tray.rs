@@ -1,6 +1,6 @@
 //! The tray, at the bar's right end (`Tray.svelte`, `Flyout.svelte`,
 //! `Notifications.svelte`): "show hidden icons", the jobs' ring while
-//! something builds, the clipboard, Bluetooth, brightness, sound, the
+//! something builds, this machine's streams while it streams, the clipboard, Bluetooth, brightness, sound, the
 //! network, the agents, the bell and the clock. Each opens its flyout by it:
 //! over the dock on the launcher, under the bar on the desktop.
 //!
@@ -8,7 +8,9 @@
 //! in the browser, with Show the browser), this session's notices (with
 //! Undo), the time, the tailnet (More's Tailscale tile: how many machines,
 //! a pip with how many devices ask to be trusted, Settings ▸ Accounts on a
-//! click; the asks under it, with Deny and Trust), read-only the network,
+//! click; the asks under it, with Deny and Trust), the streams (More's
+//! Streams tile, how many are live; the Streams flyout: each one, its Link
+//! and Stop), read-only the network,
 //! Bluetooth and the battery, and the volume and the brightness as their
 //! keys leave them. The rest says which phase brings it.
 
@@ -80,8 +82,19 @@ thread_local! {
 }
 
 /// The flyouts, by name (what `wadsctl bar flyout <name>` opens).
-pub const FLYOUTS: [&str; 10] =
-    ["hidden", "jobs", "clipboard", "bluetooth", "brightness", "volume", "network", "agents", "notifications", "clock"];
+pub const FLYOUTS: [&str; 11] = [
+    "hidden",
+    "jobs",
+    "streams",
+    "clipboard",
+    "bluetooth",
+    "brightness",
+    "volume",
+    "network",
+    "agents",
+    "notifications",
+    "clock",
+];
 
 struct Fly {
     name: &'static str,
@@ -99,6 +112,7 @@ pub struct Tray {
     /// What a flyout shows (the hidden icons' flyout can show the jobs').
     showing: RefCell<Vec<(&'static str, &'static str)>>,
     jobs_ring: Ring,
+    streams_n: gtk::Label,
     net_icon: Icon,
     bt_icon: Icon,
     vol_icon: Icon,
@@ -128,6 +142,7 @@ impl Tray {
             flys: RefCell::default(),
             showing: RefCell::default(),
             jobs_ring,
+            streams_n: gtk::Label::builder().css_classes(["st-tray-n"]).build(),
             net_icon: Icon::new("wifi", 17),
             bt_icon: Icon::new("bluetooth", 17),
             vol_icon: Icon::new("volume-2", 17),
@@ -157,6 +172,14 @@ impl Tray {
         let ring = gtk::Box::builder().halign(gtk::Align::Center).valign(gtk::Align::Center).build();
         ring.append(&me.jobs_ring.area);
         me.add("jobs", ring.upcast(), "Downloads and builds");
+        let live = gtk::Box::builder().spacing(4).valign(gtk::Align::Center).build();
+        live.append(&Icon::new("radio", 16));
+        live.append(&me.streams_n);
+        me.add("streams", live.upcast(), "Streams");
+        if let Some(b) = me.button("streams") {
+            b.add_css_class("st-tray");
+            b.set_visible(false);
+        }
         me.add("clipboard", Icon::new("clipboard-list", 17).upcast(), "Clipboard: what you've copied lately");
         me.add("bluetooth", me.bt_icon.clone().upcast(), "Bluetooth");
         me.add("brightness", Icon::new("sun-medium", 17).upcast(), "Brightness and night light");
@@ -208,8 +231,12 @@ impl Tray {
                 m.refill_open("jobs");
                 m.refill_open("hidden");
             }
+            if matches!(c, Change::Streams | Change::PeerSpaces(_) | Change::Peers | Change::Library) {
+                m.streams_changed();
+            }
         });
         me.jobs_changed();
+        me.streams_changed();
         me.system_changed();
         me.tailnet_changed();
         let w = Rc::downgrade(&me);
@@ -291,9 +318,9 @@ impl Tray {
     pub fn open(self: &Rc<Self>, name: &str) -> bool {
         let Some(f) = self.fly(name) else { return false };
         if !f.button.is_visible() {
-            // The jobs' ring isn't there with nothing running: the hidden icons show the jobs.
-            if name == "jobs" {
-                return self.open_as("hidden", "jobs");
+            // The jobs' ring (or the streams') isn't there with nothing running: the hidden icons show them.
+            if name == "jobs" || name == "streams" {
+                return self.open_as("hidden", name);
             }
             return false;
         }
@@ -373,6 +400,28 @@ impl Tray {
             self.resized();
         }
         self.refill_open("jobs");
+        self.refill_open("hidden");
+    }
+
+    /// This machine's streams: the tray's button (how many), and the flyouts.
+    fn streams_changed(self: &Rc<Self>) {
+        let mine = self.shell.store.streams().into_iter().filter(|s| s.peer.is_none()).count();
+        if let Some(b) = self.button("streams") {
+            let was = b.is_visible();
+            b.set_visible(mine > 0);
+            self.streams_n.set_label(&mine.to_string());
+            b.set_tooltip_text(Some(&format!("Streams: {mine} from this machine")));
+            if was
+                && mine == 0
+                && let Some(f) = self.fly("streams")
+            {
+                f.pop.popdown();
+            }
+            if was != b.is_visible() {
+                self.resized();
+            }
+        }
+        self.refill_open("streams");
         self.refill_open("hidden");
     }
 
@@ -499,6 +548,7 @@ impl Tray {
                 ));
             }
             "jobs" => self.jobs_content(&col),
+            "streams" => self.streams_content(&col),
             "notifications" => self.notices_content(&col),
             "clock" => self.clock_content(&col),
             _ => self.hidden_content(&col, &st),
@@ -586,6 +636,54 @@ impl Tray {
             list.append(&b);
         }
         col.append(&list);
+    }
+
+    /// The Streams flyout: each stream (here, and from my other machines), how it is, its Link and Stop.
+    fn streams_content(self: &Rc<Self>, col: &gtk::Box) {
+        col.append(&head("Streams", None));
+        let store = &self.shell.store;
+        let list = store.streams();
+        if list.is_empty() {
+            col.append(&ui::label(crate::streams::NOTHING, &["wb-p"]));
+            return;
+        }
+        let rows = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).build();
+        for s in list {
+            let key = crate::store::stream_key(&s);
+            let r = gtk::Box::builder().spacing(10).css_classes(["st-row"]).build();
+            r.set_widget_name(&format!("stream-{key}"));
+            let dot = gtk::Box::builder().css_classes(["st-dot"]).valign(gtk::Align::Center).build();
+            if !s.mode.is_public() {
+                dot.add_css_class("priv");
+            }
+            r.append(&dot);
+            let t = gtk::Box::builder().orientation(gtk::Orientation::Vertical).hexpand(true).build();
+            t.append(&label(&crate::streams::name_of(store, &key), &["st-row-name"]));
+            let peer = crate::streams::peer_name(store, &s);
+            t.append(&label(&crate::streams::flyout_sub(&s, peer.as_deref()), &["wb-small-t"]));
+            r.append(&t);
+            if s.live {
+                let link = wad_gtk::kit::button("Link", wad_gtk::kit::Variant::Ghost, Some("link"), true);
+                link.set_valign(gtk::Align::Center);
+                let (w, k) = (Rc::downgrade(self), key.clone());
+                link.connect_clicked(move |_| {
+                    if let Some(m) = w.upgrade() {
+                        m.close_all();
+                    }
+                    crate::streams::share(&k);
+                });
+                r.append(&link);
+            }
+            let stop = wad_gtk::kit::button("Stop", wad_gtk::kit::Variant::Danger, None, true);
+            stop.set_valign(gtk::Align::Center);
+            stop.connect_clicked(move |b| {
+                b.set_sensitive(false);
+                crate::streams::stop(&key);
+            });
+            r.append(&stop);
+            rows.append(&r);
+        }
+        col.append(&rows);
     }
 
     fn notices_content(self: &Rc<Self>, col: &gtk::Box) {
@@ -733,7 +831,15 @@ impl Tray {
                 Some("jobs"),
                 "Activity: what's downloading and building",
             ),
-            (tile(Icon::new("radio", 20).upcast(), "Streams", "Phase 7"), None, "Streams come in phase 7"),
+            (
+                tile(
+                    Icon::new("radio", 20).upcast(),
+                    "Streams",
+                    &crate::streams::tile_sub(&self.shell.store.streams()),
+                ),
+                Some("streams"),
+                crate::streams::TILE_TIP,
+            ),
             (
                 tile(
                     Icon::new(st.battery.as_ref().map(system::battery_icon).unwrap_or("plug"), 20).upcast(),
@@ -753,11 +859,11 @@ impl Tray {
             let i = i + 1;
             b.set_tooltip_text(Some(tip));
             match goes {
-                Some("jobs") => {
+                Some(what @ ("jobs" | "streams")) => {
                     let w = Rc::downgrade(self);
                     b.connect_clicked(move |_| {
                         if let Some(m) = w.upgrade() {
-                            m.open_as("hidden", "jobs");
+                            m.open_as("hidden", what);
                         }
                     });
                 }

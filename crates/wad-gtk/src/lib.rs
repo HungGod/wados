@@ -19,5 +19,5 @@ pub mod wrap;
 pub use icon::{Icon, Svg};
 pub use picture::Picture;
 pub use spring::{Params, Spring};
-pub use tile::{TileState, WadspaceTile};
+pub use tile::{Streaming, TileState, WadspaceTile};
 pub use wrap::Wrap;

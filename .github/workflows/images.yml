@@ -1,19 +1,17 @@
 # The public images wadspaces are built on, from images/: the builder
-# (Fedora 44 with Rust 1.99) and the base (the desktop every wadspace runs
-# on), built by images/build.sh, then checked by images/check.sh: two
-# packages captured apart on the new base and assembled into a set that rpm
-# and dnf take for one system (its desktop check needs a screen: not here).
-# From main they're pushed as ghcr.io/hunggod/wados-{builder,base}:44 and
+# (Fedora 44 with Rust 1.99), the base (the desktop every wadspace runs on)
+# and the stream sidecar (upstream Selkies 2.2.1, pinned by sha256 in
+# images/stream/requirements.txt), built by images/build.sh, then checked by
+# images/check.sh: two packages captured apart on the new base and
+# assembled into a set that rpm and dnf take for one system (its desktop
+# check needs a screen: not here), and the sidecar serving Selkies under a
+# stream's path in secure mode with the base's desktop drawn on it. From
+# main they're pushed as ghcr.io/hunggod/wados-{builder,base,stream}:44 and
 # :44-<date>-<commit>. Pull requests build and check, and push nothing.
 #
 # Weekly, the base is built again with Fedora's updates (its `dnf upgrade`
 # layer is the build day's). The packages workflow runs after every run of
 # this one on main, so packages are captured on the base as it is now.
-#
-# TODO(phase 7): the stream sidecar, ghcr.io/hunggod/wados-stream:44
-# (images/stream: linuxserver's baseimage-selkies with Selkies 2.x). images/
-# has no stream/ yet; when it does, build, check and push it here beside
-# the base.
 #
 # Secrets: only GITHUB_TOKEN, to push to ghcr (packages: write, this job's
 # alone).
@@ -81,7 +79,7 @@ jobs:
       PUSH: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
     steps:
       - name: Tools
-        run: dnf -y -q install git-core jq skopeo tar gawk
+        run: dnf -y -q install git-core jq skopeo tar gawk curl
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -91,7 +89,7 @@ jobs:
           path: .build/ci
       - name: Room
         run: df -h / /var/lib/containers "$GITHUB_WORKSPACE"
-      - name: The builder, then the base (images/build.sh)
+      - name: The builder, the base, then the stream sidecar (images/build.sh)
         run: images/build.sh
       - name: Check them (images/check.sh)
         run: |
@@ -106,7 +104,7 @@ jobs:
         run: |
           printf '%s' "$TOKEN" | podman login ghcr.io -u "$ACTOR" --password-stdin
           dated="44-$(date -u +%Y%m%d)-${GITHUB_SHA::7}"
-          for name in builder base; do
+          for name in builder base stream; do
             for tag in 44 "$dated"; do
               podman tag "localhost/wados-$name:44" "$REGISTRY/wados-$name:$tag"
               podman push -q "$REGISTRY/wados-$name:$tag"

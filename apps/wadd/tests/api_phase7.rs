@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use wad_config::{Config, Profile};
 use wad_model::{JobKind, JobStatus, StreamMode, StreamStage, Transport};
-use wad_proto::streams::SECURE_NEEDS_VM;
+use wad_proto::streams::{PRIVATE_NEEDS_TAILNET, PUBLIC_NEEDS_TUNNEL, SECURE_NEEDS_VM, SECURE_PUBLIC_LATER};
 use wad_proto::{Event, JobInfo, StreamRequest};
 use wad_wadd_client::{Incoming, Wadd};
 use wadd::fake::{Fake, FakeHands};
@@ -31,6 +31,9 @@ async fn up(sample: Option<Duration>) -> Up {
     config.daemon.screen_dir = dir.path().join("screen");
     config.display.runtime_dir = dir.path().join("rt");
     config.packages.pull = false;
+    // No public listener in tests, and no VM runtime, whatever this machine has.
+    config.streaming.listen = vec![];
+    config.streaming.secure_runtime = String::new();
     std::fs::create_dir_all(&config.display.runtime_dir).unwrap();
     let parts = wadd::Parts {
         backend: Arc::new(Fake::new()),
@@ -115,9 +118,9 @@ async fn the_samples_streams_and_what_can_start() {
     let private = l.streams.iter().find(|s| s.mode == StreamMode::Private).expect("a private one");
     assert_eq!((private.stage, private.live, private.peer.as_deref()), (StreamStage::Sidecar, false, Some("m-desk")));
     assert!(l.available.private.available && l.available.public.available);
-    for m in [StreamMode::PrivateSecure, StreamMode::PublicSecure] {
+    for (m, why) in [(StreamMode::PrivateSecure, SECURE_NEEDS_VM), (StreamMode::PublicSecure, SECURE_PUBLIC_LATER)] {
         let a = l.available.get(m);
-        assert_eq!((a.available, a.reason.as_deref()), (false, Some(SECURE_NEEDS_VM)), "{m:?}");
+        assert_eq!((a.available, a.reason.as_deref()), (false, Some(why)), "{m:?}");
     }
 }
 
@@ -199,7 +202,7 @@ async fn what_cant_start_says_why() {
     let w = &up.w;
     let id = create(w, "Studio").await;
     let e = w.start_stream(&id, &StreamRequest { mode: StreamMode::PublicSecure, takeover: false }).await.unwrap_err();
-    assert_eq!((e.status, e.message.as_str()), (409, SECURE_NEEDS_VM));
+    assert_eq!((e.status, e.message.as_str()), (409, SECURE_PUBLIC_LATER));
     let e = w.start_stream("nope", &StreamRequest { mode: StreamMode::Private, takeover: false }).await.unwrap_err();
     assert_eq!(e.status, 404);
     // Streaming already (the sample's public one).
@@ -239,18 +242,36 @@ async fn a_new_watcher_gets_the_streams_first() {
 }
 
 #[tokio::test]
-async fn the_machines_streams_come_in_phase_7() {
+async fn the_machines_streams_say_what_can_start() {
     let up = up(None).await;
     let w = &up.w;
+    // A laptop off its tailnet, with no tunnel or VM runtime: nothing can start, each saying why.
+    let l = w.streams().await.unwrap();
+    assert!(l.streams.is_empty());
+    assert_eq!(l.available.private.reason.as_deref(), Some(PRIVATE_NEEDS_TAILNET));
+    assert_eq!(l.available.public.reason.as_deref(), Some(PUBLIC_NEEDS_TUNNEL));
+    assert_eq!(l.available.public_secure.reason.as_deref(), Some(SECURE_PUBLIC_LATER));
     let req = StreamRequest { mode: StreamMode::Private, takeover: false };
-    for e in [
-        w.streams().await.map(drop),
-        w.start_stream(STARTER, &req).await.map(drop),
-        w.stop_stream(STARTER).await.map(drop),
-        w.stream_share(STARTER).await.map(drop),
-    ] {
-        let e = e.unwrap_err();
-        assert_eq!((e.status, e.code.as_str()), (501, "not_implemented"));
-        assert!(e.message.ends_with("comes in phase 7"), "{}", e.message);
-    }
+    let e = w.start_stream(STARTER, &req).await.unwrap_err();
+    assert_eq!((e.status, e.message.as_str()), (409, PRIVATE_NEEDS_TAILNET));
+    assert_eq!(w.start_stream("nope", &req).await.unwrap_err().status, 404);
+    assert_eq!(w.stop_stream(STARTER).await.unwrap_err().status, 404);
+    assert_eq!(w.stream_share(STARTER).await.unwrap_err().status, 404);
+    // No such machine of mine.
+    assert_eq!(w.start_peer_stream("m-desk", "notes", &req).await.unwrap_err().status, 404);
+}
+
+#[tokio::test]
+async fn the_sample_streams_from_its_peer() {
+    let up = sample().await;
+    let w = &up.w;
+    let req = StreamRequest { mode: StreamMode::Private, takeover: false };
+    let share = w.start_peer_stream("m-desk", "music", &req).await.unwrap();
+    assert!(share.open_link.contains("#token=") && share.link.contains(".invalid"), "{share:?}");
+    let s = w.streams().await.unwrap().streams.into_iter().find(|s| s.id == "music").expect("listed");
+    assert_eq!((s.peer.as_deref(), s.live), (Some("m-desk"), true));
+    let ended = w.stop_peer_stream("m-desk", "music").await.unwrap();
+    assert_eq!(ended.stage, StreamStage::Ended);
+    assert!(!w.streams().await.unwrap().streams.iter().any(|s| s.id == "music"));
+    assert_eq!(w.start_peer_stream("m-nope", "music", &req).await.unwrap_err().status, 404);
 }

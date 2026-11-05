@@ -142,8 +142,21 @@ pub struct Streaming {
     /// The OCI runtime a secure stream's wadspace runs in (`podman
     /// --runtime=<it>`: a VM of its own). Empty: no secure streams.
     pub secure_runtime: String,
+    /// A secure stream's VM: its vCPUs and its memory (MiB, taken from the
+    /// machine as the VM uses it). libkrun's annotations `krun.cpus` and
+    /// `krun.ram_mib` (wad_gen::units::secure_units).
+    pub secure_cpus: u32,
+    pub secure_ram_mib: u32,
     /// cloudflared's metrics server (its /ready says whether the tunnel is up).
     pub metrics: String,
+    /// What carries `https://<host>` to `listen`: "cloudflared", the
+    /// machine's own tunnel (public is available with its token in
+    /// /etc/cloudflared, cloudflared.service active and its `/ready`
+    /// connected); or "external", **for tests only**: something wadd doesn't
+    /// run does, e.g. a quick tunnel (`cloudflared tunnel --url
+    /// http://localhost:8085`, a random `*.trycloudflare.com` host) that a
+    /// test harness starts, and public is available whenever `host` is set.
+    pub tunnel: String,
 }
 
 impl Default for Streaming {
@@ -162,7 +175,10 @@ impl Default for Streaming {
             turn_api: "https://rtc.live.cloudflare.com/v1".into(),
             turn_ttl_s: 86_400,
             secure_runtime: "krun".into(),
+            secure_cpus: 2,
+            secure_ram_mib: 2048,
             metrics: "127.0.0.1:20241".into(),
+            tunnel: "cloudflared".into(),
         }
     }
 }
@@ -515,6 +531,7 @@ mod tests {
         // Cloudflare's TURN API is only where to ask, with the key from that file.
         assert_eq!(c.streaming.turn_api, "https://rtc.live.cloudflare.com/v1");
         assert_eq!((c.streaming.turn_ttl_s, c.streaming.secure_runtime.as_str()), (86_400, "krun"));
+        assert_eq!((c.streaming.secure_cpus, c.streaming.secure_ram_mib), (2, 2048));
     }
 
     #[test]

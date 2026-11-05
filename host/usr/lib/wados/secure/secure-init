@@ -1,0 +1,31 @@
+#!/bin/sh
+# A secure stream's entrypoint, inside its wadspace's libkrun micro-VM
+# (wad-gen's secure_units mounts it read-only from the host image, at
+# /usr/libexec/wados-secure-init; the image is the wadspace's own, unchanged).
+#
+# libkrun's own init (init.krun) is the VM's PID 1 and runs the container's
+# command as its child, but s6-overlay's /init runs only as PID 1. So /init
+# gets a PID namespace of its own, where it is.
+#
+# podman's SIGTERM never reaches the guest; its SIGINT does (the quadlet says
+# StopSignal=SIGINT). It's passed on to s6 as the SIGTERM it stops on, so the
+# wadspace's services finish as they do in a plain container.
+unshare --pid --fork --kill-child=SIGTERM --mount-proc /init "$@" &
+outer=$!
+
+stop() {
+    # s6's PID 1, as seen from here: unshare's one child.
+    inner="$(ps -o pid= --ppid "${outer}" 2> /dev/null | head -1 | tr -d ' ')"
+    echo "[secure-init] stopping the wadspace (s6, pid ${inner:-?})"
+    kill -TERM "${inner:-${outer}}" 2> /dev/null
+}
+trap stop INT TERM
+
+# wait returns early for a trapped signal: until unshare has really gone,
+# then its status (s6's), which is the container's.
+status=0
+while kill -0 "${outer}" 2> /dev/null; do
+    wait "${outer}"
+    status=$?
+done
+exit "${status}"

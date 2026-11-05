@@ -45,11 +45,12 @@
 //! - **Units:** no fallback to the session's whole runtime dir (no screen
 //!   folder, no display), no ~/Drives, `Pull=never` (sets are built here),
 //!   values with `%` escaped, and a mount whose path or name has a `:` (which
-//!   podman's `-v` can't say) isn't mounted. The stream sidecar has no login
-//!   (wadd's proxy and Selkies 2.x's tokens, phase 7) and its TURN
-//!   credentials are a podman secret wadd mints, never in the unit. A
-//!   wadspace that moves between the screen and a stream (v1's
-//!   `moving_quadlets`) is phase 7's.
+//!   podman's `-v` can't say) isn't mounted. The stream sidecar is Selkies
+//!   2.x, not v1's 1.x behind nginx: no login, but Selkies' secure mode (a
+//!   master token in a podman secret, and the token table and TURN's ICE
+//!   servers in a folder wadd writes), served under `/ws-<guid>/`. A
+//!   wadspace that moves between the screen and a stream as it runs has
+//!   both displays (`units::moving_units`, v1's `moving_quadlets`).
 
 use std::collections::BTreeMap;
 
@@ -62,7 +63,7 @@ pub mod sets;
 pub mod units;
 
 pub use sets::{BASE_IMAGE, Set, SetBuild, SetFile, Stage};
-pub use units::{Machine, Run, Sidecar};
+pub use units::{Machine, Run, Sidecar, Transport};
 
 /// A wadspace's projects found or made on this machine: project id → its
 /// folder or file here (a mount's own folder or file, or its Taildrive

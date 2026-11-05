@@ -1,0 +1,18 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# The stream's sound server, as abc: its socket is in the display volume
+# (/etc/wadspaces/stream.pa), where the wadspace's apps play to it
+# (PULSE_SERVER). Same uid (abc, the machine's user outside) on both sides,
+# so PulseAudio's credential check lets them in. No idle exit: the stream's
+# sound is there for as long as the stream.
+exec s6-setuidgid abc pulseaudio \
+    --daemonize=no \
+    --system=no \
+    --use-pid-file=no \
+    --exit-idle-time=-1 \
+    --realtime=no \
+    --high-priority=no \
+    --log-target=stderr \
+    --log-level=error \
+    -n -F /etc/wadspaces/stream.pa

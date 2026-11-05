@@ -41,7 +41,7 @@ use wad_model::edit::Op;
 use wad_model::{JobKind, PartState, Peer, PeerKind, Wadspace};
 use wad_proto::{
     Answer, ApiError, DeviceKind, ErrorCode, Event, JobInfo, MachineInfo, PeerInfo, RemoteHello, RemoteMachine,
-    Tailnet as View, TrustAnswer, TrustBook,
+    StreamInfo, StreamRequest, StreamShare, Tailnet as View, TrustAnswer, TrustBook,
 };
 
 use crate::api::AppState;
@@ -56,6 +56,9 @@ use crate::tailnet::{self, Caller, Class, Me, MyMachine, PersonFn, Refusal, Tail
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(2);
 /// Any other call to a peer's remote API.
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Streaming one of its wadspaces: it answers once the stream is live
+/// (its wadspace started, its sidecar up, the tailnet serving it).
+const STREAM_TIMEOUT: Duration = Duration::from_secs(600);
 /// An online machine of mine is said hello to again after this.
 const RECHECK: Duration = Duration::from_secs(30);
 /// A node that answered, but not as a wadd, is asked again after this.
@@ -231,6 +234,22 @@ impl Peers {
     async fn post<B: Serialize>(&self, to: SocketAddr, path: &str, body: &B) -> Result<Value, ApiError> {
         let res = self.client().post(format!("http://{to}{path}")).timeout(CALL_TIMEOUT).json(body).send().await;
         Self::read(to, res).await
+    }
+
+    /// Any call to a peer's remote API, with a body or not, waiting `timeout`.
+    async fn call<B: Serialize, T: DeserializeOwned>(
+        &self,
+        method: reqwest::Method,
+        to: SocketAddr,
+        path: &str,
+        body: Option<&B>,
+        timeout: Duration,
+    ) -> Result<T, ApiError> {
+        let mut req = self.client().request(method, format!("http://{to}{path}")).timeout(timeout);
+        if let Some(b) = body {
+            req = req.json(b);
+        }
+        Self::read(to, req.send().await).await
     }
 
     async fn read<T: DeserializeOwned>(
@@ -571,6 +590,25 @@ impl Peers {
         self.jobs.info(&job).ok_or_else(|| ApiError::internal("the job went"))
     }
 
+    /// A call about one of its wadspaces' stream: it said why not as it said
+    /// it, or it's offline.
+    async fn stream_call<T: DeserializeOwned>(
+        &self,
+        id: &str,
+        method: reqwest::Method,
+        ws: &str,
+        body: Option<&StreamRequest>,
+        timeout: Duration,
+    ) -> Result<T, ApiError> {
+        let (m, to) = self.reachable(id)?;
+        let path = format!("/v1/remote/wadspaces/{ws}/stream");
+        let r = self.call(method, to, &path, body, timeout).await;
+        if let Err(e) = &r {
+            self.unanswered(&m.node, e);
+        }
+        r.map_err(|e| if e.code == ErrorCode::Offline { offline(&m.name) } else { e })
+    }
+
     /// Pushes an answer made here to each of my machines online now.
     pub fn push(self: &Arc<Self>, answer: TrustAnswer) {
         let to: Vec<(String, SocketAddr)> = {
@@ -762,5 +800,34 @@ impl Net for TailnetPeers {
 
     async fn copy_from_peer(&self, peer: &str, ws: &str) -> Result<JobInfo, ApiError> {
         self.peers.copy(peer, ws).await
+    }
+}
+
+/// My machines' streams of their wadspaces (streams.rs's, "Stream from {machine}").
+#[async_trait]
+impl crate::streams::PeerStreams for Peers {
+    async fn start(&self, peer: &str, ws: &str, req: StreamRequest) -> Result<StreamShare, ApiError> {
+        if !crate::store::safe_id(ws) {
+            return Err(ApiError::bad_request(format!("not a wadspace's id: {ws:?}")));
+        }
+        self.stream_call(peer, reqwest::Method::POST, ws, Some(&req), STREAM_TIMEOUT).await
+    }
+
+    async fn stop(&self, peer: &str, ws: &str) -> Result<StreamInfo, ApiError> {
+        if !crate::store::safe_id(ws) {
+            return Err(ApiError::not_found(format!("not a wadspace's id: {ws:?}")));
+        }
+        self.stream_call(peer, reqwest::Method::DELETE, ws, None, CALL_TIMEOUT).await
+    }
+
+    async fn info(&self, peer: &str, ws: &str) -> Result<Option<StreamInfo>, ApiError> {
+        if !crate::store::safe_id(ws) {
+            return Ok(None);
+        }
+        match self.stream_call(peer, reqwest::Method::GET, ws, None, CALL_TIMEOUT).await {
+            Ok(i) => Ok(Some(i)),
+            Err(e) if e.code == ErrorCode::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }

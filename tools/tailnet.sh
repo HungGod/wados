@@ -24,6 +24,13 @@
 #   tools/tailnet.sh device curl ARGS…
 #                                  curl through its SOCKS5 proxy, to the tailnet
 #   tools/tailnet.sh device stop
+#   tools/tailnet.sh socks         the device's SOCKS5 proxy as the laptop reaches it
+#                                  (127.0.0.1:TAILNET_SOCKS_PORT): a browser on the
+#                                  laptop onto the tailnet, as the device (phase 7)
+#   tools/tailnet.sh https on|off  sam's machines get the "https" node attribute, or
+#                                  not (the policy reloaded): `tailscale serve --https`
+#                                  then configures, though Headscale has no
+#                                  certificates to give it (phase 7's private streams)
 #
 # Files (made per run, never committed): .build/tailnet/ (TAILNET_DIR).
 # The CA's key never leaves it; stop deletes it.
@@ -38,6 +45,8 @@
 #
 # TAILNET_PORT (8443): the port on the laptop's 127.0.0.1, in server_url, and
 # Headscale's own (the DERP's port is server_url's, so they're the same).
+# TAILNET_SOCKS_PORT (11055): the device's SOCKS5 proxy, published on the
+# laptop's 127.0.0.1.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -57,6 +66,7 @@ URL="https://${HOST}:${PORT}"
 BASE_DOMAIN=ts.test
 DEVICE_SOCK=/run/ts-device/tailscaled.sock
 SOCKS=127.0.0.1:1055
+SOCKS_PUBLISHED="${TAILNET_SOCKS_PORT:-11055}"
 
 die() { echo "tailnet.sh: $*" >&2; exit 1; }
 
@@ -188,8 +198,10 @@ start() {
         { podman run --rm -v "${DIR}/etc:/etc/headscale:ro,z" "${IMAGE}" configtest || true; die "Headscale's configtest failed"; }
     # The pod: the laptop's 127.0.0.1 only (the VMs' 10.0.2.2), and hs.test
     # is 127.0.0.1 inside it (for the device).
+    # The device's SOCKS5 proxy too, for a browser on the laptop (phase 7).
     podman pod create --name "${POD}" \
         -p "127.0.0.1:${PORT}:${PORT}/tcp" -p "127.0.0.1:${STUN}:${STUN}/udp" \
+        -p "127.0.0.1:${SOCKS_PUBLISHED}:${SOCKS##*:}/tcp" \
         --add-host "${HOST}:127.0.0.1" > /dev/null
     podman volume create "${VOLUME}" > /dev/null
     podman run -d --pod "${POD}" --name "${HS}" \
@@ -262,6 +274,23 @@ approve() {
     hs auth register --auth-id "$1" --user "$2"
 }
 
+# sam's machines with the "https" node attribute, or without it: the policy
+# file changed, and Headscale told to read it again. Without it, `tailscale
+# serve --https` asks the control server to turn HTTPS on, and Headscale
+# answers 501; with it, the serve is configured, and a TLS client still gets
+# no certificate (Headscale can't issue one).
+https() {
+    need_up
+    local p="${DIR}/etc/policy.hujson"
+    case "${1:-}" in
+        on) grep -q '"drive:access", "https"' "${p}" || sed -i 's/"drive:share", "drive:access"\]/"drive:share", "drive:access", "https"]/' "${p}" ;;
+        off) sed -i 's/"drive:share", "drive:access", "https"\]/"drive:share", "drive:access"]/' "${p}" ;;
+        *) die "https on|off" ;;
+    esac
+    podman kill --signal HUP "${HS}" > /dev/null
+    echo "https ${1}: $(grep -o '"attr": \[[^]]*\]' "${p}")"
+}
+
 # ------------------------------------------------------------ the device
 
 device() {
@@ -273,14 +302,16 @@ device() {
             podman rm -f -t 2 "${DEVICE}" > /dev/null 2>&1 || true
             # Its own socket and memory state (an ephemeral node), userspace
             # networking (no TUN, no root): its way onto the tailnet is the
-            # SOCKS5 proxy, inside the pod. It trusts the test CA only
+            # SOCKS5 proxy, in the pod (all its addresses: pasta hands the
+            # published port to the pod's own, not its loopback; nothing but
+            # the pod and that port reaches them). It trusts the test CA only
             # through SSL_CERT_FILE, and sends Tailscale no logs.
             podman run -d --pod "${POD}" --name "${DEVICE}" \
                 -v "${DIR}/ca.crt:/etc/wados-test-ca.crt:ro,z" -e SSL_CERT_FILE=/etc/wados-test-ca.crt \
                 --entrypoint /usr/sbin/tailscaled "${DEVICE_IMAGE}" \
                 --tun=userspace-networking --state=mem: --statedir=/var/lib/ts-device \
                 --socket="${DEVICE_SOCK}" --port=0 --no-logs-no-support \
-                --socks5-server="${SOCKS}" > /dev/null
+                --socks5-server="0.0.0.0:${SOCKS##*:}" > /dev/null
             for _ in $(seq 40); do
                 podman exec "${DEVICE}" tailscale --socket="${DEVICE_SOCK}" status --json > /dev/null 2>&1 && break
                 sleep 0.5
@@ -304,8 +335,10 @@ case "${cmd}" in
     user) [[ $# -eq 1 ]] || die "user NAME"; user "$1" ;;
     key) key "$@" ;;
     approve) approve "$@" ;;
+    https) https "$@" ;;
+    socks) echo "127.0.0.1:${SOCKS_PUBLISHED}" ;;
     ca) [[ -f "${DIR}/ca.crt" ]] || die "no CA: tools/tailnet.sh start"; echo "${DIR}/ca.crt" ;;
     url) echo "${URL}" ;;
     device) device "$@" ;;
-    *) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    *) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

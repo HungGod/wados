@@ -35,8 +35,29 @@
 //! projects it doesn't have any more (projects.rs's tidy); all of it when
 //! it's gone for good.
 //!
-//! Not yet (later phases): streams, devices, ~/Drives, Open-with files,
-//! runs of one time, focus.
+//! **Streamed** ([`Runs::open_streamed`], streams.rs's): it draws on its
+//! stream sidecar instead of the screen (wad_gen's units with a
+//! [`wad_gen::Sidecar`]: the wadspace bound to its sidecar, their display
+//! volume), with no screen folder, socket or compositor. Opened on the
+//! screen while it's streamed, the person at the machine wins: its stream
+//! ends ([`StreamEnds`]), then it opens here.
+//!
+//! **Moving as it runs** (v1's): on a machine with a screen, a wadspace whose
+//! image can move (its `io.wadspaces.display` label, "2": the base's) opens
+//! on the screen with `wad_gen::units::moving_units` (both displays
+//! mounted), so streaming it takes it off the screen without restarting it
+//! ([`Runs::add_sidecar`], then [`Runs::switch`]: `wadspaces-session
+//! switch` closes its apps as their × would and its desktop starts again on
+//! the stream; terminals keep their jobs), and back again.
+//!
+//! **Streamed securely** ([`StreamUnit::vm`]): it runs in a VM of its own
+//! (libkrun) with its stream's Selkies inside it (`wad_gen::units::secure_units`).
+//! Nothing execs into a VM (`podman exec` isn't there), so it's ready once
+//! Selkies' health answers on its published port, not by its desktop's
+//! socket; and it never moves (it stops, and opens on the screen again).
+//!
+//! Not yet (later phases): devices, ~/Drives, Open-with files, runs of one
+//! time, focus.
 
 use std::collections::{BTreeMap, HashMap};
 use std::os::unix::fs::PermissionsExt;
@@ -44,8 +65,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use tokio::task::JoinHandle;
-use wad_gen::units::{self, container_name, service};
+use wad_gen::units::{self, container_name, display_name, service};
 use wad_gen::{Machine, Mounts, Run, extras};
 use wad_model::{PartState, Phase, RunState, SessionDisplay, Wadspace, Wallpaper};
 use wad_proto::{ApiError, ErrorCode, Event, Level, WadspaceRun};
@@ -58,6 +80,56 @@ use crate::library::Docs;
 use crate::packages::GITHUB_SECRET;
 use crate::projects::{Opening, Projects};
 use crate::screen::Screen;
+
+/// A streamed wadspace's sidecar, for its units (streams.rs makes it).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StreamUnit {
+    /// The stream image.
+    pub image: String,
+    pub guid: String,
+    pub web_port: u16,
+    pub transport: units::Transport,
+    /// wadd's folder for the stream (its token table and ICE servers).
+    pub dir: String,
+    /// Its link's origin.
+    pub origin: Option<String>,
+    /// A secure stream's VM; none: the wadspace beside its sidecar.
+    pub vm: Option<SecureVm>,
+}
+
+/// A secure stream's VM: its runtime and size (`wad_gen::units::Vm`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SecureVm {
+    /// `[streaming] secure_runtime` (`krun`), found here with KVM.
+    pub runtime: String,
+    pub cpus: u32,
+    pub ram_mib: u32,
+}
+
+impl StreamUnit {
+    fn sidecar(&self) -> units::Sidecar<'_> {
+        units::Sidecar {
+            image: &self.image,
+            guid: &self.guid,
+            web_port: self.web_port,
+            transport: self.transport,
+            dir: &self.dir,
+            origin: self.origin.as_deref(),
+        }
+    }
+}
+
+/// What ends a wadspace's stream when the person at the machine opens it (streams.rs).
+#[async_trait]
+pub trait StreamEnds: Send + Sync + 'static {
+    /// `id` was opened on the screen (or in a window, or the background)
+    /// while it's streamed: its stream ends, and its wadspace stops.
+    async fn opened_on_screen(&self, id: &str, display: SessionDisplay);
+}
+
+/// An image whose wadspace's desktop can move between the screen and its
+/// stream as it runs (images/base: svc-de, wadspaces-session, tmux): "2".
+pub const MOVES_LABEL: &str = "io.wadspaces.display";
 
 /// There when NVIDIA's own kernel driver runs the machine's card.
 const NVIDIA_DRIVER: &str = "/proc/driver/nvidia/version";
@@ -179,6 +251,14 @@ pub struct Runs {
     tasks: Mutex<HashMap<String, JoinHandle<()>>>,
     /// Its projects, made here as it opens ([`Runs::attach`]); none: it opens without them.
     projects: OnceLock<Arc<Projects>>,
+    /// What ends its stream when it's opened on the screen ([`Runs::attach_streams`]).
+    streams: OnceLock<Weak<dyn StreamEnds>>,
+    /// The wadspaces running with moving units (started so here): they can
+    /// move between the screen and a stream as they run.
+    moving: Mutex<std::collections::HashSet<String>>,
+    /// The wadspaces running in a secure stream's VM (started so here, or
+    /// taken on by streams.rs after a restart): never exec'd into.
+    secure: Mutex<std::collections::HashSet<String>>,
     me: Weak<Self>,
 }
 
@@ -215,6 +295,9 @@ impl Runs {
             locks: Mutex::default(),
             tasks: Mutex::default(),
             projects: OnceLock::new(),
+            streams: OnceLock::new(),
+            moving: Mutex::default(),
+            secure: Mutex::default(),
             me: me.clone(),
         })
     }
@@ -222,6 +305,11 @@ impl Runs {
     /// Wadspaces open with their projects from now on.
     pub fn attach(&self, projects: Arc<Projects>) {
         let _ = self.projects.set(projects);
+    }
+
+    /// Opening a streamed wadspace on the screen ends its stream from now on.
+    pub fn attach_streams(&self, streams: Weak<dyn StreamEnds>) {
+        let _ = self.streams.set(streams);
     }
 
     fn lock_for(&self, id: &str) -> Arc<tokio::sync::Mutex<()>> {
@@ -274,6 +362,10 @@ impl Runs {
             (*st != before).then(|| st.clone())
         };
         if let Some(st) = changed {
+            if matches!(st.state.phase, Phase::Idle | Phase::Error) {
+                self.moving.lock().unwrap().remove(id);
+                self.secure.lock().unwrap().remove(id);
+            }
             self.keep_shown(id, st.display);
             self.bus.publish(Event::Run(Box::new(st)));
             self.screen.poke();
@@ -324,7 +416,7 @@ impl Runs {
     pub fn open(&self, id: &str, display: SessionDisplay) -> Result<WadspaceRun, ApiError> {
         if display == SessionDisplay::Stream {
             return Err(ApiError::bad_request(
-                "a stream starts with POST /v1/wadspaces/{id}/stream: open it on the screen, in a window or in the background",
+                "a stream starts with POST /v1/wadspaces/{id}/stream (streams.rs): open it on the screen, in a window or in the background",
             ));
         }
         let ws = self.docs.wadspace(id).ok_or_else(|| ApiError::not_found(format!("no wadspace {id:?}")))?;
@@ -333,6 +425,9 @@ impl Runs {
         }
         let st = self.state(id);
         match st.state.phase {
+            Phase::Starting | Phase::Waiting | Phase::Ready if st.display == Some(SessionDisplay::Stream) => {
+                return self.off_its_stream(id, display);
+            }
             Phase::Starting | Phase::Waiting | Phase::Ready => {
                 self.update(id, |s| s.display = Some(display));
                 return Ok(self.state(id));
@@ -350,6 +445,66 @@ impl Runs {
                 "there's no screen to show it on: the shell hasn't said where its compositor is, and none was found",
             ));
         }
+        self.start_up(id, display, image, None)
+    }
+
+    /// The person at the machine opened a streamed wadspace: they win. Its
+    /// stream ends (its wadspace stops), then it opens as they asked.
+    fn off_its_stream(&self, id: &str, display: SessionDisplay) -> Result<WadspaceRun, ApiError> {
+        let me = self.me.upgrade().ok_or_else(|| ApiError::internal("wadd is stopping"))?;
+        let streams = self.streams.get().and_then(Weak::upgrade);
+        tracing::info!("{id}: opened at the machine, so its stream ends");
+        self.update(id, |s| s.state.message = Some("taking it off its stream".into()));
+        let i = id.to_string();
+        tokio::spawn(async move {
+            if let Some(s) = streams {
+                s.opened_on_screen(&i, display).await;
+            }
+            // Still streamed (no stream to end, or it didn't move back): it stops here.
+            let st = me.state(&i);
+            if st.display == Some(SessionDisplay::Stream)
+                && matches!(st.state.phase, Phase::Starting | Phase::Waiting | Phase::Ready | Phase::Stopping)
+            {
+                let _ = me.stop(&i).await;
+            }
+            if let Err(e) = me.open(&i, display) {
+                tracing::warn!("{i}: it didn't open after its stream: {}", e.message);
+                me.bus.publish(Event::Notice { level: Level::Warn, title: e.message, undo: None });
+            }
+        });
+        Ok(self.state(id))
+    }
+
+    /// Opens a wadspace on its stream sidecar (streams.rs's Stream job): it
+    /// starts in the background, as `open` does; one that's up already is
+    /// stopped first by the caller (a conflict here).
+    pub fn open_streamed(&self, id: &str, stream: StreamUnit) -> Result<WadspaceRun, ApiError> {
+        let ws = self.docs.wadspace(id).ok_or_else(|| ApiError::not_found(format!("no wadspace {id:?}")))?;
+        if ws.is_trashed() {
+            return Err(conflict(format!("{} is in the Trash: restore it first", ws.name)));
+        }
+        match self.state(id).state.phase {
+            Phase::Starting | Phase::Waiting | Phase::Ready => {
+                return Err(conflict(format!("{} is open already", ws.name)));
+            }
+            Phase::Stopping => return Err(conflict(format!("{} is stopping", ws.name))),
+            Phase::Idle | Phase::Error => {}
+        }
+        let image = self
+            .builds
+            .image_for(&ws)
+            .ok_or_else(|| conflict(format!("{} isn't built on this machine yet: build it first", ws.name)))?;
+        self.start_up(id, SessionDisplay::Stream, image, Some(stream))
+    }
+
+    /// Starting it in the background, shown as `display` (on its stream: `stream`).
+    fn start_up(
+        &self,
+        id: &str,
+        display: SessionDisplay,
+        image: String,
+        stream: Option<StreamUnit>,
+    ) -> Result<WadspaceRun, ApiError> {
         let me = self.me.upgrade().ok_or_else(|| ApiError::internal("wadd is stopping"))?;
         // Starting, and its bring-up known, as one step: the Starting event
         // wakes reconcile (on another thread), which must find the task, not
@@ -363,7 +518,7 @@ impl Runs {
             s.display = Some(display);
         });
         let (i, img) = (id.to_string(), image);
-        let task = tokio::spawn(async move { me.bring_up(i, img).await });
+        let task = tokio::spawn(async move { me.bring_up(i, img, stream).await });
         tasks.insert(id.into(), task);
         drop(tasks);
         Ok(self.state(id))
@@ -377,10 +532,10 @@ impl Runs {
         }
     }
 
-    async fn bring_up(self: Arc<Self>, id: String, image: String) {
+    async fn bring_up(self: Arc<Self>, id: String, image: String, stream: Option<StreamUnit>) {
         let lock = self.lock_for(&id);
         let _held = lock.lock().await;
-        if let Err(e) = self.bring_up_locked(&id, &image).await {
+        if let Err(e) = self.bring_up_locked(&id, &image, stream.as_ref()).await {
             tracing::warn!("{id}: it didn't open: {e}");
             if let Some(p) = self.projects.get() {
                 if let Some(job) = self.state(&id).state.job {
@@ -424,7 +579,7 @@ impl Runs {
         (prepared.mounts, Some(opening))
     }
 
-    async fn bring_up_locked(&self, id: &str, image: &str) -> Res<()> {
+    async fn bring_up_locked(&self, id: &str, image: &str, stream: Option<&StreamUnit>) -> Res<()> {
         let ws = self.docs.wadspace(id).ok_or("it's gone")?;
         let name = container_name(id);
         let status = self.backend.container_status(&name).await?;
@@ -438,13 +593,16 @@ impl Runs {
                 }
             };
             stage("container", PartState::Working);
-            let wallpaper = self.write_extras(&ws, &mounts)?;
+            let wallpaper = self.write_extras(&ws, &mounts, stream.is_some())?;
             self.make_key_folders(&ws)?;
-            let screen = self.screen.clone();
-            let i = id.to_string();
-            tokio::task::spawn_blocking(move || screen.prepare(&i)).await.map_err(|e| e.to_string())??;
             let mut machine = self.settings.machine.clone();
-            machine.pulse_dir = self.screen.pulse_dir().map(|p| p.to_string_lossy().into_owned());
+            // On the screen: its screen folder (its socket, sound). Streamed, its sidecar's display.
+            if stream.is_none() {
+                let screen = self.screen.clone();
+                let i = id.to_string();
+                tokio::task::spawn_blocking(move || screen.prepare(&i)).await.map_err(|e| e.to_string())??;
+                machine.pulse_dir = self.screen.pulse_dir().map(|p| p.to_string_lossy().into_owned());
+            }
             machine.secrets = self
                 .backend
                 .secret_names()
@@ -454,8 +612,45 @@ impl Runs {
                 .filter(|n| n == GITHUB_SECRET)
                 .collect();
             let run = Run { image, mounts: &mounts, wallpaper: wallpaper.as_ref() };
-            let files = units::units(&ws, &run, &machine, None);
-            self.backend.write_units(&files, &[]).await?;
+            let sidecar = stream.map(StreamUnit::sidecar);
+            let vm = stream.and_then(|s| s.vm.as_ref());
+            let moves = stream.is_none() && machine.screen_dir.is_some() && self.image_moves(image).await;
+            let files = match (sidecar.as_ref(), vm) {
+                (Some(s), Some(vm)) => {
+                    // The stream image's files, made again from the image (one
+                    // left from before would be an old image's).
+                    self.drop_secure_volume(id).await;
+                    let vm = units::Vm { runtime: &vm.runtime, cpus: vm.cpus, ram_mib: vm.ram_mib };
+                    units::secure_units(&ws, &run, &machine, s, &vm).map_err(|e| e.to_string())?
+                }
+                _ if moves => units::moving_units(&ws, &run, &machine, None),
+                _ => units::units(&ws, &run, &machine, sidecar.as_ref()),
+            };
+            // No sidecar's units from a stream before (a moving one keeps its
+            // volume), nor a secure stream's image volume.
+            let display = display_name(id);
+            let secure_volume = format!("{}.volume", units::secure_volume(id));
+            let gone = match (stream, moves) {
+                (Some(_), _) if vm.is_some() => vec![format!("{display}.container"), format!("{display}.volume")],
+                (Some(_), _) => vec![secure_volume],
+                (None, true) => vec![format!("{display}.container"), secure_volume],
+                (None, false) => vec![format!("{display}.container"), format!("{display}.volume"), secure_volume],
+            };
+            self.backend.write_units(&files, &gone).await?;
+            {
+                let mut secure = self.secure.lock().unwrap();
+                match vm.is_some() {
+                    true => secure.insert(id.to_string()),
+                    false => secure.remove(id),
+                };
+            }
+            {
+                let mut moving = self.moving.lock().unwrap();
+                match moves {
+                    true => moving.insert(id.to_string()),
+                    false => moving.remove(id),
+                };
+            }
             self.update(id, |s| s.state.message = Some("starting its container".into()));
             tracing::info!("{id}: starting {} on {image}", service(id));
             self.backend.start(&service(id)).await?;
@@ -470,7 +665,11 @@ impl Runs {
             s.state.phase = Phase::Waiting;
             s.state.message = Some("waiting for its desktop".into());
         });
-        self.wait_desktop(&ws_name(&self.docs, id), &name).await?;
+        match stream.filter(|s| s.vm.is_some()) {
+            // In its VM: Selkies, inside it beside its desktop, answering.
+            Some(s) => self.wait_served(&ws_name(&self.docs, id), &name, s).await?,
+            None => self.wait_desktop(&ws_name(&self.docs, id), &name).await?,
+        }
         if let (Some(jobs), Some(j)) = (&jobs, &open_job) {
             jobs.finish(j, Ok(()));
         }
@@ -504,9 +703,93 @@ impl Runs {
         }
     }
 
+    /// Until a secure stream's Selkies answers on its published port (it
+    /// serves once the VM, its desktop's s6 and Selkies are up), or its VM
+    /// stops, or it's taken too long. Never `podman exec`: a VM hasn't it.
+    async fn wait_served(&self, title: &str, container: &str, s: &StreamUnit) -> Res<()> {
+        let url = format!("http://127.0.0.1:{}{}/api/health", s.web_port, units::stream_path(&s.guid));
+        let deadline = tokio::time::Instant::now() + self.settings.ready_timeout;
+        loop {
+            if self.backend.fetch(&url).await.is_ok() {
+                return Ok(());
+            }
+            if self.backend.container_status(container).await.is_ok_and(|s| s != RUNNING) {
+                let logs = self.backend.container_logs(container, 15).await.ok().flatten().unwrap_or_default();
+                let last: Vec<&str> = logs.lines().rev().take(3).collect();
+                let why = last.into_iter().rev().collect::<Vec<_>>().join(" / ");
+                return Err(format!(
+                    "{title}'s VM stopped before its stream was up{}",
+                    if why.is_empty() { String::new() } else { format!(": {why}") }
+                ));
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!(
+                    "{title}'s stream wasn't up in its VM within {} s",
+                    self.settings.ready_timeout.as_secs()
+                ));
+            }
+            tokio::time::sleep(self.settings.poll).await;
+        }
+    }
+
+    /// A secure stream's image volume, gone: its unit (a oneshot that stays
+    /// active) first, or podman would make an empty volume in its place the
+    /// next time the wadspace starts.
+    pub async fn drop_secure_volume(&self, id: &str) {
+        let volume = units::secure_volume(id);
+        let unit = format!("{volume}.volume");
+        // Once its wadspace has gone (it's the volume's only user), deterministically.
+        let users = [container_name(id)];
+        let wait = Duration::from_secs(120);
+        let r = crate::backend::drop_volume(
+            &*self.backend,
+            &volume,
+            &unit,
+            std::slice::from_ref(&unit),
+            &users,
+            self.settings.poll,
+            wait,
+        )
+        .await;
+        if let Err(e) = r {
+            tracing::warn!("{id}: its secure stream's image volume is left: {e}");
+        }
+    }
+
+    /// Whether `id` opens on the screen to move as it runs: a machine with a
+    /// screen, and its image's desktop moves (what bring-up checks).
+    async fn opened_moving(&self, id: &str) -> bool {
+        let Some(ws) = self.docs.wadspace(id) else { return false };
+        let Some(image) = self.builds.image_for(&ws) else { return false };
+        self.settings.machine.screen_dir.is_some() && self.image_moves(&image).await
+    }
+
+    /// A wadspace that moved to its stream as it ran, found running after
+    /// wadd restarted (streams.rs's adopt): on its stream, up, and it moves
+    /// (its stream ending puts it back on the screen as it runs).
+    pub fn taken_on_moved(&self, id: &str) {
+        self.moving.lock().unwrap().insert(id.to_string());
+        self.update(id, |s| {
+            s.state.phase = Phase::Ready;
+            s.state.message = None;
+            s.display = Some(SessionDisplay::Stream);
+        });
+    }
+
+    /// A secure stream's wadspace found running after wadd restarted
+    /// (streams.rs's adopt): in its VM, on its stream, up.
+    pub fn taken_on_secure(&self, id: &str) {
+        self.secure.lock().unwrap().insert(id.to_string());
+        self.update(id, |s| {
+            s.state.phase = Phase::Ready;
+            s.state.message = None;
+            s.display = Some(SessionDisplay::Stream);
+        });
+    }
+
     /// Its extra folder as it is now; the wallpaper the unit should use
     /// instead of its look's, if its picture isn't here.
-    fn write_extras(&self, ws: &Wadspace, mounts: &Mounts) -> Res<Option<Wallpaper>> {
+    fn write_extras(&self, ws: &Wadspace, mounts: &Mounts, streamed: bool) -> Res<Option<Wallpaper>> {
         let dir = PathBuf::from(extras::dir(&self.settings.state_dir.to_string_lossy(), &ws.id));
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
@@ -514,9 +797,13 @@ impl Runs {
         let keys = self.docs.snapshot().keys;
         let mut files: Vec<(String, Option<String>)> =
             extras::files(ws, &keys, mounts).into_iter().map(|(n, t)| (n.to_string(), t)).collect();
-        // Where its desktop draws (svc-de), and on how many screens.
-        files.push(("display".into(), Some("screen\n".into())));
-        files.push(("screens".into(), Some(format!("{}\n", self.settings.machine.screens.max(1)))));
+        // Where its desktop draws (svc-de), and on how many screens (a stream is one).
+        let (display, screens) = match streamed {
+            true => ("stream", 1),
+            false => ("screen", self.settings.machine.screens.max(1)),
+        };
+        files.push(("display".into(), Some(format!("{display}\n"))));
+        files.push(("screens".into(), Some(format!("{screens}\n"))));
         for (name, text) in files {
             let path = dir.join(&name);
             match text {
@@ -586,6 +873,126 @@ impl Runs {
         Ok(())
     }
 
+    // ------------------------------------------------------------ moving as it runs
+
+    /// Its image's desktop can move as it runs.
+    async fn image_moves(&self, image: &str) -> bool {
+        let info = self.backend.image_info(image).await.ok().flatten();
+        info.is_some_and(|i| i.labels.get(MOVES_LABEL).and_then(|v| v.as_str()) == Some("2"))
+    }
+
+    /// It's up on the screen with moving units: it can move to a stream as it runs.
+    pub fn moves(&self, id: &str) -> bool {
+        let st = self.state(id);
+        st.state.phase == Phase::Ready && self.moving.lock().unwrap().contains(id)
+    }
+
+    /// A moving wadspace's sidecar, started beside it (it doesn't stop with
+    /// the wadspace's desktop, nor the wadspace with it).
+    pub async fn add_sidecar(&self, id: &str, stream: &StreamUnit) -> Result<(), ApiError> {
+        let ws = self.docs.wadspace(id).ok_or_else(|| ApiError::not_found(format!("no wadspace {id:?}")))?;
+        let mounts = Mounts::new();
+        let run = Run { image: "", mounts: &mounts, wallpaper: None };
+        let display = display_name(id);
+        let files: Vec<(String, String)> =
+            units::moving_units(&ws, &run, &self.settings.machine, Some(&stream.sidecar()))
+                .into_iter()
+                .filter(|(n, _)| n.starts_with(&format!("{display}.")))
+                .collect();
+        self.backend.write_units(&files, &[]).await.map_err(ApiError::internal)?;
+        self.backend.start(&format!("{display}.service")).await.map_err(ApiError::internal)
+    }
+
+    /// Moves a running wadspace's desktop to `to` (its stream, or the
+    /// screen, a window or the background) without restarting it: its
+    /// display file says where, then `wadspaces-session switch` closes its
+    /// apps as their × would and ends its labwc, which svc-de starts again
+    /// there. Apps that didn't close in time: it stays where it was, they're
+    /// named, and what did close opens again.
+    pub async fn switch(&self, id: &str, to: SessionDisplay) -> Result<(), ApiError> {
+        let ws = self.docs.wadspace(id).ok_or_else(|| ApiError::not_found(format!("no wadspace {id:?}")))?;
+        let lock = self.lock_for(id);
+        let _held = lock.lock().await;
+        let was = self.state(id);
+        let streamed = to == SessionDisplay::Stream;
+        if was.state.phase != Phase::Ready || !self.moving.lock().unwrap().contains(id) {
+            return Err(conflict(format!("{} can't move as it runs", ws.name)));
+        }
+        let say = |e: String| ApiError::internal(format!("moving {}: {e}", ws.name));
+        self.write_display(id, streamed).map_err(say)?;
+        let message = if streamed { "moving to its stream" } else { "moving to the screen" };
+        // Back on the screen: served there first (its desktop waits for the socket).
+        self.update(id, |s| {
+            s.state.message = Some(message.into());
+            if !streamed {
+                s.display = Some(to);
+            }
+        });
+        let name = container_name(id);
+        let out = self.backend.exec(&name, "abc", &["wadspaces-session", "switch", "--timeout", "20"]).await;
+        // What didn't close in time (then nothing moved).
+        let still_open = |stdout: &[u8]| -> Vec<String> {
+            let answer: serde_json::Value = serde_json::from_slice(stdout).unwrap_or_default();
+            answer["still_open"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|w| {
+                    let title = w["title"].as_str().filter(|t| !t.is_empty());
+                    title.or(w["app_id"].as_str()).or(w.as_str()).map(String::from)
+                })
+                .collect()
+        };
+        let failed = match &out {
+            Ok(o) if o.code == 0 && still_open(&o.stdout).is_empty() => None,
+            Ok(o) if o.code == 0 || o.code == 3 => {
+                let open = still_open(&o.stdout);
+                let (them, it) = (open.join(", "), if open.len() == 1 { "it" } else { "them" });
+                Some(ApiError::new(
+                    ErrorCode::Conflict,
+                    format!("{them} didn't close (unsaved work?): close {it} in {}, then try again", ws.name),
+                ))
+            }
+            Ok(o) => Some(say(format!("exit {}: {}", o.code, o.stderr.trim()))),
+            Err(e) => Some(say(e.clone())),
+        };
+        if let Some(e) = failed {
+            // Called off: where it was, its apps open again.
+            let _ = self.write_display(id, was.display == Some(SessionDisplay::Stream));
+            self.update(id, |s| s.display = was.display);
+            if let Err(err) = self.backend.exec(&name, "abc", &["wadspaces-session", "restore"]).await {
+                tracing::warn!("{id}: opening its apps again: {err}");
+            }
+            return Err(e);
+        }
+        tracing::info!("{id}: moved to {}", if streamed { "its stream" } else { "the screen" });
+        self.update(id, |s| {
+            s.display = Some(to);
+            s.state.phase = Phase::Waiting;
+            s.state.message = Some("waiting for its desktop".into());
+        });
+        if let Err(e) = self.wait_desktop(&ws.name, &name).await {
+            self.update(id, |s| {
+                s.state.phase = Phase::Error;
+                s.state.error = Some(e.clone());
+            });
+            return Err(ApiError::internal(e));
+        }
+        self.update(id, |s| s.state.phase = Phase::Ready);
+        Ok(())
+    }
+
+    /// Its display file (and screens): where its desktop draws from its next start of labwc.
+    fn write_display(&self, id: &str, streamed: bool) -> Res<()> {
+        let dir = PathBuf::from(extras::dir(&self.settings.state_dir.to_string_lossy(), id));
+        let (display, screens) = match streamed {
+            true => ("stream", 1),
+            false => ("screen", self.settings.machine.screens.max(1)),
+        };
+        put(&dir.join(units::DISPLAY_FILE), format!("{display}\n").as_bytes())?;
+        put(&dir.join("screens"), format!("{screens}\n").as_bytes())
+    }
+
     // ------------------------------------------------------------ stop
 
     pub async fn stop(&self, id: &str) -> Result<WadspaceRun, ApiError> {
@@ -645,6 +1052,7 @@ impl Runs {
 
     /// It stopped: its Taildrive mounts go, and what it no longer has.
     async fn stopped(&self, id: &str) {
+        self.secure.lock().unwrap().remove(id);
         let Some(p) = self.projects.get() else { return };
         match self.docs.wadspace(id) {
             Some(ws) => p.tidy(&ws).await,
@@ -711,10 +1119,18 @@ impl Runs {
             if status == RUNNING {
                 if matches!(phase, Phase::Idle | Phase::Waiting) {
                     // Running, and wadd didn't start it (or it restarted): as it was shown.
-                    let up = self.backend.desktop_up(&name).await.unwrap_or(false);
+                    // In a secure stream's VM: nothing to exec, and streams.rs knows it's up.
+                    let secure = self.secure.lock().unwrap().contains(&id);
+                    let up = secure || self.backend.desktop_up(&name).await.unwrap_or(false);
                     let shown = self.shown.lock().unwrap().get(&id).copied().unwrap_or(SessionDisplay::Screen);
                     if phase == Phase::Idle {
                         tracing::info!("{id}: running already; taken on");
+                        // On the screen, it was opened to move as it runs if its image
+                        // moves (as at open). On a stream, only streams.rs knows:
+                        // `taken_on_moved`, when its stream had moved there.
+                        if shown != SessionDisplay::Stream && self.opened_moving(&id).await {
+                            self.moving.lock().unwrap().insert(id.clone());
+                        }
                     }
                     self.update(&id, |s| {
                         s.display = s.display.or(Some(shown));

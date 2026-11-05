@@ -9,8 +9,14 @@ publish.workspace = true
 [dependencies]
 async-trait.workspace = true
 axum.workspace = true
+base64.workspace = true
+bytes.workspace = true
 clap.workspace = true
 futures-util.workspace = true
+# The streaming proxy (proxy.rs): v1's hyper plumbing, WebSockets passed through.
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 indexmap.workspace = true
 libc.workspace = true
 nix.workspace = true
@@ -20,6 +26,8 @@ serde_json.workspace = true
 sha2.workspace = true
 tokio = { workspace = true, features = ["process"] }
 tokio-stream.workspace = true
+# turn.rs: the machine's TURN key (/etc/wados/turn.toml).
+toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 wad-config.workspace = true

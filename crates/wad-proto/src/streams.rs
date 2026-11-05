@@ -40,6 +40,8 @@ pub const PRIVATE_NEEDS_TAILNET: &str = "Join your tailnet first: private stream
 pub const PUBLIC_NEEDS_TUNNEL: &str =
     "Public streams need this machine's Cloudflare tunnel, which the installer stick sets up";
 pub const SECURE_NEEDS_VM: &str = "Secure streams need a VM runtime this machine doesn't have";
+/// Public secure streams, always for now: WebRTC's UDP can't reach into the VM yet.
+pub const SECURE_PUBLIC_LATER: &str = "Secure public streams come later: secure streams are private for now";
 
 /// A public stream's warning when Cloudflare's TURN didn't answer ([`StreamInfo::turn_down`]).
 pub const TURN_DOWN: &str = "Cloudflare's TURN didn't answer: only viewers with a direct path can connect (no relay)";

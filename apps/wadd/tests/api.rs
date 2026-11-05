@@ -128,8 +128,9 @@ async fn a_wadspace_opens_on_the_shells_screen_and_stops() {
 
     let e = w.open("nope", SessionDisplay::Screen).await.unwrap_err();
     assert_eq!((e.status, e.code.as_str()), (404, "not_found"));
+    // Streamed: through the streams (a private stream), which need the tailnet.
     let e = w.open(&id, SessionDisplay::Stream).await.unwrap_err();
-    assert_eq!(e.status, 400);
+    assert_eq!((e.status, e.message.as_str()), (409, wad_proto::streams::PRIVATE_NEEDS_TAILNET));
 }
 
 #[tokio::test]

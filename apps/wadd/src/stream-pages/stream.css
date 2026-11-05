@@ -1,0 +1,237 @@
+/* wadd's stream pages (proxy/pages.rs): the sign-in card, the expired page,
+   and "isn't answering yet". The spike's look (src/styles/tokens.css,
+   PublicViewer.svelte's card, ui/TextField and ui/Button), dark only, with
+   no fonts of its own: Inter and Space Grotesk where they're installed,
+   the system's otherwise. */
+
+:root {
+  color-scheme: dark;
+  --bg: #0a0614;
+  --bg-2: #0e0919;
+  --surface: #140d22;
+  --line-strong: rgb(240 234 250 / 0.18);
+  --fg: #f5f2fa;
+  --muted: rgb(245 242 250 / 0.62);
+  --faint: rgb(245 242 250 / 0.4);
+  --accent: #c6ff1f;
+  --accent-fg: #0a0614;
+  --accent-soft: rgb(198 255 31 / 0.2);
+  --danger: #ff5d7a;
+  --warn: #e8c36a;
+  --shadow: rgb(3 2 8 / 0.85);
+  --r: 12px;
+  --r-xl: 24px;
+  --font: 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+  --font-mono: ui-monospace, 'JetBrains Mono', 'Cascadia Code', 'DejaVu Sans Mono', monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+html {
+  height: 100%;
+}
+body {
+  margin: 0;
+  min-height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px 16px;
+  color: var(--fg);
+  font: 14px/1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+  /* The spike's auth backdrop: magenta left, lime bottom right, violet in the middle. */
+  background:
+    radial-gradient(circle 360px at 8% 40%, rgb(255 61 129 / 0.16), transparent 70%),
+    radial-gradient(circle 320px at 96% 96%, rgb(198 255 31 / 0.08), transparent 70%),
+    radial-gradient(ellipse 960px 640px at 110% -10%, rgb(255 61 129 / 0.12), transparent 60%),
+    radial-gradient(ellipse 1120px 800px at 50% 50%, rgb(70 36 110 / 0.12), transparent 70%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+.card {
+  width: 100%;
+  max-width: 400px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 30px 28px;
+  border-radius: var(--r-xl);
+  border: 1px solid var(--line-strong);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 30px 80px -24px var(--shadow);
+}
+.card section,
+.card form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+}
+.logo svg {
+  width: 44px;
+  height: 44px;
+  flex: none;
+}
+.logo .word {
+  display: flex;
+  flex-direction: column;
+  line-height: 0.9;
+  font-family: var(--font-display);
+}
+.logo b {
+  font-size: 24.6px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #d4ff3d;
+}
+.logo small {
+  font-size: 10.8px;
+  font-weight: 600;
+  letter-spacing: 0.32em;
+  color: #fff5fa;
+}
+
+h1 {
+  margin: 6px 0 0;
+  font: 600 24px/1.2 var(--font-display);
+  letter-spacing: -0.01em;
+  overflow-wrap: anywhere;
+}
+p {
+  margin: 0;
+  color: var(--muted);
+}
+a {
+  color: var(--accent);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.field .label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+}
+input {
+  height: 42px;
+  padding: 0 14px;
+  border-radius: var(--r);
+  border: 1px solid var(--line-strong);
+  background: var(--bg-2);
+  color: inherit;
+  font: 13px var(--font-mono);
+  outline: none;
+  transition: border-color 0.15s;
+}
+input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.has-error input {
+  border-color: var(--danger);
+}
+.error {
+  font-size: 12px;
+  color: var(--danger);
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 48px;
+  padding: 0 22px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--accent);
+  color: var(--accent-fg);
+  box-shadow: 0 8px 24px -10px var(--accent);
+  font: 600 15px var(--font);
+  cursor: pointer;
+  transition: box-shadow 0.15s, transform 0.1s;
+}
+button:hover {
+  box-shadow: 0 10px 28px -8px var(--accent);
+}
+button:active {
+  transform: translateY(1px);
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.warn {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: 13px;
+  color: var(--warn);
+}
+.warn svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 11.5px var(--font-mono);
+  color: var(--faint);
+  overflow-wrap: anywhere;
+}
+footer svg {
+  flex: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.spin {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border-radius: 50%;
+  border: 2px solid var(--accent-soft);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The one-tap link's states (sign-in.js sets them on <html>): opening it,
+   its key not this stream's, or the stream out of reach. */
+.when-opening,
+.when-offline,
+.when-bad-link {
+  display: none !important;
+}
+.opening .when-ready,
+.offline .when-ready {
+  display: none !important;
+}
+.opening .when-opening,
+.offline .when-offline,
+.bad-link .when-bad-link {
+  display: flex !important;
+}

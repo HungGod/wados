@@ -536,12 +536,29 @@ pub fn error_html(title: &str, message: &str, uri: &str) -> String {
             badge = icon("wifi-off", 34),
             title = esc_html(title),
             message = esc_html(message),
-            uri = esc_html(uri),
+            uri = esc_html(&shown_uri(uri)),
             href = esc_attr(&safe_href(uri)),
             plus = icon("plus", 16),
             again = icon("refresh-cw", 16),
         ),
     )
+}
+
+/// An address as a page shows it: without its fragment, and with a `token`
+/// in its query masked. A stream's one-tap link carries its key there
+/// (`/ws-<guid>/#token=…`), and a failed load must not put it on screen.
+/// "Try again" keeps the whole address: the key is needed to load it.
+pub fn shown_uri(uri: &str) -> String {
+    let base = uri.split('#').next().unwrap_or_default();
+    let Some((path, query)) = base.split_once('?') else { return base.to_string() };
+    let query: Vec<String> = query
+        .split('&')
+        .map(|kv| match kv.split_once('=') {
+            Some((k, _)) if k.eq_ignore_ascii_case("token") => format!("{k}=…"),
+            _ => kv.to_string(),
+        })
+        .collect();
+    format!("{path}?{}", query.join("&"))
 }
 
 /// The social sites the blocker knows, by name (the spike's `socialName`).
@@ -780,6 +797,17 @@ fn esc_attr(s: &str) -> String {
 mod tests {
     use super::*;
     use chrono::Duration;
+
+    #[test]
+    fn an_error_page_never_shows_a_streams_key() {
+        let link = "https://m.wadspaces.com/ws-abc/#token=SECRETKEY0123456789";
+        assert_eq!(shown_uri(link), "https://m.wadspaces.com/ws-abc/");
+        assert_eq!(shown_uri("https://h/ws-abc/?token=SECRETKEY&x=1#y"), "https://h/ws-abc/?token=…&x=1");
+        assert_eq!(shown_uri("https://example.com/a?b=c"), "https://example.com/a?b=c");
+        let page = error_html("It didn't load", "No answer", link);
+        let shown = page.split("class=\"where\"").nth(1).unwrap_or_default();
+        assert!(!shown.split("href=").next().unwrap_or_default().contains("SECRETKEY"), "{shown}");
+    }
 
     /// Markup, and a way out of a double-quoted attribute (every attribute here is one).
     const EVIL: &str = r#"<script>alert('x')</script>" onmouseover="x"#;

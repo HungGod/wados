@@ -11,8 +11,8 @@
 //! Phase 6: projects as a wadspace opens (projects.rs: GitHub clones,
 //! this machine's folders, copies, another machine's over Taildrive).
 //!
-//! Phase 7: streams (their routes in api_phase7.rs, sample data in
-//! fake_phase7.rs until they're made).
+//! Phase 7: streams (streams.rs, their routes in api_phase7.rs, sample
+//! data in fake_phase7.rs; TURN in turn.rs).
 //!
 //! Later phases: Open-with files, runs of one time,
 //! keys' sign-in flows, devices, the network, updates, install, server mode,
@@ -39,15 +39,19 @@ pub mod mounts;
 pub mod packages;
 pub mod peers;
 pub mod projects;
+pub mod proxy;
 pub mod remote;
 pub mod runs;
 pub mod screen;
 pub mod selinux;
 pub mod store;
+pub mod streams;
 pub mod systemd;
 pub mod taildrive;
 pub mod tailnet;
 pub mod tar;
+pub mod tunnel;
+pub mod turn;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -65,6 +69,10 @@ use crate::events::Bus;
 use crate::library::Docs;
 use crate::logbuf::LogBuffer;
 use crate::store::Store;
+
+/// How long wadd waits, once told to stop, for requests under way (systemd's
+/// TimeoutStopSec is 10 s): open event streams are closed after it.
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 
 /// Where the API listens.
 pub enum Listen {
@@ -106,6 +114,11 @@ pub struct Server {
     pub state: Arc<AppState>,
     /// The tailnet, peers and remote API (none with the sample): their loops start with `serve`.
     tailnet: Option<Arc<peers::TailnetPeers>>,
+    /// The streaming proxy's public listener, its routes and where (none
+    /// with the sample, or streaming off): it starts with `serve`.
+    proxy: Option<(Arc<proxy::RouteTable>, Vec<String>)>,
+    /// The machine's streams (none with the sample): adopted, then checked, from `serve`.
+    streams: Option<Arc<streams::MachineStreams>>,
 }
 
 impl Server {
@@ -210,9 +223,20 @@ impl Server {
             jobs.clone(),
             net.clone(),
         );
-        let runs =
-            runs::Runs::new(parts.backend, docs.clone(), bus.clone(), screen.clone(), builds.clone(), run_settings);
+        let runs = runs::Runs::new(
+            parts.backend.clone(),
+            docs.clone(),
+            bus.clone(),
+            screen.clone(),
+            builds.clone(),
+            run_settings,
+        );
         runs.attach(Arc::new(projects));
+        // The streaming proxy's routes, which the streams fill (proxy.rs).
+        let routes = proxy::RouteTable::new();
+        let public_proxy = (config.streaming.enabled && parts.sample.is_none())
+            .then(|| (routes.clone(), config.streaming.listen.clone()));
+        let mut machine_streams = None;
         let streams: Arc<dyn api_phase7::Streams> = match parts.sample {
             Some(step) => {
                 let hostname = machine.name.to_lowercase();
@@ -225,7 +249,28 @@ impl Server {
                     step,
                 ))
             }
-            None => Arc::new(api_phase7::NotYet),
+            None => {
+                let t = tailnet.clone().expect("made without the sample");
+                let s = streams::MachineStreams::new(
+                    streams::Settings { poll: parts.poll, ..streams::Settings::new(&config) },
+                    streams::Parts {
+                        backend: parts.backend.clone(),
+                        docs: docs.clone(),
+                        bus: bus.clone(),
+                        jobs: jobs.clone(),
+                        runs: runs.clone(),
+                        builds: builds.clone(),
+                        routes: Arc::new(routes.clone()),
+                        private: Arc::new(streams::TailscaleServe::of(&config, t.tailnet.clone())),
+                        tunnel: Arc::new(tunnel::Tunnel::new(&config.streaming)),
+                        peers: Some(t.peers.clone()),
+                    },
+                );
+                let ends: std::sync::Weak<dyn runs::StreamEnds> = Arc::downgrade(&s) as _;
+                runs.attach_streams(ends);
+                machine_streams = Some(s.clone());
+                s
+            }
         };
         let state = Arc::new(AppState {
             machine,
@@ -243,7 +288,15 @@ impl Server {
             keys,
             streams,
         });
-        Ok(Self { listener, bound, reconcile_every: Duration::from_secs(d.reconcile_s.max(1)), state, tailnet })
+        Ok(Self {
+            listener,
+            bound,
+            reconcile_every: Duration::from_secs(d.reconcile_s.max(1)),
+            state,
+            tailnet,
+            proxy: public_proxy,
+            streams: machine_streams,
+        })
     }
 
     /// Serves until SIGTERM or Ctrl+C.
@@ -270,10 +323,35 @@ impl Server {
         if let Some(t) = &self.tailnet {
             loops.extend(t.start(app.clone()));
         }
+        if let Some((routes, listen)) = &self.proxy {
+            loops.push(tokio::spawn(proxy::serve(routes.clone(), listen.clone())));
+        }
+        if let Some(s) = &self.streams {
+            loops.push(tokio::spawn(s.clone().run()));
+        }
         systemd::notify("READY=1");
         tracing::info!(machine = %self.state.machine.id, "serving /v1");
         let router = api::router(self.state.clone()).into_make_service_with_connect_info::<Peer>();
-        let res = axum::serve(self.listener, router).with_graceful_shutdown(shutdown).await;
+        // Graceful, but not forever: an event stream (the shell's, Settings',
+        // a peer's) never ends by itself, and axum waits for every open
+        // connection. A few seconds for requests under way, then they close.
+        let (stopping, mut stopped) = tokio::sync::watch::channel(false);
+        let signal = async move {
+            shutdown.await;
+            let _ = stopping.send(true);
+        };
+        let serve =
+            std::future::IntoFuture::into_future(axum::serve(self.listener, router).with_graceful_shutdown(signal));
+        let res = tokio::select! {
+            r = serve => r,
+            _ = async {
+                let _ = stopped.wait_for(|s| *s).await;
+                tokio::time::sleep(SHUTDOWN_GRACE).await;
+            } => {
+                tracing::info!("stopping: closing the connections still open after {SHUTDOWN_GRACE:?}");
+                Ok(())
+            }
+        };
         for l in loops {
             l.abort();
         }

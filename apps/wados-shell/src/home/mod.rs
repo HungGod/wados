@@ -6,16 +6,21 @@
 //! square cards of that tab's wadspaces (what's running first), the one in
 //! focus big in the middle with its picture behind everything (blurred and
 //! shaded). Select it (a click, or Enter) to open it. Under it, its round
-//! buttons: Launch (or Show), Focus, the two streams, an update check (or a
-//! build), the Trash (Undo's in the toast). A right-click on a card is its
-//! menu: Open (Show), Open in window, Stream, Edit in the Builder (on the
-//! desktop, with its group), Duplicate, Move to Trash.
+//! buttons: Launch (or Show), Focus, the two streams (Stream: publicly,
+//! Private: on the tailnet; the stream sheet, or its link when it streams),
+//! an update check (or a build), the Trash (Undo's in the toast). A
+//! right-click on a card is its menu: Open (Show), Open in window, Stream ▸
+//! (its modes: streams.rs's menu), Edit in the Builder (on the desktop,
+//! with its group), Duplicate, Move to Trash. A card that streams says so
+//! (`LIVE · n`, Starting stream).
 //!
 //! The machine at the bar's start picks whose wadspaces show: this one's,
 //! or another of mine that's online (`peers.rs`; they come from it, over the
 //! tailnet). Another machine's cards say whose they are, and their buttons
-//! are Launch (it streams from there: phase 7), Focus (it runs here, so it
-//! asks to copy it first) and Copy here; their menu copies it too.
+//! are Launch ("Stream from {machine}": a private stream there, opened here
+//! in a window of WadBrowser's), Focus (it runs here, so it asks to copy it
+//! first) and Copy here; their menu has Stream from {machine}, Stream in a
+//! window, and copies it too.
 //!
 //! The keys (nav.rs): ←/→ the cards; ↑ the bar (←/→ along it, a tab shows
 //! at once; ← past the first is the machine); ↓ the buttons, ↓ again the
@@ -31,13 +36,13 @@
 //!
 //! `wadsctl home` says where things are (and `moving=` while the row or the
 //! picture behind is still moving); `wadsctl home key <key>…`, `tab <id>`,
-//! `focus <id>`, `menu <id>` (a card's, as a right-click), `machine` (its
+//! `focus <id>`, `menu <id>` (a card's, as a right-click; `menu sub <row>`
+//! opens the open menu's submenu: `menu sub Stream`), `machine` (its
 //! list) and `machine <id>` drive it; `wadsctl home layout` gives its
 //! pieces' bounds, in points.
 //!
-//! Not here yet: streams (phase 7) and Focus (later), whose buttons show,
-//! dimmed, their tooltips saying when (and Stream in a card's right-click
-//! menu); drops on a card.
+//! Not here yet: Focus (later), whose button shows, dimmed, its tooltip
+//! saying when; drops on a card.
 
 mod backdrop;
 mod bar;
@@ -64,11 +69,13 @@ use crate::machine::Page;
 use crate::peers::{self, Choice};
 use crate::shell::Shell;
 use crate::store::{Change, Store};
+use crate::streams;
+use wad_model::StreamMode;
 
 use self::backdrop::Backdrop;
 use self::bar::{Bar, TabView};
 use self::buttons::Buttons;
-use self::card::{Card, CardData, apps_of};
+use self::card::{Card, CardData, StreamBadge, apps_of};
 use self::layout::{BAR_H, Layout};
 use self::menu::{Item, Row};
 use self::model::{ActId, Action, Space, Tab};
@@ -411,7 +418,14 @@ impl Launcher {
                 .and_then(|f| live.iter().find(|x| &x.id == f))
                 .map(|x| {
                     if choice.here {
-                        model::actions(&x.name, store.is_running(&x.id), store.build(&x.id).map(|b| b.state.built))
+                        let (live, avail) = (store.stream(&x.id), store.stream_modes());
+                        model::actions(
+                            &x.name,
+                            store.is_running(&x.id),
+                            store.build(&x.id).map(|b| b.state.built),
+                            streams::card_button(StreamMode::Public, live.as_ref(), avail.as_ref()),
+                            streams::card_button(StreamMode::Private, live.as_ref(), avail.as_ref()),
+                        )
                     } else {
                         model::peer_actions(&x.name, &choice.name)
                     }
@@ -717,17 +731,11 @@ impl Launcher {
     }
 
     /// Opens it full screen (built first, if it has to be); one running is
-    /// shown so. Another machine's would stream from there (phase 7).
+    /// shown so. Another machine's streams from there ("Stream from
+    /// {machine}": privately, into a window of WadBrowser's here).
     fn open(&self, id: &str) {
-        if let Some(p) = self.peer_shown() {
-            let name = self.shell.store.peer_wadspace(id).map(|(_, x)| x.name).unwrap_or_else(|| id.to_string());
-            let from = self.shell.store.machine_name(&p).unwrap_or_default();
-            self.shell.toast(
-                Level::Info,
-                &format!("Streaming {name} here from {from} comes in phase 7: Copy here opens it on this machine"),
-                None,
-            );
-            return;
+        if self.peer_shown().is_some() {
+            return streams::stream_from(id, false);
         }
         self.shell.open(id, SessionDisplay::Screen);
     }
@@ -761,7 +769,12 @@ impl Launcher {
                     self.focus_elsewhere(&p, &id);
                 }
             }
-            ActId::Stream | ActId::Private => {}
+            ActId::Stream | ActId::Private => {
+                let mode = if a.id == ActId::Stream { StreamMode::Public } else { StreamMode::Private };
+                let store = &self.shell.store;
+                let b = streams::card_button(mode, store.stream(&id).as_ref(), store.stream_modes().as_ref());
+                streams::pick(&id, b.pick);
+            }
         }
     }
 
@@ -875,13 +888,12 @@ impl Launcher {
             let (shell, id) = (shell.clone(), id.to_string());
             move || shell.op(Op::Trash { ws: id.clone() }, |_| {})
         };
-        let streams = format!("Publicly or privately: {}", model::STREAMS_LATER);
         let here = ws.machine == shell.store.machine_id();
         let mut items = vec![
             Item::Heading(ws.name.clone()),
             Item::Row(Row::new("monitor-play", if running { "Show" } else { "Open" }, open)),
             Item::Row(Row::new("app-window", "Open in window", window)),
-            Item::Row(Row::new("radio", "Stream", || {}).later(streams)),
+            Item::Row(Row::new("radio", "Stream", || {}).submenu(stream_rows(&shell.store, id))),
         ];
         // Another machine's shows in the Builder but doesn't change there: as the spike's, it's only this machine's.
         if here {
@@ -906,13 +918,16 @@ impl Launcher {
     }
 
     /// Another machine's card's menu (the spike's wadspaceMenu, not here):
-    /// streams from there (phase 7), the Builder (to see what's in it), Copy to
-    /// this machine (from there: it has to be online).
+    /// streams from there (full screen, or in a window), the Builder (to see
+    /// what's in it), Copy to this machine (from there: it has to be online).
     fn peer_card_menu(&self, peer: &str, id: &str, card: &Rc<Card>, x: f64, y: f64) {
         let Some((_, ws)) = self.shell.store.peer_wadspace(id) else { return };
         let shell = &self.shell;
         let at = shell.store.machine_name(peer).unwrap_or_else(|| "another machine".into());
-        let later = format!("Privately, over your tailnet: {}", model::STREAMS_LATER);
+        let streamed = |window: bool| {
+            let key = id.to_string();
+            move || streams::stream_from(&key, window)
+        };
         let show = {
             let (shell, id) = (shell.clone(), id.to_string());
             move || {
@@ -928,8 +943,11 @@ impl Launcher {
         };
         let items = vec![
             Item::Heading(format!("{} · on {at}", ws.name)),
-            Item::Row(Row::new("monitor-play", format!("Stream from {at}"), || {}).later(later.clone())),
-            Item::Row(Row::new("app-window", "Stream in a window", || {}).later(later)),
+            Item::Row(
+                Row::new("monitor-play", format!("Stream from {at}"), streamed(false))
+                    .hint("Privately, over your tailnet"),
+            ),
+            Item::Row(Row::new("app-window", "Stream in a window", streamed(true))),
             Item::Row(Row::new("blocks", "Show in the Builder", show).hint("What’s in it: copy it here to change it")),
             Item::Row(Row::new("download", "Copy to this machine", copy).hint(format!("From {at}, while it’s online"))),
             Item::Line,
@@ -1014,6 +1032,13 @@ impl Launcher {
                 }
             }
             ["layout"] => self.layout(),
+            ["menu", "sub", label @ ..] if !label.is_empty() => {
+                if menu::open_sub(&label.join(" ")) {
+                    "ok".into()
+                } else {
+                    format!("error no open menu has a {:?} submenu", label.join(" "))
+                }
+            }
             ["menu", "close"] => {
                 if let Some(m) = self.menu.borrow().clone() {
                     m.popdown();
@@ -1059,7 +1084,7 @@ impl Launcher {
                 }
                 _ => format!("error no button {n}"),
             },
-            _ => "error home [state] | key <left|right|up|down|enter|space|esc|tab|backtab>… | tab <id> | focus <id> | layout | menu [<id>: its card's, as a right-click | close] | machine [<id>] | act <n>".into(),
+            _ => "error home [state] | key <left|right|up|down|enter|space|esc|tab|backtab>… | tab <id> | focus <id> | layout | menu [<id>: its card's, as a right-click | sub <row> | close] | machine [<id>] | act <n>".into(),
         }
     }
 
@@ -1160,9 +1185,15 @@ fn card_data(store: &Store, x: &Wadspace, machine: Option<(&'static str, String)
             failed: false,
             busy: copying,
             machine,
+            stream: store.stream(&x.id).as_ref().map(StreamBadge::of),
         };
     }
     let state = store.tile_state(&x.id);
+    let stream = store.stream(&x.id);
+    // Its Stream job, while it starts: the ring too.
+    let streaming = stream.as_ref().and_then(|s| s.job.as_deref()).and_then(|j| store.job(j)).and_then(|j| {
+        matches!(j.job.status, wad_model::JobStatus::Queued | wad_model::JobStatus::Running).then_some(j.job.progress)
+    });
     CardData {
         name: x.name.clone(),
         picture: wad_model::look::icon_picture_of(x).clone(),
@@ -1171,14 +1202,31 @@ fn card_data(store: &Store, x: &Wadspace, machine: Option<(&'static str, String)
         running: state.running,
         built: store.build(&x.id).map(|b| b.state.built),
         failed: state.failed,
-        busy: state.busy,
+        busy: state.busy.or(streaming),
         machine: None,
+        stream: stream.as_ref().map(StreamBadge::of),
     }
 }
 
 /// How far a copy of another machine's `ws` here has got, while one runs.
 fn store_copying(store: &Store, ws: &str) -> Option<f64> {
     store.copying(ws)
+}
+
+/// A wadspace's Stream ▸ rows (streams.rs's menu): each mode, the one it
+/// streams in ticked (its link), the others off saying why.
+fn stream_rows(store: &Store, key: &str) -> Vec<Item> {
+    streams::menu(store, key)
+        .into_iter()
+        .map(|i| {
+            let (k, pick) = (key.to_string(), i.pick);
+            let row = Row::new(i.icon, i.label, move || streams::pick(&k, pick)).checked_if(i.checked);
+            Item::Row(match i.disabled {
+                Some(why) => row.later(why),
+                None => row.hint(i.hint),
+            })
+        })
+        .collect()
 }
 
 /// What a tab with nothing in it says.

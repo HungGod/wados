@@ -14,6 +14,10 @@
 //! - **Stop:** ended, then gone a step later.
 //! - **Share:** links and a sign-in that are plainly fake (`.invalid`
 //!   hosts, `sample-…-not-a-secret`): never anything real.
+//! - **Another machine's** (`POST|DELETE /v1/peers/{id}/wadspaces/{ws}/stream`):
+//!   the phase 6 sample's peer (`m-desk`) streams any of its wadspaces here,
+//!   privately; its share comes back a step later, live. Known by (peer,
+//!   wadspace). Any other machine: 404.
 //!
 //! Each stage of its jobs takes `step`.
 
@@ -22,7 +26,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use wad_model::{JobKind, PartState, Phase, StreamMode, StreamStage, Transport};
-use wad_proto::streams::{SECURE_NEEDS_VM, stages};
+use wad_proto::streams::{SECURE_NEEDS_VM, SECURE_PUBLIC_LATER, stages};
 use wad_proto::{
     ApiError, Availability, JobInfo, StreamInfo, StreamList, StreamRequest, StreamShare, StreamsAvailability,
 };
@@ -113,7 +117,7 @@ impl Sample {
             private: Availability::yes(),
             private_secure: Availability::no(SECURE_NEEDS_VM),
             public: Availability::yes(),
-            public_secure: Availability::no(SECURE_NEEDS_VM),
+            public_secure: Availability::no(SECURE_PUBLIC_LATER),
         };
         let me =
             Inner { streams: Mutex::new(streams), available, hostname: hostname.into(), jobs, bus, docs, runs, step };
@@ -268,16 +272,89 @@ impl Streams for Sample {
         Ok(ended)
     }
 
+    async fn start_peer(&self, peer: &str, ws: &str, req: StreamRequest) -> Result<StreamShare, ApiError> {
+        let me = &self.0;
+        if peer != PEER {
+            return Err(ApiError::not_found(format!("There's no machine {peer:?} of yours")));
+        }
+        let mine = |s: &StreamInfo| s.id == ws && s.peer.as_deref() == Some(peer) && s.stage != StreamStage::Ended;
+        let now = now_ms();
+        let started = {
+            let mut streams = me.streams.lock().unwrap();
+            match streams.iter().find(|s| mine(s)) {
+                Some(s) if s.mode != req.mode => {
+                    return Err(ApiError::conflict(format!("{ws} is streaming already there: stop it first")));
+                }
+                Some(_) => false,
+                None => {
+                    streams.push(StreamInfo {
+                        id: ws.into(),
+                        mode: req.mode,
+                        transport: if req.mode.is_public() { Transport::Webrtc } else { Transport::Websocket },
+                        stage: StreamStage::Sidecar,
+                        live: false,
+                        viewers: 0,
+                        started: now,
+                        last_active: now,
+                        link: link(ws, req.mode, "desk"),
+                        turn_down: false,
+                        warnings: vec![],
+                        job: None,
+                        peer: Some(peer.into()),
+                    });
+                    true
+                }
+            }
+        };
+        me.tell();
+        if started {
+            tokio::time::sleep(me.step * 2).await;
+            {
+                let mut streams = me.streams.lock().unwrap();
+                if let Some(s) = streams.iter_mut().find(|s| mine(s)) {
+                    s.stage = StreamStage::Live;
+                    s.live = true;
+                }
+            }
+            me.tell();
+        }
+        let s = me.streams.lock().unwrap().iter().find(|s| mine(s)).cloned();
+        let s = s.ok_or_else(|| ApiError::conflict("Its stream was stopped"))?;
+        Ok(share_of(&s))
+    }
+
+    async fn stop_peer(&self, peer: &str, ws: &str) -> Result<StreamInfo, ApiError> {
+        let me = &self.0;
+        let ended = {
+            let mut streams = me.streams.lock().unwrap();
+            let i = streams
+                .iter()
+                .position(|s| s.id == ws && s.peer.as_deref() == Some(peer) && s.stage != StreamStage::Ended)
+                .ok_or_else(|| not_streaming(ws))?;
+            let mut s = streams.remove(i);
+            s.stage = StreamStage::Ended;
+            s.live = false;
+            s.viewers = 0;
+            s
+        };
+        me.tell();
+        Ok(ended)
+    }
+
     async fn share(&self, ws: &str) -> Result<StreamShare, ApiError> {
         let s = self.0.streams.lock().unwrap().iter().find(|s| s.id == ws && s.stage != StreamStage::Ended).cloned();
-        let s = s.ok_or_else(|| not_streaming(ws))?;
-        let public = s.mode.is_public();
-        Ok(StreamShare {
-            mode: s.mode,
-            open_link: format!("{}#token={TOKEN}", s.link),
-            link: s.link,
-            user: public.then(|| USER.into()),
-            password: public.then(|| PASSWORD.into()),
-        })
+        Ok(share_of(&s.ok_or_else(|| not_streaming(ws))?))
+    }
+}
+
+/// A sample stream's share: plainly fake.
+fn share_of(s: &StreamInfo) -> StreamShare {
+    let public = s.mode.is_public();
+    StreamShare {
+        mode: s.mode,
+        open_link: format!("{}#token={TOKEN}", s.link),
+        link: s.link.clone(),
+        user: public.then(|| USER.into()),
+        password: public.then(|| PASSWORD.into()),
     }
 }

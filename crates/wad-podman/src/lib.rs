@@ -628,6 +628,17 @@ impl Podman {
         }
     }
 
+    /// The names of podman's volumes (`podman volume ls`).
+    pub async fn volume_names(&self) -> Result<Vec<String>, Error> {
+        let list = self.get_json("volumes", "/volumes/json").await?.unwrap_or(Value::Null);
+        Ok(list
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v.get("Name").and_then(Value::as_str).map(String::from))
+            .collect())
+    }
+
     /// Where a named volume's files are on the host; None if there's no such volume.
     pub async fn volume_mountpoint(&self, name: &str) -> Result<Option<String>, Error> {
         let info =

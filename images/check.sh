@@ -2,12 +2,13 @@
 # Proves the images work: the base built, two packages captured apart on it
 # (rpm-krita: Fedora's krita through wadspaces-dnf, as wad-gen installs RPM
 # apps; and the nodejs feature), a set assembling both, and that set behaving as a
-# Fedora system and as a wadspace's desktop. Each check prints ok or FAIL;
-# the script exits 1 if any failed.
+# Fedora system and as a wadspace's desktop; and the stream sidecar. Each
+# check prints ok or FAIL; the script exits 1 if any failed.
 #
 #   images/check.sh              build what's missing (podman's cache keeps the rest)
 #   images/check.sh --no-build   only check images built already
 #   images/check.sh --no-display skip the desktop check
+#   images/check.sh --no-stream  skip the stream sidecar's
 #
 # The desktop check runs the set as wadd would on the machine's labwc: a
 # headless patched labwc (tools/headless.sh, tools/build-labwc.sh), a socket
@@ -15,6 +16,12 @@
 # app id io.wadspaces.check) mounted at /run/wadspaces-display, abc mapped to
 # you (PUID 1000), and the window listed with its app id (the toplevels
 # example). A screenshot goes to .build/images/check-desktop.png.
+#
+# The stream check needs no screen or GPU (CI runs it): the sidecar refuses
+# to start without Selkies' tokens; with them it serves Selkies under its
+# path alone, takes its token table, turns a handshake without a token away,
+# and the base's desktop draws on its compositor through the volume they
+# share (images/stream/try-stream.sh streams it to a browser, on a laptop).
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "${HERE}/.." && pwd)"
@@ -22,11 +29,13 @@ BASE=localhost/wados-base:44
 PKGS=(rpm-krita nodejs)
 BUILD=true
 DISPLAY_CHECK=true
+STREAM_CHECK=true
 for a in "$@"; do
     case "$a" in
         --no-build) BUILD=false ;;
         --no-display) DISPLAY_CHECK=false ;;
-        *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+        --no-stream) STREAM_CHECK=false ;;
+        *) sed -n '2,24p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
     esac
 done
 
@@ -36,6 +45,7 @@ in_img() { local img="$1"; shift; podman run --rm --entrypoint '' "${img}" "$@";
 
 if ${BUILD}; then
     "${HERE}/build.sh" --only base || exit 1
+    if ${STREAM_CHECK}; then "${HERE}/build.sh" --only stream || exit 1; fi
     for id in "${PKGS[@]}"; do "${HERE}/build.sh" pkg "${id}" || exit 1; done
 fi
 SET="$("${HERE}/build.sh" set "${PKGS[@]}" | tail -n1)" || exit 1
@@ -92,6 +102,76 @@ echo "${after}" | sed 's/^/   /'
 check "tree runs, rpm -V passes, krita and nodejs still installed" "grep -qx still <<< \"\${after}\" && grep -qx verified <<< \"\${after}\""
 podman rmi -f localhost/wados-check-run:latest > /dev/null 2>&1
 rm -rf "${ctx}"
+
+# ------------------------------------------------------------- the stream sidecar
+# As wad-gen's unit runs it (crates/wad-gen/src/units.rs), less what needs
+# a machine: no GPU (it renders and encodes in software), podman's own ids.
+if ${STREAM_CHECK}; then
+    STREAM=localhost/wados-stream:44
+    echo "== ${STREAM}: Selkies $(podman image inspect --format '{{index .Labels "io.wados.selkies"}}' "${STREAM}")," \
+        "$(podman image inspect --format '{{.Size}}' "${STREAM}" | numfmt --to=si)B"
+    sdir="$(mktemp -d)"
+    sport=48399
+    side=wados-check-stream
+    sws=wados-check-streamed
+    svol=wados-check-stream-display
+    stop_stream() {
+        podman rm -f -t 3 "${side}" "${sws}" > /dev/null 2>&1
+        podman volume rm -f "${svol}" > /dev/null 2>&1
+    }
+    stop_stream
+    # No master token: it halts rather than serve an open desktop.
+    podman run -d --name "${side}" -e SELKIES_SUBFOLDER=/ws-check "${STREAM}" > /dev/null
+    for _ in $(seq 30); do [[ "$(podman inspect --format '{{.State.Running}}' "${side}")" == false ]] && break; sleep 1; done
+    refused="$(podman inspect --format '{{.State.Running}}' "${side}") $(podman logs "${side}" 2>&1 | grep -c 'not streaming without')"
+    check "without a master token and a tokens file it won't start" "[[ '${refused}' == 'false 1' ]]"
+    podman rm -f "${side}" > /dev/null 2>&1
+    # With them: wadd's folder (the token table, 0600), the display volume, the stream's path.
+    mkdir -m 700 "${sdir}/auth"
+    printf '{"check-key": {"role": "controller", "slot": null}}\n' > "${sdir}/auth/tokens.json"
+    chmod 600 "${sdir}/auth/tokens.json"
+    # Selkies' user's (abc, 1000 inside: wadd's units map it to the machine's
+    # user, who owns the folder; podman's own ids here don't).
+    as_root() { if [[ $(id -u) == 0 ]]; then "$@"; else podman unshare "$@"; fi; }
+    as_root chown -R 1000:1000 "${sdir}/auth"
+    podman volume create "${svol}" > /dev/null
+    # The two share SELinux categories, as wadd's units give a wadspace and its sidecar.
+    level=(--security-opt label=level:s0:c101,c202)
+    podman run -d --name "${side}" "${level[@]}" --shm-size 1g -e PUID=1000 -e PGID=1000 \
+        -e SELKIES_SUBFOLDER=/ws-check -e SELKIES_MASTER_TOKEN=check-master -e SELKIES_MODE=websockets \
+        -e SELKIES_ENABLE_DUAL_MODE=false -e SELKIES_TOKENS_FILE=/run/wadspaces-selkies/tokens.json \
+        -e SELKIES_AUTO_GPU=false -e SELKIES_USE_CPU=true \
+        -v "${sdir}/auth":/run/wadspaces-selkies:ro,Z -v "${svol}":/run/wadspaces-display:z \
+        -p "127.0.0.1:${sport}:3000" "${STREAM}" > /dev/null
+    for _ in $(seq 60); do [[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:${sport}/ws-check/api/health")" == 200 ]] && break; sleep 1; done
+    code() { curl -s -o /dev/null -m 10 -w '%{http_code}' "$@"; }
+    routes="$(code "http://127.0.0.1:${sport}/ws-check/") $(code "http://127.0.0.1:${sport}/ws-check/api/health") $(code "http://127.0.0.1:${sport}/") $(code "http://127.0.0.1:${sport}/ws-other/")"
+    check "Selkies serves under /ws-check/ alone (page, health, /, another path: ${routes})" "[[ '${routes}' == '200 200 404 404' ]]"
+    hs="$(code --http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
+        -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' "http://127.0.0.1:${sport}/ws-check/api/websockets")"
+    check "its streaming socket turns a handshake without a token away (${hs})" "[[ ${hs} == 401 ]]"
+    slog="$(podman logs "${side}" 2>&1)"
+    grep -E '^(\[stream-display\]|INFO:main)' <<< "${slog}" | sed 's/^/   /'
+    check "it took the token table (secure mode)" "grep -q 'Now tracking 1 tokens' <<< \"\${slog}\""
+    # The base's desktop on it, as a streamed wadspace (wadd's display file says stream).
+    mkdir -p "${sdir}/extra" && echo stream > "${sdir}/extra/display"
+    podman run -d --name "${sws}" "${level[@]}" --shm-size 1g -e PUID=1000 -e PGID=1000 -e WLR_RENDERER=pixman \
+        -e PULSE_SERVER=unix:/run/wadspaces-current/pulse/native \
+        -v "${sdir}/extra":/run/wadspaces-extra:ro,z -v "${svol}":/run/wadspaces-stream:z "${BASE}" > /dev/null
+    drew=""
+    for _ in $(seq 90); do
+        drew="$(podman logs "${sws}" 2>&1 | grep '^\[svc-de\] drawing on' | tail -n 1)"
+        [[ -n "${drew}" ]] && break
+        sleep 1
+    done
+    echo "   ${drew:-the desktop never started}"
+    inside="$(podman exec "${sws}" sh -c 'pgrep -x labwc; readlink /run/wadspaces-current' 2>&1)"
+    check "the base's desktop draws on the sidecar's compositor (${drew##*on })" \
+        "grep -q 'drawing on /run/wadspaces-stream/wayland-' <<< \"\${drew}\" && grep -qx /run/wadspaces-stream <<< \"\${inside}\""
+    [[ ${fails} -gt 0 ]] && podman logs "${side}" 2>&1 | tail -20
+    stop_stream
+    as_root rm -rf "${sdir}"
+fi
 
 # ------------------------------------------------------------- the desktop
 if ${DISPLAY_CHECK}; then

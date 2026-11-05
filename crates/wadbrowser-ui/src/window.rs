@@ -543,7 +543,9 @@ fn wire_webview(ctx: &Rc<WindowCtx>, view: &WebView, page: &TabPage) {
             let keeps = !ctx.private && wadbrowser_webkit::state(view).is_some_and(|s| !s.private);
             if keeps {
                 let title = view.title().unwrap_or_default().to_string();
-                let uri = view.uri().unwrap_or_default().to_string();
+                // Never a fragment or a token in history: a stream's one-tap
+                // link carries its key there (`/ws-<guid>/#token=…`).
+                let uri = wadbrowser_core::internal::shown_uri(&view.uri().unwrap_or_default());
                 if let Err(err) = ctx.state.store.record_history(&title, &uri) {
                     warn!("history: {err}");
                 }

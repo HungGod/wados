@@ -1,0 +1,14 @@
+#!/usr/bin/with-contenv bash
+# shellcheck shell=bash
+#
+# Selkies, as abc, with the display volume as its runtime dir: its
+# compositor's socket goes there (and, from phase 10, the joystick
+# interposer's). It starts once PulseAudio answers, so its audio capture
+# finds the `output` sink's monitor. Its settings are the image's
+# (Containerfile) and the unit's (SELKIES_*).
+for _ in $(seq 40); do
+    [[ -S "${XDG_RUNTIME_DIR}/pulse/native" ]] && break
+    sleep 0.25
+done
+cd /config || exit 1
+exec s6-setuidgid abc /opt/selkies/bin/selkies

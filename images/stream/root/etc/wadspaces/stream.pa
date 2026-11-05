@@ -1,0 +1,10 @@
+# The stream's sound (svc-pulseaudio). Its socket is in the display volume
+# the wadspace shares, where its apps play (PULSE_SERVER=unix:/run/
+# wadspaces-display/pulse/native). What they play goes to `output`, whose
+# monitor Selkies captures and sends to viewers; a viewer's microphone comes
+# in through `input` (Selkies adds its virtual source on it when one's on).
+load-module module-native-protocol-unix socket=/run/wadspaces-display/pulse/native
+load-module module-null-sink sink_name=output sink_properties=device.description=output
+load-module module-null-sink sink_name=input sink_properties=device.description=input
+set-default-sink output
+set-default-source input.monitor

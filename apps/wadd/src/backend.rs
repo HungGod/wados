@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde_json::{Map, Value};
-pub use wad_podman::ImageInfo;
 use wad_podman::Podman;
+pub use wad_podman::{ExecOut, ImageInfo};
 use wad_systemd::Systemd;
 
 pub type Res<T> = Result<T, String>;
@@ -73,6 +73,15 @@ pub trait Backend: Send + Sync + 'static {
     async fn container_pid(&self, name: &str) -> Res<Option<u32>>;
     /// A container's last lines of output.
     async fn container_logs(&self, name: &str, lines: usize) -> Res<Option<String>>;
+    /// Removes a volume (a stream's display, once it's over). False if there
+    /// was none; an error while a container still uses it ([`drop_volume`]
+    /// waits for them).
+    async fn remove_volume(&self, name: &str) -> Res<bool>;
+    /// The names of podman's volumes.
+    async fn volume_names(&self) -> Res<Vec<String>>;
+    /// Runs a command in a running container as `user` (a wadspace's
+    /// `wadspaces-session switch`): its exit code and output.
+    async fn exec(&self, name: &str, user: &str, cmd: &[&str]) -> Res<ExecOut>;
     /// Whether a running wadspace's desktop is up: its nested labwc runs and
     /// answers on its own socket, so it's connected to the compositor wadd
     /// served it and has made its window there.
@@ -85,6 +94,61 @@ pub trait Backend: Send + Sync + 'static {
     async fn write_units(&self, files: &[(String, String)], remove: &[String]) -> Res<bool>;
     async fn start(&self, unit: &str) -> Res<()>;
     async fn stop(&self, unit: &str) -> Res<()>;
+    /// Forgets a unit's failure (`systemctl reset-failed`).
+    async fn reset_failed(&self, unit: &str) -> Res<()>;
+}
+
+/// A quadlet volume (`<name>.volume`, its `VolumeName=` `volume`) gone for
+/// sure, deterministically: once each of `users` (its containers) has really
+/// gone (podman has removed it, polled every `poll` for `wait` at most), the
+/// unit files `files` removed and systemd reloaded, the volume's oneshot
+/// (`<name>-volume.service`, which stays active) stopped and its failure
+/// forgotten, then the volume removed, tried again while podman says it's
+/// still in use. What's left, said.
+pub async fn drop_volume(
+    b: &dyn Backend,
+    volume: &str,
+    unit: &str,
+    files: &[String],
+    users: &[String],
+    poll: Duration,
+    wait: Duration,
+) -> Res<()> {
+    let deadline = tokio::time::Instant::now() + wait;
+    for c in users {
+        loop {
+            match b.container_status(c).await {
+                Ok(s) if s == MISSING => break,
+                Ok(_) => {}
+                Err(e) => return Err(format!("{c}: {e}")),
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err(format!("{c} is still there after {} s, so its volume {volume} stays", wait.as_secs()));
+            }
+            tokio::time::sleep(poll).await;
+        }
+    }
+    b.write_units(&[], files).await?;
+    let oneshot = format!("{}-volume.service", unit.trim_end_matches(".volume"));
+    let _ = b.stop(&oneshot).await;
+    let _ = b.reset_failed(&oneshot).await;
+    let mut tries = 0;
+    loop {
+        match b.remove_volume(volume).await {
+            Ok(_) => return Ok(()),
+            Err(e) if tries < 10 && in_use(&e) => {
+                tries += 1;
+                tokio::time::sleep(poll.max(Duration::from_millis(200))).await;
+            }
+            Err(e) => return Err(format!("{volume}: {e}")),
+        }
+    }
+}
+
+/// Podman's word for a volume something still uses.
+fn in_use(e: &str) -> bool {
+    let e = e.to_lowercase();
+    e.contains("in use") || e.contains("being used")
 }
 
 /// A desktop is up: its labwc's pid file names a live process, and one of
@@ -241,6 +305,18 @@ impl Backend for Real {
         self.podman.container_logs(name, lines).await.map_err(s)
     }
 
+    async fn remove_volume(&self, name: &str) -> Res<bool> {
+        self.podman.remove_volume(name).await.map_err(s)
+    }
+
+    async fn volume_names(&self) -> Res<Vec<String>> {
+        self.podman.volume_names().await.map_err(s)
+    }
+
+    async fn exec(&self, name: &str, user: &str, cmd: &[&str]) -> Res<ExecOut> {
+        self.podman.exec(name, user, cmd, &[]).await.map_err(s)
+    }
+
     async fn desktop_up(&self, name: &str) -> Res<bool> {
         let out = self.podman.exec(name, "abc", &["sh", "-c", DESKTOP_UP], &[]).await.map_err(s)?;
         Ok(out.code == 0)
@@ -260,6 +336,10 @@ impl Backend for Real {
 
     async fn stop(&self, unit: &str) -> Res<()> {
         self.systemd().await?.stop(unit, Duration::from_secs(120)).await.map_err(s)
+    }
+
+    async fn reset_failed(&self, unit: &str) -> Res<()> {
+        self.systemd().await?.reset_failed(unit).await.map_err(s)
     }
 }
 
