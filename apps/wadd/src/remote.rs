@@ -170,7 +170,7 @@ async fn wadspace(State(r): State<Arc<Remote>>, Path(id): Path<String>) -> Answe
 /// Something on the machine's screen to say what a device did.
 fn notice(r: &Remote, text: String) {
     tracing::info!("remote: {text}");
-    r.app.bus.publish(Event::Notice { level: Level::Info, title: text, undo: None });
+    r.app.bus.publish(Event::notice(Level::Info, text, None));
 }
 
 async fn build(

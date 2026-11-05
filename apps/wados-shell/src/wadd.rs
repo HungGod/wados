@@ -155,11 +155,8 @@ impl Link {
     /// A failure, as the person sees it: a toast with wadd's words.
     fn say_failure(&self, e: &Failure) {
         tracing::info!("wadd: {} ({})", e.message, e.code);
-        self.store.apply(wad_proto::Event::Notice {
-            level: if e.is_unreachable() { wad_proto::Level::Warn } else { wad_proto::Level::Error },
-            title: e.message.clone(),
-            undo: None,
-        });
+        let level = if e.is_unreachable() { wad_proto::Level::Warn } else { wad_proto::Level::Error };
+        self.store.apply(wad_proto::Event::notice(level, e.message.clone(), None));
     }
 }
 

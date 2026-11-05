@@ -89,7 +89,7 @@ impl Docs {
             id
         });
         if let Some(t) = &out.toast {
-            self.bus.publish(Event::Notice { level: Level::Info, title: t.clone(), undo: undo.clone() });
+            self.bus.publish(Event::notice(Level::Info, t.clone(), undo.clone()));
         }
         Ok(OpResult {
             changed: out.changed,
@@ -98,6 +98,22 @@ impl Docs {
             toast: out.toast,
             needs_build: out.needs_build,
         })
+    }
+
+    /// Deletes a wadspace in the Trash for good (its document; what wadd
+    /// keeps for it is the caller's to clear). Its Undos go with it.
+    pub fn purge(&self, id: &str) -> Result<OpResult, ApiError> {
+        let mut lib = self.lib.lock().unwrap();
+        let w = lib.wadspace(id).ok_or_else(|| ApiError::not_found(format!("no wadspace {id:?}")))?;
+        if !w.is_trashed() {
+            return Err(ApiError::conflict(format!("{} isn't in the Trash: put it there first", w.name)));
+        }
+        let mut next = lib.clone();
+        next.wadspaces.retain(|x| x.id != id);
+        let changed = vec![id.to_string()];
+        self.commit(&mut lib, next, &changed)?;
+        self.undos.lock().unwrap().retain(|u| u.wadspace.id != id);
+        Ok(OpResult { changed, ..OpResult::default() })
     }
 
     /// Puts back what an edit took out (its Undo, once).

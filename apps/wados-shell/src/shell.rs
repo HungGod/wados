@@ -230,7 +230,7 @@ impl Shell {
 
     /// Something to tell the person (the toasts show it, as wadd's notices).
     pub fn toast(&self, level: Level, title: &str, undo: Option<String>) {
-        self.store.apply(Event::Notice { level, title: title.into(), undo });
+        self.store.apply(Event::notice(level, title, undo));
     }
 
     // ------------------------------------------------------------ wadsctl

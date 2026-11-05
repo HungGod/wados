@@ -26,9 +26,10 @@ use wad_proto::{
     DeviceKind, DriveState, Event, GithubAccount, JobInfo, MachineInfo, SignInProvider, SignInRequest, Tailnet,
     TailnetAsk, TailnetDevice, TailnetState,
 };
-use wad_wadd_client::Failure;
+use wad_wadd_client::{Failure, Incoming};
 
 use crate::link::Link;
+use crate::panel::{Ctx, Panel};
 
 /// What the panel knows, from wadd's events.
 #[derive(Debug, Default)]
@@ -572,6 +573,52 @@ impl Accounts {
         let mut out = vec![];
         walk(self.root.upcast_ref(), &mut out);
         out.join(" | ")
+    }
+}
+
+// ------------------------------------------------------------ as a panel
+
+/// Accounts as Settings' panel: its page is made with it, and keeps up
+/// with wadd's events from the start.
+pub fn make(ctx: &Ctx) -> Rc<dyn Panel> {
+    Rc::new(AccountsPanel(Accounts::new(ctx.link.clone())))
+}
+
+struct AccountsPanel(Rc<Accounts>);
+
+impl Panel for AccountsPanel {
+    fn build(&self, _: &Ctx) -> gtk::Widget {
+        self.0.draw();
+        self.0.root.clone().upcast()
+    }
+
+    fn on_event(&self, _: &Ctx, i: &Incoming) {
+        let a = &self.0;
+        let changed = match i {
+            Incoming::Event(e) => {
+                let mut st = a.state.borrow_mut();
+                let was = st.connected;
+                st.connected = true;
+                st.apply(e.clone()) || !was
+            }
+            Incoming::Disconnected => {
+                let mut st = a.state.borrow_mut();
+                std::mem::replace(&mut st.connected, false)
+            }
+            Incoming::Other(..) => false,
+        };
+        if changed {
+            a.queue_draw();
+        }
+    }
+
+    fn ready(&self) -> bool {
+        self.0.state.borrow().connected
+    }
+
+    fn dump(&self, _: &gtk::Widget) -> String {
+        self.0.draw();
+        self.0.dump()
     }
 }
 

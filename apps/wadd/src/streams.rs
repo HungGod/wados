@@ -1578,11 +1578,8 @@ impl MachineStreams {
         let Some(guid) = self.streaming(id) else { return };
         let name = self.docs.wadspace(id).map_or_else(|| id.to_string(), |w| w.name);
         if self.end_to(id, &guid, "it was opened on this machine's screen", Some(display)).await.is_some() {
-            self.bus.publish(Event::Notice {
-                level: Level::Info,
-                title: format!("{name}'s stream ended: it's on this machine's screen now"),
-                undo: None,
-            });
+            let title = format!("{name}'s stream ended: it's on this machine's screen now");
+            self.bus.publish(Event::notice(Level::Info, title, None));
         }
     }
 

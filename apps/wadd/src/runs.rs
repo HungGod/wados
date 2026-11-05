@@ -469,7 +469,7 @@ impl Runs {
             }
             if let Err(e) = me.open(&i, display) {
                 tracing::warn!("{i}: it didn't open after its stream: {}", e.message);
-                me.bus.publish(Event::Notice { level: Level::Warn, title: e.message, undo: None });
+                me.bus.publish(Event::notice(Level::Warn, e.message, None));
             }
         });
         Ok(self.state(id))
@@ -574,7 +574,7 @@ impl Runs {
         let prepared = p.prepare(ws, &opening, &say).await;
         for l in &prepared.left_out {
             let title = if l.why.contains(&l.name) { l.why.clone() } else { format!("{}: {}", l.name, l.why) };
-            self.bus.publish(Event::Notice { level: Level::Warn, title, undo: None });
+            self.bus.publish(Event::notice(Level::Warn, title, None));
         }
         (prepared.mounts, Some(opening))
     }

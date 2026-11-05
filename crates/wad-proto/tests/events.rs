@@ -1,14 +1,17 @@
-//! Phase 6's and 7's events, through JSON and back as the shell decodes them
+//! Phase 6's, 7's and 8's events, through JSON and back as the shell decodes them
 //! (wad-wadd-client's `decode`: one `Event` from each SSE's data). Each is
 //! tagged `kind` beside its own fields, so none of them may have a `kind`
 //! of its own at the top (a tailnet's devices and a peer do, nested).
 
 use serde_json::{Value, json};
+use wad_model::Built;
 use wad_model::{Peer, PeerKind, StreamMode, StreamStage, Transport};
 use wad_proto::streams::{SECURE_NEEDS_VM, TURN_DOWN};
 use wad_proto::{
-    DeviceKind, DriveState, Event, GithubAccount, PeerInfo, SignInProvider, StreamInfo, StreamList,
-    StreamsAvailability, Tailnet, TailnetAsk, TailnetDevice, TailnetState,
+    Bluetooth, BtAsk, BtDevice, BtKind, BtPrompt, DeviceKind, DriveState, Ethernet, Event, ExitNodeChoice,
+    GithubAccount, Level, Network, NoticeAction, PeerInfo, SignInProvider, Storage, StreamInfo, StreamList,
+    StreamsAvailability, Tailnet, TailnetAsk, TailnetDevice, TailnetState, UpdateProgress, Updates, Version,
+    WadspaceStorage, WifiBand, WifiNetwork,
 };
 
 /// To JSON and back: the same event, tagged `kind`.
@@ -173,4 +176,148 @@ fn the_streams() {
     assert_eq!(e.ends_key(), None);
     // None streaming.
     round_trip(&Event::Streams { streams: vec![], available: StreamsAvailability::of(false, false, false) }, "streams");
+}
+
+#[test]
+fn the_network() {
+    let e = Event::Network(Box::new(Network {
+        wifi_on: true,
+        airplane: false,
+        connected: Some("Home".into()),
+        ethernet: Ethernet { plugged: true, speed_mbps: Some(1000), ip: Some("192.168.1.9".into()) },
+        networks: vec![WifiNetwork {
+            ssid: "Home".into(),
+            signal: 82,
+            secure: true,
+            saved: true,
+            active: true,
+            band: Some(WifiBand::Ghz5),
+        }],
+        ip: Some("192.168.1.42".into()),
+        dns: vec!["192.168.1.1".into()],
+        exit_node: Some("nDesk1".into()),
+        exit_nodes: vec![ExitNodeChoice {
+            id: "nDesk1".into(),
+            name: "Desk".into(),
+            os: "linux".into(),
+            kind: DeviceKind::Desktop,
+        }],
+    }));
+    let v = round_trip(&e, "network");
+    assert_eq!((v["wifiOn"].as_bool(), v["networks"][0]["band"].as_str()), (Some(true), Some("5GHz")));
+    assert_eq!(v["exitNodes"][0]["kind"], "desktop");
+    assert_eq!(e.latest_key().as_deref(), Some("network"));
+    round_trip(&Event::Network(Box::default()), "network");
+}
+
+#[test]
+fn bluetooth_and_what_pairing_asks() {
+    let e = Event::Bluetooth(Box::new(Bluetooth {
+        on: true,
+        discoverable_name: "surface".into(),
+        devices: vec![BtDevice {
+            address: "AA:BB:CC:00:00:01".into(),
+            name: "Pixel Buds Pro".into(),
+            kind: BtKind::Headphones,
+            paired: true,
+            connected: true,
+            battery: Some(80),
+        }],
+        scanning: false,
+    }));
+    let v = round_trip(&e, "bluetooth");
+    // A device's kind is nested: it doesn't meet the tag.
+    assert_eq!((v["devices"][0]["kind"].as_str(), v["devices"][0]["battery"].as_u64()), (Some("headphones"), Some(80)));
+    assert_eq!(e.latest_key().as_deref(), Some("bluetooth"));
+
+    // A prompt has a kind of its own (what it asks): nested under `prompt`.
+    let p = Event::BtPrompt {
+        prompt: Some(BtPrompt {
+            id: "bt-prompt-1".into(),
+            device: "AA:BB:CC:00:00:03".into(),
+            name: "JBL Flip 6".into(),
+            kind: BtAsk::Confirm { code: "492817".into() },
+        }),
+    };
+    let v = round_trip(&p, "btPrompt");
+    assert_eq!((v["prompt"]["kind"].as_str(), v["prompt"]["code"].as_str()), (Some("confirm"), Some("492817")));
+    for ask in [BtAsk::Show { code: "1234".into() }, BtAsk::Enter, BtAsk::Authorize] {
+        let p = Event::BtPrompt {
+            prompt: Some(BtPrompt { id: "p".into(), device: "AA".into(), name: "Old".into(), kind: ask }),
+        };
+        round_trip(&p, "btPrompt");
+    }
+    // None: answered (or gone), and it's the present too.
+    let none = Event::BtPrompt { prompt: None };
+    assert_eq!(round_trip(&none, "btPrompt"), json!({"kind": "btPrompt", "prompt": null}));
+    assert_eq!(none.latest_key(), p.latest_key());
+}
+
+#[test]
+fn updates() {
+    let v = |s: &str| Version { version: s.into(), image: "ghcr.io/hunggod/wados-host:44".into(), digest: None };
+    let e = Event::Updates(Box::new(Updates {
+        online: true,
+        checking: false,
+        booted: v("44.20261104.0"),
+        available: Some(v("44.20261105.0")),
+        staged: None,
+        rollback: Some(v("44.20261028.0")),
+        error: None,
+        checked_at: Some(5),
+        progress: Some(UpdateProgress { done_bytes: 1, total_bytes: 2 }),
+        job: Some("job-1".into()),
+    }));
+    let j = round_trip(&e, "updates");
+    assert_eq!(
+        (j["booted"]["version"].as_str(), j["progress"]["totalBytes"].as_u64()),
+        (Some("44.20261104.0"), Some(2))
+    );
+    assert!(j.get("staged").is_none(), "{j}");
+    assert_eq!(e.latest_key().as_deref(), Some("updates"));
+}
+
+#[test]
+fn storage() {
+    let e = Event::Storage(Box::new(Storage {
+        total: 512,
+        free: 300,
+        bases: 3,
+        wadspaces: 100,
+        other: 109,
+        per_wadspace: vec![WadspaceStorage { id: "studio".into(), bytes: 100, built: Built::Built }],
+    }));
+    let v = round_trip(&e, "storage");
+    assert_eq!(v["perWadspace"][0]["built"], "built");
+    assert_eq!(e.latest_key().as_deref(), Some("storage"));
+}
+
+#[test]
+fn a_notice_from_before_and_a_richer_one() {
+    // What wadd sent before phase 8 (and the shell's own): a toast.
+    let old: Event = serde_json::from_value(
+        json!({"kind": "notice", "level": "info", "title": "Moved to the Trash", "undo": "undo-1"}),
+    )
+    .unwrap();
+    assert_eq!(old, Event::notice(Level::Info, "Moved to the Trash", Some("undo-1".into())));
+    let Event::Notice { toast, body, action, .. } = &old else { panic!("{old:?}") };
+    assert!(*toast && body.is_none() && action.is_none());
+    // It goes out as it did.
+    assert_eq!(
+        round_trip(&old, "notice"),
+        json!({"kind": "notice", "level": "info", "title": "Moved to the Trash", "undo": "undo-1"})
+    );
+    let rich = Event::Notice {
+        level: Level::Ok,
+        title: "WadSpaces 44.20261105.0 is ready".into(),
+        undo: None,
+        body: Some("Restart to start it.".into()),
+        icon: Some("download".into()),
+        action: Some(NoticeAction::new("Restart", "power.restart", &[])),
+        toast: false,
+    };
+    let v = round_trip(&rich, "notice");
+    assert_eq!((v["action"]["verb"].as_str(), v["toast"].as_bool()), (Some("power.restart"), Some(false)));
+    assert!(v["action"].get("args").is_none(), "{v}");
+    assert_eq!(rich.latest_key(), None);
 }

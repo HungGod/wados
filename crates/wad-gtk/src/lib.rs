@@ -6,6 +6,7 @@
 pub mod app_icon;
 pub mod assets;
 pub mod fonts;
+pub mod form;
 pub mod icon;
 pub mod keyed;
 pub mod kit;

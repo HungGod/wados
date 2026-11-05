@@ -276,6 +276,23 @@ impl Builds {
         }
     }
 
+    /// A wadspace's image that only it has (wadspaces with the same set
+    /// share one), to remove once it's gone for good: before
+    /// [`Builds::edited`], which forgets its record.
+    pub fn sole_image(&self, id: &str) -> Option<String> {
+        let rec = self.records.get(id)?;
+        let shared = self.records.all().iter().any(|(other, r)| other != id && r.image == rec.image);
+        (!shared && rec.image != BASE_IMAGE).then_some(rec.image)
+    }
+
+    /// Removes an image nothing has any more.
+    pub async fn remove_image(&self, image: &str) {
+        match self.backend.remove_image(image).await {
+            Ok(_) => tracing::info!("removed {image}: nothing has it any more"),
+            Err(e) => tracing::warn!("removing {image}: {e}"),
+        }
+    }
+
     /// The images the records name, checked: one that's gone is forgotten.
     pub async fn check_records(&self) {
         for (id, r) in self.records.all() {

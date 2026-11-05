@@ -9,6 +9,7 @@
 //! | `GET /v1/library` | its wadspaces, tags, keys, web apps (wad_model's `Library`) |
 //! | `GET /v1/wadspaces` | its wadspaces not in the Trash, in order |
 //! | `GET /v1/wadspaces/{id}` | one wadspace's document |
+//! | `DELETE /v1/wadspaces/{id}` | one in the Trash, gone for good (its document, image, units, state) → [`OpResult`] |
 //! | `POST /v1/ops` | one edit ([`OpRequest`]) → [`OpResult`] |
 //! | `POST /v1/undo/{id}` | an edit's Undo → [`OpResult`] |
 //! | `POST /v1/wadspaces/{id}/build` | its image built here (a job) → [`BuildAnswer`] |
@@ -25,7 +26,8 @@
 //! | `GET /v1/logs?n=` | wadd's last log lines, secrets taken out |
 //!
 //! Phase 6's (the tailnet, peers, GitHub) are in [`crate::api_phase6`],
-//! phase 7's (streams) in [`crate::api_phase7`].
+//! phase 7's (streams) in [`crate::api_phase7`], phase 8's (the network,
+//! Bluetooth, updates, storage) in [`crate::api_phase8`].
 
 use std::convert::Infallible;
 use std::sync::Arc;
@@ -78,6 +80,11 @@ pub struct AppState {
     pub keys: crate::keys::MachineKeys,
     /// Streams ([`crate::api_phase7`]).
     pub streams: Arc<dyn Streams>,
+    /// The system apps' ([`crate::api_phase8`]).
+    pub network: Arc<dyn crate::api_phase8::Network>,
+    pub bluetooth: Arc<dyn crate::api_phase8::Bluetooth>,
+    pub updates: Arc<dyn crate::api_phase8::Updates>,
+    pub storage: Arc<dyn crate::api_phase8::Storage>,
 }
 
 /// An ApiError as an HTTP response.
@@ -135,7 +142,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/machine", get(machine))
         .route("/v1/library", get(library))
         .route("/v1/wadspaces", get(wadspaces))
-        .route("/v1/wadspaces/{id}", get(wadspace))
+        .route("/v1/wadspaces/{id}", get(wadspace).delete(purge))
         .route("/v1/wadspaces/{id}/build", post(build))
         .route("/v1/wadspaces/{id}/open", post(open))
         .route("/v1/wadspaces/{id}/stop", post(stop))
@@ -152,6 +159,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/logs", get(logs))
         .merge(crate::api_phase6::routes())
         .merge(crate::api_phase7::routes())
+        .merge(crate::api_phase8::routes())
         .layer(middleware::from_fn_with_state(app.clone(), check_peer))
         .with_state(app)
 }
@@ -170,6 +178,24 @@ async fn wadspaces(State(app): State<Arc<AppState>>) -> Json<Vec<Wadspace>> {
 
 async fn wadspace(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<Wadspace>, Failure> {
     app.docs.wadspace(&id).map(Json).ok_or_else(|| Failure(ApiError::not_found(format!("no wadspace {id:?}"))))
+}
+
+/// A wadspace out of the Trash for good (the Trash emptied): it stops, and
+/// its document, image (unless another wadspace has it), units and state go.
+/// Not in the Trash: 409.
+async fn purge(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<OpResult>, Failure> {
+    let app2 = app.clone();
+    let id2 = id.clone();
+    let out = tokio::task::spawn_blocking(move || app2.docs.purge(&id2))
+        .await
+        .map_err(|e| Failure(ApiError::internal(e.to_string())))??;
+    let image = app.builds.sole_image(&id);
+    // It stops first, and what wadd kept for it goes; then its image.
+    edited(&app, &out.changed).await;
+    if let Some(image) = image {
+        app.builds.remove_image(&image).await;
+    }
+    Ok(Json(out))
 }
 
 async fn ops(State(app): State<Arc<AppState>>, Json(req): Json<OpRequest>) -> Result<Json<OpResult>, Failure> {

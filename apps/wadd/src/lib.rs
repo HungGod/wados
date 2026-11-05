@@ -14,6 +14,10 @@
 //! Phase 7: streams (streams.rs, their routes in api_phase7.rs, sample
 //! data in fake_phase7.rs; TURN in turn.rs).
 //!
+//! Phase 8: the system apps' routes (api_phase8.rs: the network,
+//! Bluetooth, updates, storage; 501 until they're made, sample data in
+//! fake_phase8.rs), and deleting a wadspace out of the Trash for good.
+//!
 //! Later phases: Open-with files, runs of one time,
 //! keys' sign-in flows, devices, the network, updates, install, server mode,
 //! focus, and the tidy-up of images nothing needs (v1's tidy.rs).
@@ -22,6 +26,7 @@ pub mod access;
 pub mod api;
 pub mod api_phase6;
 pub mod api_phase7;
+pub mod api_phase8;
 pub mod backend;
 pub mod builds;
 pub mod clip;
@@ -30,6 +35,7 @@ pub mod events;
 pub mod fake;
 pub mod fake_phase6;
 pub mod fake_phase7;
+pub mod fake_phase8;
 pub mod github;
 pub mod jobs;
 pub mod keys;
@@ -89,8 +95,8 @@ pub struct Parts {
     pub hands: Arc<dyn screen::Hands>,
     /// Between readiness checks.
     pub poll: Duration,
-    /// The tailnet, peers, GitHub ([`fake_phase6`]) and streams
-    /// ([`fake_phase7`]) as sample data, each stage of its jobs taking this
+    /// The tailnet, peers, GitHub ([`fake_phase6`]), streams
+    /// ([`fake_phase7`]) and the system apps' ([`fake_phase8`]) as sample data, each stage of its jobs taking this
     /// long; none: the machine's.
     pub sample: Option<Duration>,
 }
@@ -103,6 +109,21 @@ impl Parts {
             poll: Duration::from_secs(1),
             sample: None,
         }
+    }
+}
+
+/// Phase 8's: the system apps' backends.
+struct System {
+    network: Arc<dyn api_phase8::Network>,
+    bluetooth: Arc<dyn api_phase8::Bluetooth>,
+    updates: Arc<dyn api_phase8::Updates>,
+    storage: Arc<dyn api_phase8::Storage>,
+}
+
+impl System {
+    fn not_yet() -> Self {
+        let n = Arc::new(api_phase8::NotYet);
+        Self { network: n.clone(), bluetooth: n.clone(), updates: n.clone(), storage: n }
     }
 }
 
@@ -272,6 +293,26 @@ impl Server {
                 s
             }
         };
+        let system = match parts.sample {
+            Some(step) => {
+                let s = fake_phase8::Sample::new(
+                    &machine.name.to_lowercase(),
+                    jobs.clone(),
+                    bus.clone(),
+                    docs.clone(),
+                    builds.clone(),
+                    net.clone(),
+                    step,
+                );
+                System {
+                    network: Arc::new(s.clone()),
+                    bluetooth: Arc::new(s.clone()),
+                    updates: Arc::new(s.clone()),
+                    storage: Arc::new(s),
+                }
+            }
+            None => System::not_yet(),
+        };
         let state = Arc::new(AppState {
             machine,
             profile,
@@ -287,6 +328,10 @@ impl Server {
             accounts,
             keys,
             streams,
+            network: system.network,
+            bluetooth: system.bluetooth,
+            updates: system.updates,
+            storage: system.storage,
         });
         Ok(Self {
             listener,

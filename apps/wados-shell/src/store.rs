@@ -198,7 +198,7 @@ impl Store {
                 *self.screen.borrow_mut() = Some(s);
                 Change::Screen
             }
-            Event::Notice { level, title, undo } => Change::Notice { level, title, undo },
+            Event::Notice { level, title, undo, .. } => Change::Notice { level, title, undo },
             Event::Tailnet(t) => {
                 *self.tailnet.borrow_mut() = Some(t);
                 Change::Tailnet
@@ -224,6 +224,14 @@ impl Store {
                 *self.stream_modes.borrow_mut() = Some(available);
                 self.streams_said.set(self.streams_said.get() + 1);
                 Change::Streams
+            }
+            // Phase 8's system state: the shell doesn't keep it (yet).
+            Event::Network(_)
+            | Event::Bluetooth(_)
+            | Event::BtPrompt { .. }
+            | Event::Updates(_)
+            | Event::Storage(_) => {
+                return;
             }
         };
         self.tell(change);

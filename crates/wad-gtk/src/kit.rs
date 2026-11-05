@@ -61,6 +61,8 @@ headerbar.kit-head windowcontrols button:hover { background: var(--surface-3); c
 .kit-page-bar { min-height: 52px; padding: 0 14px; border-bottom: 1px solid var(--line); }
 .kit-page-title { font-family: 'Space Grotesk', Inter, sans-serif; font-weight: 600; font-size: 15px; }
 .kit-column { padding: 24px 28px 56px; }
+button.kit-back { min-width: 34px; min-height: 34px; padding: 0; border-radius: 10px; border: none; background: none; background-image: none; box-shadow: none; color: var(--muted); }
+button.kit-back:hover { background-color: var(--surface-3); color: var(--fg); }
 
 /* ---- a group: its title over a boxed list (GNOME's) */
 .kit-group-head { padding: 0 4px; }
@@ -126,6 +128,7 @@ pub fn install(display: &gdk::Display) {
         return;
     }
     crate::theme::add_css(display, CSS);
+    crate::theme::add_css(display, crate::form::CSS);
 }
 
 /// A button's look (`ui/Button.svelte`'s variants).
@@ -237,6 +240,54 @@ pub fn icon_tile(icon: &'static str, tone: Tone, side: i32, size: i32) -> gtk::B
     i.set_valign(gtk::Align::Center);
     b.append(&i);
     b
+}
+
+/// A panel's page (Settings' `parts/Page.svelte`): its bar (`back`, a
+/// back button at its start, when it's a page within a panel; the title;
+/// `end` for the panel's own switch), over a scrolling, centred column of
+/// groups (`column`, 644 wide, as Accounts').
+pub struct Page {
+    pub root: gtk::Box,
+    pub column: gtk::Box,
+    pub end: gtk::Box,
+    pub back: Option<gtk::Button>,
+    pub title: gtk::Label,
+}
+
+impl Page {
+    pub fn new(title: &str, back: bool) -> Self {
+        let root = gtk::Box::builder().orientation(gtk::Orientation::Vertical).hexpand(true).build();
+        let bar = gtk::CenterBox::builder().css_classes(["kit-page-bar"]).build();
+        let back = back.then(|| {
+            let b = gtk::Button::builder().child(&Icon::new("chevron-left", 18)).css_classes(["kit-back"]).build();
+            b.set_valign(gtk::Align::Center);
+            b.set_tooltip_text(Some("Back"));
+            bar.set_start_widget(Some(&b));
+            b
+        });
+        let t = gtk::Label::builder().label(title).css_classes(["kit-page-title"]).build();
+        bar.set_center_widget(Some(&t));
+        let end = gtk::Box::builder().spacing(8).valign(gtk::Align::Center).halign(gtk::Align::End).build();
+        bar.set_end_widget(Some(&end));
+        root.append(&bar);
+        let scroll = gtk::ScrolledWindow::builder().hscrollbar_policy(gtk::PolicyType::Never).vexpand(true).build();
+        let column = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(28)
+            .css_classes(["kit-column"])
+            .halign(gtk::Align::Center)
+            .build();
+        column.set_size_request(644, -1);
+        let outer = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
+        outer.append(&column);
+        scroll.set_child(Some(&outer));
+        root.append(&scroll);
+        Self { root, column, end, back, title: t }
+    }
+
+    pub fn add(&self, w: &impl IsA<gtk::Widget>) {
+        self.column.append(w);
+    }
 }
 
 /// A titled group (`parts/Group.svelte`): its head (a title over a

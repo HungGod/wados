@@ -867,6 +867,8 @@ pub enum JobKind {
     GameDownload,
     GameStage,
     DiscStage,
+    /// Removing what nothing uses (Settings ▸ Storage's Clean Up).
+    Cleanup,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

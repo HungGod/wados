@@ -13,6 +13,7 @@ use wad_proto::Event;
 
 mod phase6;
 mod phase7;
+mod phase8;
 mod sse;
 pub use reqwest::Method;
 pub use sse::SseParser;

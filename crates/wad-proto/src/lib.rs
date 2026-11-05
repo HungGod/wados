@@ -5,22 +5,34 @@
 //! over the wire as it's saved. Edits are [`wad_model::edit::Op`]s, applied
 //! by wadd (`POST /v1/ops`), so every surface edits the same way.
 
+pub mod bluetooth;
 mod error;
 pub mod github;
+pub mod network;
+pub mod notice;
 pub mod peers;
 pub mod signin;
+pub mod storage;
 pub mod streams;
 pub mod tailnet;
+pub mod updates;
 
+pub use bluetooth::{Bluetooth, BtAnswer, BtAsk, BtDevice, BtKind, BtPrompt};
 pub use error::{ApiError, ErrorCode};
 pub use github::{GithubAccount, Repo, SignInRequest};
+pub use network::{
+    Ethernet, ExitNode, ExitNodeChoice, Network, Switch, WifiBand, WifiConnect, WifiForget, WifiNetwork,
+};
+pub use notice::NoticeAction;
 pub use peers::PeerInfo;
 pub use signin::SignInProvider;
+pub use storage::{Storage, WadspaceStorage};
 pub use streams::{Availability, StreamInfo, StreamList, StreamRequest, StreamShare, StreamsAvailability};
 pub use tailnet::{
     Answer, DeviceKind, DriveState, RemoteHello, RemoteMachine, RemoteTrust, Tailnet, TailnetAsk, TailnetDevice,
     TailnetState, TrustAnswer, TrustBook,
 };
+pub use updates::{Base, Bases, UpdateProgress, Updates, Version};
 
 /// The edits themselves (wad_model's), for callers that only depend on wad-proto.
 pub mod wad_model_op {
@@ -122,12 +134,27 @@ pub enum Event {
     WadspaceGone {
         id: String,
     },
-    /// Something to tell the person (a toast), with an Undo when it took something out.
+    /// Something to tell the person (a toast, and in the bell's
+    /// Notifications), with an Undo when it took something out. The rest
+    /// came in phase 8 ([`notice`]), each optional: a notice without them is
+    /// a toast, as before (what [`Event::notice`] makes).
     Notice {
         level: Level,
         title: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         undo: Option<String>,
+        /// A line or two under the title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+        /// A Lucide icon's name (`rotate-ccw`, `bluetooth`…); none: the level's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        icon: Option<String>,
+        /// A button beside the Undo (Restart, Open Settings…).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        action: Option<NoticeAction>,
+        /// Shown as a toast too, not only in Notifications.
+        #[serde(default = "notice::yes", skip_serializing_if = "notice::is_yes")]
+        toast: bool,
     },
     /// A job (a wadspace's build) as it is now: its stages, progress and the last of its log.
     /// Nested under `job`: a job has a `kind` of its own (build…), which would clash with the tag.
@@ -178,6 +205,19 @@ pub enum Event {
         streams: Vec<StreamInfo>,
         available: StreamsAvailability,
     },
+    /// Wi-Fi, ethernet, airplane mode and the exit node, as `GET /v1/network` has them.
+    Network(Box<Network>),
+    /// Bluetooth and its devices, as `GET /v1/bluetooth` has them.
+    Bluetooth(Box<Bluetooth>),
+    /// What pairing asks now (the shell's dialog); none: nothing (answered,
+    /// cancelled, timed out). Nested: a prompt has a `kind` of its own.
+    BtPrompt {
+        prompt: Option<BtPrompt>,
+    },
+    /// WadOS's own image: running, found, staged, as `GET /v1/update` has it.
+    Updates(Box<Updates>),
+    /// The disk, as `GET /v1/storage` has it.
+    Storage(Box<Storage>),
 }
 
 impl Event {
@@ -194,6 +234,11 @@ impl Event {
             Event::Github { .. } => Some("github".into()),
             Event::SignIn { provider, .. } => Some(format!("signIn:{provider}")),
             Event::Streams { .. } => Some("streams".into()),
+            Event::Network(_) => Some("network".into()),
+            Event::Bluetooth(_) => Some("bluetooth".into()),
+            Event::BtPrompt { .. } => Some("btPrompt".into()),
+            Event::Updates(_) => Some("updates".into()),
+            Event::Storage(_) => Some("storage".into()),
             Event::Library(_)
             | Event::Wadspace(_)
             | Event::WadspaceGone { .. }
