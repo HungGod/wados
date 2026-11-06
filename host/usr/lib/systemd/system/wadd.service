@@ -21,18 +21,23 @@ StateDirectory=wados
 StateDirectoryMode=0711
 # /run/wados/screen: the wadspaces' screen folders ([daemon] screen_dir).
 # Kept when wadd restarts: the wadspaces running have them mounted.
-RuntimeDirectory=wados/screen
+# /run/wados/bootc: what bootc says, written there by the units wadd has
+# systemd run it in (apps/wadd/src/updates.rs).
+RuntimeDirectory=wados/screen wados/bootc
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 # Everything else read-only. wadd writes the wadspaces' units in
-# /run/containers/systemd ([daemon] units_dir) and a tunnel's token in
-# /etc/cloudflared (later). It reads the person's home (a build's COPY, a
-# wallpaper), and binds PulseAudio's folder into a screen folder in PID 1's
+# /run/containers/systemd ([daemon] units_dir), a tunnel's token in
+# /etc/cloudflared (later), and for a private host image ostree's registry
+# login, /run/ostree/auth.json (0600; in /run, never on the disk). bootc
+# itself runs as a unit of its own (systemd-run), outside this sandbox.
+# wadd reads the person's home (a build's COPY, a wallpaper), and binds PulseAudio's folder into a screen folder in PID 1's
 # mounts (apps/wadd/src/mounts.rs), which this namespace doesn't stop.
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/var/lib/wados /run/containers/systemd
 ReadWritePaths=-/etc/cloudflared
+ReadWritePaths=-/run/ostree
 PrivateTmp=yes
 NoNewPrivileges=yes
 

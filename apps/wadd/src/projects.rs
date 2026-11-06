@@ -82,6 +82,14 @@ pub struct Settings {
     pub github: String,
     /// Taildrive's server.
     pub taildrive: String,
+    /// A uid's home and name (getpwuid): a machine's person, looked up again
+    /// when it had none at first.
+    pub lookup: fn(u32) -> Option<(PathBuf, String)>,
+}
+
+/// A uid's home and name, from the machine's users.
+pub fn user_of(uid: u32) -> Option<(PathBuf, String)> {
+    nix::unistd::User::from_uid(uid.into()).ok().flatten().map(|u| (u.dir, u.name))
 }
 
 impl Settings {
@@ -96,8 +104,7 @@ impl Settings {
         } else {
             nix::unistd::User::from_uid(nix::unistd::getuid()).ok().flatten().map(|u| u.name)
         };
-        let mut roots: Vec<PathBuf> = home.iter().cloned().collect();
-        roots.extend(name.map(|n| PathBuf::from("/run/media").join(n)));
+        let roots = Self::roots_for(home.as_deref(), name.as_deref());
         Self {
             state_dir: d.state_dir.clone(),
             projects_dir: d.projects_dir.clone(),
@@ -110,7 +117,15 @@ impl Settings {
             // github.com, or the stand-in a test machine's configuration names.
             github: if config.github.web.is_empty() { GITHUB.into() } else { config.github.web.clone() },
             taildrive: taildrive::TAILDRIVE.into(),
+            lookup: user_of,
         }
+    }
+
+    /// What of this machine may go into a wadspace: the home, and the person's removable drives.
+    pub fn roots_for(home: Option<&Path>, name: Option<&str>) -> Vec<PathBuf> {
+        let mut roots: Vec<PathBuf> = home.iter().map(|h| h.to_path_buf()).collect();
+        roots.extend(name.map(|n| PathBuf::from("/run/media").join(n)));
+        roots
     }
 
     /// Who owns what wadd makes for a wadspace: the projects user, when wadd is root.
@@ -449,8 +464,28 @@ impl Projects {
 
     /// A path of this machine ('~/Thesis', or whole) that may go into a
     /// wadspace: there, inside the roots, nothing hidden; symlinks resolved.
+    /// A path of this machine's (`~/…` or absolute) that may go into a
+    /// wadspace: in the person's home, not hidden (Open with's file).
+    pub fn local_path(&self, name: &str, path: &str) -> Result<PathBuf, String> {
+        self.local(name, path, false)
+    }
+
+    /// The person's home and what may go in, as they are now: a machine's
+    /// person is looked up again when there was none as wadd started (made
+    /// after it: the installer, a test's useradd).
+    fn person(&self) -> (Option<PathBuf>, Vec<PathBuf>) {
+        if self.s.home.is_some() || !self.s.system {
+            return (self.s.home.clone(), self.s.roots.clone());
+        }
+        match (self.s.lookup)(self.s.uid) {
+            Some((home, name)) => (Some(home.clone()), Settings::roots_for(Some(&home), Some(&name))),
+            None => (None, self.s.roots.clone()),
+        }
+    }
+
     fn local(&self, name: &str, path: &str, make: bool) -> Result<PathBuf, String> {
-        let home = self.s.home.as_ref();
+        let (home, roots) = self.person();
+        let home = home.as_ref();
         let full = match path.strip_prefix('~') {
             Some("") => home.cloned().ok_or("this machine's person has no home")?,
             Some(rest) if rest.starts_with('/') => {
@@ -481,7 +516,7 @@ impl Projects {
         }
         let real = std::fs::canonicalize(&full)
             .map_err(|_| format!("{name} isn't on this machine any more ({path} isn't there)"))?;
-        if self.allowed(&real) {
+        if allowed(&roots, &real) {
             Ok(real)
         } else {
             Err(format!(
@@ -489,20 +524,22 @@ impl Projects {
             ))
         }
     }
+}
 
-    fn allowed(&self, real: &Path) -> bool {
-        self.s.roots.iter().any(|r| {
-            let r = std::fs::canonicalize(r).unwrap_or_else(|_| r.clone());
-            real.strip_prefix(&r).is_ok_and(|rest| {
-                let parts: Vec<_> = rest.components().collect();
-                !parts.is_empty()
-                    && parts
-                        .iter()
-                        .all(|c| matches!(c, std::path::Component::Normal(n) if !n.to_string_lossy().starts_with('.')))
-            })
+fn allowed(roots: &[PathBuf], real: &Path) -> bool {
+    roots.iter().any(|r| {
+        let r = std::fs::canonicalize(r).unwrap_or_else(|_| r.clone());
+        real.strip_prefix(&r).is_ok_and(|rest| {
+            let parts: Vec<_> = rest.components().collect();
+            !parts.is_empty()
+                && parts
+                    .iter()
+                    .all(|c| matches!(c, std::path::Component::Normal(n) if !n.to_string_lossy().starts_with('.')))
         })
-    }
+    })
+}
 
+impl Projects {
     // ------------------------------------------------------------ other machines
 
     /// Where a project's machine's home is over Taildrive, or why it can't be reached now.

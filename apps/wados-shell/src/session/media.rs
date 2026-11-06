@@ -1,9 +1,9 @@
-//! The media keys' work: the volume through `wpctl` (PipeWire's, on the
-//! default output), in a thread of its own so a held key never stalls the
+//! The media keys' work, and the tray's sound flyout's: the volume through
+//! `wpctl` (PipeWire's, on the default output; wad-desk's sound module), in
+//! a thread of its own so a held key or a dragged slider never stalls the
 //! screen, and the backlight's steps (set through logind, `logind.rs`).
 
 use std::path::Path;
-use std::process::Command;
 use std::sync::mpsc;
 
 use crate::bar::Volume;
@@ -15,15 +15,21 @@ const BRIGHTNESS_STEP: f64 = 0.05;
 /// The darkest the keys take it (the spike's brightness slider's least).
 const BRIGHTNESS_FLOOR: f64 = 0.15;
 
-const SINK: &str = "@DEFAULT_AUDIO_SINK@";
+const SINK: &str = wad_desk::sound::SINK;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Vol {
     Up,
     Down,
     Mute,
     /// Only look.
     Read,
+    /// To this (0 to 1), unmuted (the flyout's slider).
+    Set(f64),
+    /// Muted, or not (the flyout's switch).
+    Muted(bool),
+    /// This output (wpctl's id) the default.
+    Output(u32),
 }
 
 /// The `wpctl` commands for `v`, before reading it back. Up unmutes (as
@@ -37,16 +43,32 @@ pub fn commands(v: Vol) -> Vec<Vec<String>> {
         Vol::Down => vec![s(&["set-volume", SINK, &down])],
         Vol::Mute => vec![s(&["set-mute", SINK, "toggle"])],
         Vol::Read => vec![],
+        Vol::Set(v) => {
+            vec![
+                s(&["set-volume", "-l", "1.0", SINK, &format!("{:.2}", v.clamp(0.0, 1.0))]),
+                s(&["set-mute", SINK, "0"]),
+            ]
+        }
+        Vol::Muted(m) => vec![s(&["set-mute", SINK, if m { "1" } else { "0" }])],
+        Vol::Output(id) => vec![s(&["set-default", &id.to_string()])],
     }
+}
+
+/// What to run of `asked` (in order): a run of slider moves is its last.
+pub fn coalesce(asked: Vec<Vol>) -> Vec<Vol> {
+    let mut out: Vec<Vol> = vec![];
+    for v in asked {
+        if let (Vol::Set(_), Some(Vol::Set(_))) = (v, out.last()) {
+            out.pop();
+        }
+        out.push(v);
+    }
+    out
 }
 
 /// `wpctl get-volume`'s answer: "Volume: 0.45" or "Volume: 0.45 [MUTED]".
 pub fn parse(out: &str) -> Option<Volume> {
-    let rest = out.trim().strip_prefix("Volume:")?.trim();
-    let mut words = rest.split_whitespace();
-    let level = words.next()?.parse::<f64>().ok()?;
-    let muted = words.any(|w| w == "[MUTED]");
-    Some(Volume { level: level.clamp(0.0, 1.5), muted })
+    wad_desk::sound::parse_volume(out).map(|(level, muted)| Volume { level, muted })
 }
 
 /// What `wadsctl volume` says.
@@ -54,17 +76,7 @@ pub fn describe(v: &Volume) -> String {
     format!("{}%{}", (v.level * 100.0).round() as i64, if v.muted { " muted" } else { "" })
 }
 
-fn wpctl(args: &[String]) -> Result<String, String> {
-    let out = Command::new("wpctl").args(args).output().map_err(|e| match e.kind() {
-        std::io::ErrorKind::NotFound => "there's no wpctl (PipeWire) on this machine".to_string(),
-        _ => format!("wpctl: {e}"),
-    })?;
-    if !out.status.success() {
-        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        return Err(if err.is_empty() { format!("wpctl {} failed", args.join(" ")) } else { format!("wpctl: {err}") });
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
+use wad_desk::sound::wpctl;
 
 /// The thread that runs `wpctl`, a key at a time, in order.
 pub struct Mixer {
@@ -77,8 +89,9 @@ impl Mixer {
         let (tx, rx) = mpsc::channel::<Vol>();
         let (out, said) = async_channel::unbounded();
         let spawned = std::thread::Builder::new().name("mixer".into()).spawn(move || {
-            while let Ok(v) = rx.recv() {
-                let done = commands(v).iter().try_for_each(|c| wpctl(c).map(|_| ()));
+            while let Ok(first) = rx.recv() {
+                let asked = coalesce(std::iter::once(first).chain(rx.try_iter()).collect());
+                let done = asked.into_iter().flat_map(commands).try_for_each(|c| wpctl(&c).map(|_| ()));
                 let now = done.and_then(|()| {
                     let o = wpctl(&["get-volume".into(), SINK.into()])?;
                     parse(&o).ok_or_else(|| format!("wpctl said {:?}", o.trim()))
@@ -151,6 +164,16 @@ mod tests {
         assert_eq!(line(Vol::Down), ["set-volume @DEFAULT_AUDIO_SINK@ 5%-"]);
         assert_eq!(line(Vol::Mute), ["set-mute @DEFAULT_AUDIO_SINK@ toggle"]);
         assert!(commands(Vol::Read).is_empty());
+        assert_eq!(
+            line(Vol::Set(0.456)),
+            ["set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 0.46", "set-mute @DEFAULT_AUDIO_SINK@ 0"]
+        );
+        assert_eq!(line(Vol::Muted(true)), ["set-mute @DEFAULT_AUDIO_SINK@ 1"]);
+        assert_eq!(line(Vol::Output(48)), ["set-default 48"]);
+        assert_eq!(
+            coalesce(vec![Vol::Set(0.1), Vol::Set(0.2), Vol::Muted(true), Vol::Set(0.3), Vol::Set(0.4)]),
+            [Vol::Set(0.2), Vol::Muted(true), Vol::Set(0.4)]
+        );
     }
 
     #[test]

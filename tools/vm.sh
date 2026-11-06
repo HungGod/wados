@@ -22,6 +22,8 @@
 #                                (tools/vm/check-tailnet.sh; --plain: Tailscale only;
 #                                --streams: the tailnet, peers, the device and
 #                                private streams only)
+#   tools/vm.sh radios-check     the network and Bluetooth through the VM's wadd, against its
+#                                NetworkManager and BlueZ (tools/vm/check-radios.sh; Wi-Fi with mac80211_hwsim)
 #   tools/vm.sh stream-check [--no-secrets | --turn]
 #                                streams (phase 7), one VM: with no secrets, public
 #                                and private off and nothing crashes; then a quick
@@ -30,6 +32,10 @@
 #   tools/vm.sh stream-phone [--turn]
 #                                the phone test: a public stream's one-tap link
 #                                and QR code, until Enter
+#   tools/vm.sh update-check     WadOS's own update (phase 8), one VM: a newer image
+#                                in a registry here, wadd checks and stages it, Don't
+#                                apply it, staged again, restarted into, rolled back
+#                                (tools/vm/check-update.sh; the disk from host/build.sh image)
 #
 # VM_NAME=a (or --name a, before the command): a second VM of the same disk,
 # with its own layer, firmware variables, ports, QMP and serial log, in
@@ -435,6 +441,8 @@ case "${cmd}" in
     status) status ;;
     check) [[ -z "${VM_NAME}" ]] || die "check is the unnamed VM's"; . "${HERE}/check.sh"; check ;;
     tailnet-check) [[ -z "${VM_NAME}" ]] || die "tailnet-check names its own VMs"; . "${HERE}/check-tailnet.sh"; tailnet_check "$@" ;;
+    radios-check) [[ -z "${VM_NAME}" ]] || die "radios-check is the unnamed VM's"; . "${HERE}/check-radios.sh"; radios_check ;;
     stream-check | stream-phone) [[ -z "${VM_NAME}" ]] || die "${cmd} names its own VM (stream)"; . "${HERE}/check-stream.sh"; stream_main "${cmd}" "$@" ;;
-    *) sed -n '2,36p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+    update-check) [[ -z "${VM_NAME}" ]] || die "update-check names its own VM (update)"; . "${HERE}/check-update.sh"; update_check "$@" ;;
+    *) sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
 esac

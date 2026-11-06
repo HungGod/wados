@@ -105,6 +105,22 @@ pub struct Status {
     /// The people the devices are owned by, by user id.
     #[serde(rename = "User", deserialize_with = "nullable")]
     pub users: HashMap<String, UserProfile>,
+    /// The exit node in use (`tailscale set --exit-node`); none: straight out.
+    #[serde(rename = "ExitNodeStatus")]
+    pub exit_node_status: Option<ExitNodeStatus>,
+}
+
+/// The exit node in use (`ipnstate.ExitNodeStatus`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ExitNodeStatus {
+    /// Its stable node id.
+    #[serde(rename = "ID")]
+    pub id: String,
+    #[serde(rename = "Online")]
+    pub online: bool,
+    #[serde(rename = "TailscaleIPs", deserialize_with = "nullable")]
+    pub tailscale_ips: Vec<String>,
 }
 
 /// A device in the status (`ipnstate.PeerStatus`): the machine itself, or another.
@@ -141,6 +157,12 @@ pub struct Peer {
     /// When its key runs out (RFC 3339); None when it never does.
     #[serde(rename = "KeyExpiry")]
     pub key_expiry: Option<String>,
+    /// It offers to be an exit node (advertised, and approved).
+    #[serde(rename = "ExitNodeOption")]
+    pub exit_node_option: bool,
+    /// It's the exit node this machine uses.
+    #[serde(rename = "ExitNode")]
+    pub exit_node: bool,
 }
 
 /// The tailnet the machine is on (`ipnstate.TailnetStatus`).
@@ -585,6 +607,18 @@ impl Cli {
     /// Its name on the tailnet.
     pub async fn set_hostname(&self, hostname: &str) -> Result<(), Error> {
         self.run(&["set", &format!("--hostname={hostname}")]).await.map(drop)
+    }
+
+    /// This machine's internet traffic out through `node` (a peer's
+    /// address or name: `tailscale set --exit-node`), still reaching its own
+    /// network; none: straight out again.
+    pub async fn set_exit_node(&self, node: Option<&str>) -> Result<(), Error> {
+        match node {
+            Some(n) => {
+                self.run(&["set", &format!("--exit-node={n}"), "--exit-node-allow-lan-access=true"]).await.map(drop)
+            }
+            None => self.run(&["set", "--exit-node="]).await.map(drop),
+        }
     }
 
     /// Shares `path` on the tailnet as `name` (Taildrive), served as the

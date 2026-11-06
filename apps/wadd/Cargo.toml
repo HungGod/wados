@@ -30,18 +30,25 @@ tokio-stream.workspace = true
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+wad-bt.workspace = true
 wad-config.workspace = true
 wad-gen.workspace = true
 wad-git.workspace = true
 wad-github.workspace = true
 wad-model.workspace = true
+wad-net.workspace = true
 wad-podman.workspace = true
 wad-proto.workspace = true
 wad-systemd.workspace = true
 wad-tailscale.workspace = true
 wad-wayland.workspace = true
+# The network's and Bluetooth's errors (NetworkManager's and BlueZ's, over D-Bus).
+zbus.workspace = true
 
 [dev-dependencies]
+# A fake NetworkManager and BlueZ on a private D-Bus, for the radios' tests.
+wad-bt = { workspace = true, features = ["fake"] }
+wad-net = { workspace = true, features = ["fake"] }
 # A fake tailscaled and tailscale CLI for the tailnet's tests.
 wad-tailscale = { workspace = true, features = ["fake"] }
 tempfile.workspace = true

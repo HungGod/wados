@@ -1,14 +1,23 @@
-//! What Files knows, from wadd: the tailnet (and who's asking), my other
+//! What Files knows, from wadd: this machine's wadspaces (the Trash's too)
+//! and which are running, the tailnet (and who's asking), my other
 //! machines, each one's wadspaces as it last sent them, and copies on their
 //! way here. And where it is ([`Loc`]), with what each place is called.
 
+use std::path::{Path, PathBuf};
+
 use indexmap::IndexMap;
-use wad_model::{JobKind, JobStatus, Wadspace};
+use wad_model::{JobKind, JobStatus, Phase, Wadspace};
 use wad_proto::{Event, JobInfo, MachineInfo, PeerInfo, Tailnet, TailnetState};
 
 /// Where Files is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Loc {
+    /// A folder on this machine.
+    Local(PathBuf),
+    /// This machine's Trash (its files and its wadspaces).
+    Trash,
+    /// One of this machine's wadspaces (what's in it, read-only).
+    Space(String),
     /// My other machines.
     Machines,
     /// One of them: its home and its wadspaces.
@@ -21,6 +30,8 @@ impl Loc {
     /// One up (the Machines' is none).
     pub fn up(&self) -> Option<Loc> {
         match self {
+            Loc::Local(p) => p.parent().map(|p| Loc::Local(p.to_path_buf())),
+            Loc::Trash | Loc::Space(_) => None,
             Loc::Machines => None,
             Loc::Peer(_) => Some(Loc::Machines),
             Loc::Folder { peer, path } if path.is_empty() => Some(Loc::Peer(peer.clone())),
@@ -32,7 +43,7 @@ impl Loc {
 
     pub fn peer(&self) -> Option<&str> {
         match self {
-            Loc::Machines => None,
+            Loc::Machines | Loc::Local(_) | Loc::Trash | Loc::Space(_) => None,
             Loc::Peer(p) | Loc::Folder { peer: p, .. } => Some(p),
         }
     }
@@ -46,8 +57,16 @@ pub struct Crumb {
     pub at: Loc,
 }
 
-/// The way from Machines to `loc`: Machines › Desk › Home › Pictures.
-pub fn crumbs(loc: &Loc, name_of: impl Fn(&str) -> String) -> Vec<Crumb> {
+/// The way to `loc`: Home › Pictures (or / › tmp outside it), Trash, a
+/// wadspace, or Machines › Desk › Home › Pictures. Deep down, the
+/// middle folds (Files shows the first, "…" and the last two).
+pub fn crumbs(loc: &Loc, home: &Path, name_of: impl Fn(&str) -> String) -> Vec<Crumb> {
+    match loc {
+        Loc::Local(p) => return local_crumbs(p, home),
+        Loc::Trash => return vec![Crumb { label: "Trash".into(), icon: Some("trash"), at: Loc::Trash }],
+        Loc::Space(id) => return vec![Crumb { label: name_of(id), icon: Some("monitor"), at: loc.clone() }],
+        _ => {}
+    }
     let mut out = vec![Crumb { label: "Machines".into(), icon: Some("server"), at: Loc::Machines }];
     let Some(peer) = loc.peer() else { return out };
     out.push(Crumb { label: name_of(peer), icon: None, at: Loc::Peer(peer.to_string()) });
@@ -62,6 +81,37 @@ pub fn crumbs(loc: &Loc, name_of: impl Fn(&str) -> String) -> Vec<Crumb> {
         }
     }
     out
+}
+
+fn local_crumbs(p: &Path, home: &Path) -> Vec<Crumb> {
+    let (mut out, rest, mut at) = match p.strip_prefix(home) {
+        Ok(rest) => (
+            vec![Crumb { label: "Home".into(), icon: Some("house"), at: Loc::Local(home.to_path_buf()) }],
+            rest,
+            home.to_path_buf(),
+        ),
+        Err(_) => (
+            vec![Crumb { label: "/".into(), icon: Some("hard-drive"), at: Loc::Local(PathBuf::from("/")) }],
+            p.strip_prefix("/").unwrap_or(p),
+            PathBuf::from("/"),
+        ),
+    };
+    for c in rest.components() {
+        at.push(c);
+        out.push(Crumb { label: c.as_os_str().to_string_lossy().into_owned(), icon: None, at: Loc::Local(at.clone()) });
+    }
+    out
+}
+
+/// The crumbs shown: deep down, the first, "…" (none: its menu of the
+/// middle ones) and the last two.
+pub fn shown_crumbs(all: &[Crumb]) -> (Vec<Option<Crumb>>, Vec<Crumb>) {
+    if all.len() <= 3 {
+        return (all.iter().cloned().map(Some).collect(), vec![]);
+    }
+    let n = all.len();
+    let shown = vec![Some(all[0].clone()), None, Some(all[n - 2].clone()), Some(all[n - 1].clone())];
+    (shown, all[1..n - 2].iter().rev().cloned().collect())
 }
 
 /// What it says of a machine's state: Online, or when it was last seen.
@@ -91,6 +141,10 @@ pub struct Spaces {
 #[derive(Debug, Default)]
 pub struct State {
     pub connected: bool,
+    /// This machine's wadspaces and the Trash's (wadd's library); none yet: not heard.
+    pub library: Option<Vec<Wadspace>>,
+    /// The wadspaces running here.
+    pub running: std::collections::HashSet<String>,
     pub machine: Option<MachineInfo>,
     pub tailnet: Option<Tailnet>,
     pub peers: Vec<PeerInfo>,
@@ -108,6 +162,26 @@ impl State {
     pub fn apply(&mut self, e: Event) -> bool {
         match e {
             Event::Machine(m) => self.machine = Some(m),
+            Event::Library(l) => self.library = Some(l.wadspaces),
+            Event::Wadspace(w) => {
+                let list = self.library.get_or_insert_default();
+                match list.iter_mut().find(|x| x.id == w.id) {
+                    Some(x) => *x = *w,
+                    None => list.push(*w),
+                }
+            }
+            Event::WadspaceGone { id } => {
+                if let Some(l) = &mut self.library {
+                    l.retain(|x| x.id != id);
+                }
+            }
+            Event::Run(r) => {
+                if matches!(r.state.phase, Phase::Starting | Phase::Waiting | Phase::Ready) {
+                    self.running.insert(r.id.clone());
+                } else {
+                    self.running.remove(&r.id);
+                }
+            }
             Event::Tailnet(t) => self.tailnet = Some(t),
             Event::Peers { peers } => {
                 self.spaces.retain(|id, _| peers.iter().any(|p| &p.peer.id == id));
@@ -167,6 +241,39 @@ impl State {
                 && j.job.subject.as_deref() == Some(ws)
                 && self.copy_from(j).as_deref() == Some(peer)
         })
+    }
+
+    fn me(&self) -> &str {
+        self.machine.as_ref().map(|m| m.id.as_str()).unwrap_or("")
+    }
+
+    /// This machine's wadspaces not in the Trash, in order.
+    pub fn live(&self) -> Vec<Wadspace> {
+        let me = self.me();
+        let mut v: Vec<Wadspace> = self
+            .library
+            .iter()
+            .flatten()
+            .filter(|x| !x.is_trashed() && (x.machine == me || x.machine.is_empty()))
+            .cloned()
+            .collect();
+        v.sort_by_key(|x| x.order);
+        v
+    }
+
+    /// This machine's wadspaces in the Trash.
+    pub fn trashed(&self) -> Vec<Wadspace> {
+        let me = self.me();
+        self.library
+            .iter()
+            .flatten()
+            .filter(|x| x.is_trashed() && (x.machine == me || x.machine.is_empty()))
+            .cloned()
+            .collect()
+    }
+
+    pub fn wadspace(&self, id: &str) -> Option<&Wadspace> {
+        self.library.iter().flatten().find(|x| x.id == id)
     }
 
     /// The machines to show: mine on the tailnet (trusted: always).
@@ -235,7 +342,7 @@ mod tests {
     #[test]
     fn the_crumbs_go_from_machines_to_the_folder() {
         let loc = Loc::Folder { peer: "m-desk".into(), path: vec!["Pictures".into(), "Sprites".into()] };
-        let c = crumbs(&loc, |_| "Desk".into());
+        let c = crumbs(&loc, Path::new("/home/sam"), |_| "Desk".into());
         let labels: Vec<&str> = c.iter().map(|c| c.label.as_str()).collect();
         assert_eq!(labels, ["Machines", "Desk", "Home", "Pictures", "Sprites"]);
         assert_eq!(c[3].at, Loc::Folder { peer: "m-desk".into(), path: vec!["Pictures".into()] });
@@ -246,6 +353,23 @@ mod tests {
         assert_eq!(home.up(), Some(Loc::Peer("m-desk".into())));
         assert_eq!(Loc::Peer("m-desk".into()).up(), Some(Loc::Machines));
         assert_eq!(Loc::Machines.up(), None);
-        assert_eq!(crumbs(&Loc::Machines, |_| String::new()).len(), 1);
+        assert_eq!(crumbs(&Loc::Machines, Path::new("/h"), |_| String::new()).len(), 1);
+    }
+
+    #[test]
+    fn this_machines_crumbs_start_at_home() {
+        let home = Path::new("/home/sam");
+        let c = crumbs(&Loc::Local(home.join("Pictures/Sprites/old")), home, |_| String::new());
+        let labels: Vec<&str> = c.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(labels, ["Home", "Pictures", "Sprites", "old"]);
+        assert_eq!(c[0].icon, Some("house"));
+        let (shown, folded) = shown_crumbs(&c);
+        let shown: Vec<String> = shown.iter().map(|c| c.as_ref().map_or("…".into(), |c| c.label.clone())).collect();
+        assert_eq!(shown, ["Home", "…", "Sprites", "old"]);
+        assert_eq!(folded.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["Pictures"]);
+        let out = crumbs(&Loc::Local(PathBuf::from("/tmp/x")), home, |_| String::new());
+        assert_eq!(out.iter().map(|c| c.label.as_str()).collect::<Vec<_>>(), ["/", "tmp", "x"]);
+        assert_eq!(Loc::Local(home.join("Pictures")).up(), Some(Loc::Local(home.to_path_buf())));
+        assert_eq!(crumbs(&Loc::Trash, home, |_| String::new())[0].label, "Trash");
     }
 }

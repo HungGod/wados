@@ -67,6 +67,11 @@ impl Docs {
         self.lib.lock().unwrap().wadspace(id).cloned()
     }
 
+    /// This machine's id (what its wadspaces' `machine` is).
+    pub fn machine(&self) -> &str {
+        &self.machine
+    }
+
     /// This machine's wadspaces not in the Trash, in order.
     pub fn live(&self) -> Vec<Wadspace> {
         let lib = self.lib.lock().unwrap();

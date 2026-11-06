@@ -24,6 +24,7 @@
 
 mod apps;
 mod display;
+mod levels;
 mod notices;
 mod running;
 pub mod shared;

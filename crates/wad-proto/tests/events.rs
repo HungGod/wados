@@ -192,6 +192,7 @@ fn the_network() {
             saved: true,
             active: true,
             band: Some(WifiBand::Ghz5),
+            security: Some("WPA2 Personal".into()),
         }],
         ip: Some("192.168.1.42".into()),
         dns: vec!["192.168.1.1".into()],

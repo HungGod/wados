@@ -34,7 +34,11 @@ while true; do
         export WLR_RENDERER=pixman GSK_RENDERER=cairo
     fi
     started=${SECONDS}
-    systemd-cat -t labwc -- labwc -s wados-shell
+    # -m (--merge-config): the person's ~/.config/labwc (Settings ▸ Mouse &
+    # Touchpad and ▸ Keyboard write its rc.xml and environment) is read over
+    # /etc/xdg/labwc, whose keybinds stay. Without it, labwc would read the
+    # first rc.xml it found (the person's) and none of the machine's.
+    systemd-cat -t labwc -- labwc -m -s wados-shell
     if (( SECONDS - started < 30 )); then quick=$((quick + 1)); else quick=0; fi
     if (( quick >= 5 )); then
         echo "labwc ended five times in a row within 30 s: the login prompt instead" | systemd-cat -t wados-session -p err

@@ -10,6 +10,7 @@ pub mod form;
 pub mod icon;
 pub mod keyed;
 pub mod kit;
+pub mod opened;
 pub mod picture;
 pub mod session_lock;
 pub mod spring;

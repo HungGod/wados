@@ -14,6 +14,11 @@ pub fn svg(name: &str) -> Option<&'static str> {
     LUCIDE.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
 }
 
+/// A lucide name given at run time (a notice's icon), as ours: none if we haven't it.
+pub fn named(name: &str) -> Option<&'static str> {
+    LUCIDE.iter().find(|(n, _)| *n == name).map(|(n, _)| *n)
+}
+
 /// An icon drawn: its name, pixel size, colour and fill.
 type Drawn = (&'static str, u32, [u8; 4], bool);
 

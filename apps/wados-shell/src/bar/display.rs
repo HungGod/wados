@@ -38,6 +38,13 @@ impl Displays {
         Self { bars }
     }
 
+    /// Its bars gone (the displays changed: new ones are made).
+    pub fn close(&self) {
+        for b in &self.bars {
+            b._win.destroy();
+        }
+    }
+
     /// What each shows, for `wadsctl displays`.
     pub fn describe(&self) -> String {
         self.bars.iter().map(|b| b.describe()).collect::<Vec<_>>().join(" ; ")
@@ -70,6 +77,7 @@ impl DisplayBar {
                 height: BAR,
             },
         );
+        surface::stay(&win);
         let row = gtk::Box::builder().spacing(10).margin_start(10).margin_end(10).valign(gtk::Align::Center).build();
         let who = gtk::Box::builder()
             .spacing(9)
@@ -114,7 +122,9 @@ impl DisplayBar {
         let w = Rc::downgrade(&me);
         let tick = move || {
             let Some(m) = w.upgrade() else { return glib::ControlFlow::Break };
-            if let Ok(t) = glib::DateTime::now_local().and_then(|n| n.format("%-I:%M %P")) {
+            // Settings ▸ System ▸ Date & Time's format.
+            let f = if m.shell.desk.settings().clock.h24 { "%H:%M" } else { "%-I:%M %P" };
+            if let Ok(t) = glib::DateTime::now_local().and_then(|n| n.format(f)) {
                 m.time.set_label(&t);
             }
             glib::ControlFlow::Continue

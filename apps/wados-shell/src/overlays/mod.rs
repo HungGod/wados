@@ -145,8 +145,9 @@ pub struct Overlays {
     dialogs: Rc<dialog::Dialogs>,
     switcher: Rc<switcher::Switcher>,
     search: Rc<search::Search>,
-    reveal: Rc<reveal::Reveal>,
-    displays: Displays,
+    /// Made again for the displays as they change.
+    reveal: RefCell<Rc<reveal::Reveal>>,
+    displays: RefCell<Displays>,
     /// What it was asked to show (tests read it back: `wadsctl log`).
     log: RefCell<Vec<String>>,
     /// The wadspace in front last (to tell the switcher).
@@ -164,8 +165,8 @@ impl Overlays {
             dialogs: dialog::Dialogs::new(shell),
             switcher: switcher::Switcher::new(shell),
             search: search::Search::new(shell),
-            reveal: Rc::new(reveal::Reveal::new(shell)),
-            displays: Displays::new(shell),
+            reveal: RefCell::new(Rc::new(reveal::Reveal::new(shell))),
+            displays: RefCell::new(Displays::new(shell)),
             log: RefCell::default(),
             front: RefCell::default(),
         });
@@ -186,9 +187,11 @@ impl Overlays {
         shell.store.watch(move |c| {
             let Some(m) = w.upgrade() else { return };
             match c {
-                Change::Notice { level, title, undo } => {
+                Change::Notice { level, title, undo, body, icon, action, toast } => {
                     m.note(title);
-                    m.toasts.push(*level, title, undo.clone());
+                    if *toast {
+                        m.toasts.push_notice(*level, title, undo.clone(), body.clone(), icon.clone(), action.clone());
+                    }
                 }
                 Change::Run(_) => {
                     let running: Vec<String> = s.store.running().into_iter().map(|w| w.id).collect();
@@ -200,7 +203,7 @@ impl Overlays {
         let (w, s) = (Rc::downgrade(&me), shell.clone());
         shell.placer.on_windows(move |list| {
             let Some(m) = w.upgrade() else { return };
-            m.reveal.windows_changed();
+            m.reveal().windows_changed();
             // The wadspace in front is the one used most lately.
             let front = list.iter().find(|t| in_front(t)).and_then(|t| t.wadspace()).map(str::to_string);
             if let Some(id) = &front
@@ -211,8 +214,22 @@ impl Overlays {
             }
             *m.front.borrow_mut() = front;
         });
+        // Every display's bars, made again for the displays as they are.
+        let (w, s) = (Rc::downgrade(&me), shell.clone());
+        shell.on_monitors(move || {
+            let Some(m) = w.upgrade() else { return };
+            let old = m.reveal.replace(Rc::new(reveal::Reveal::new(&s)));
+            old.close();
+            let old = m.displays.replace(Displays::new(&s));
+            old.close();
+            m.reveal().windows_changed();
+        });
         me.ctl(shell);
         me
+    }
+
+    fn reveal(&self) -> Rc<reveal::Reveal> {
+        self.reveal.borrow().clone()
     }
 
     fn note(&self, what: &str) {
@@ -283,7 +300,7 @@ impl Overlays {
         shell.on_ctl("spaces", move |_| {
             let Some(m) = w.upgrade() else { return "error gone".into() };
             // Off a full-screen wadspace (it keeps running) to the desktop.
-            let id = m.reveal.primary_ws().or_else(|| {
+            let id = m.reveal().primary_ws().or_else(|| {
                 s.store
                     .running()
                     .into_iter()
@@ -300,7 +317,7 @@ impl Overlays {
         shell.on_ctl("windowed", move |_| {
             let Some(m) = w.upgrade() else { return "error gone".into() };
             // Ctrl+Alt+↓: the full-screen wadspace into a window (none: nothing).
-            let id = m.reveal.primary_ws().or_else(|| {
+            let id = m.reveal().primary_ws().or_else(|| {
                 s.store
                     .running()
                     .into_iter()
@@ -332,6 +349,24 @@ impl Overlays {
             }
             s.toast(level, &words.join(" "), None);
             "ok".into()
+        });
+        // A phase 8 notice as wadd sends one (JSON, `kind` left out): its body, icon, button, bell-only.
+        let s2 = shell.clone();
+        shell.on_ctl("notice", move |args| {
+            let json = args.join(" ");
+            let mut v: serde_json::Value = match serde_json::from_str(&json) {
+                Ok(v) => v,
+                Err(e) => return format!("error notice <json>: {e}"),
+            };
+            v["kind"] = "notice".into();
+            match serde_json::from_value::<wad_proto::Event>(v) {
+                Ok(e @ wad_proto::Event::Notice { .. }) => {
+                    s2.store.apply(e);
+                    "ok".into()
+                }
+                Ok(_) => "error not a notice".into(),
+                Err(e) => format!("error notice <json>: {e}"),
+            }
         });
         let w = Rc::downgrade(self);
         shell.on_ctl("dialog", move |args| {
@@ -381,10 +416,10 @@ impl Overlays {
             let Some(m) = w.upgrade() else { return "error gone".into() };
             let n = |s: Option<&&str>| s.and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
             match args {
-                [] => m.reveal.state(),
+                [] => m.reveal().state(),
                 ["down", rest @ ..] | ["up", rest @ ..] => {
                     let down = args[0] == "down";
-                    if m.reveal.show(n(rest.first()), down) {
+                    if m.reveal().show(n(rest.first()), down) {
                         "ok".into()
                     } else {
                         "error nothing full screen there".into()
@@ -395,7 +430,7 @@ impl Overlays {
         });
         let w = Rc::downgrade(self);
         shell.on_ctl("displays", move |_| match w.upgrade() {
-            Some(m) => format!("ok {}", m.displays.describe()),
+            Some(m) => format!("ok {}", m.displays.borrow().describe()),
             None => "error gone".into(),
         });
         let w = Rc::downgrade(self);

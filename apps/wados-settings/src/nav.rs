@@ -101,6 +101,7 @@ pub fn info(id: &str) -> Option<&'static PanelInfo> {
 pub const SUBS: &[&str] = &["about", "datetime", "users", "updates"];
 
 /// A System page's name.
+#[allow(dead_code)]
 pub fn sub_label(sub: &str) -> &'static str {
     match sub {
         "about" => "About",

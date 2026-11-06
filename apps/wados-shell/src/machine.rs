@@ -61,7 +61,8 @@ pub struct Machine {
     bar_halves: Rc<Halves>,
     middle: Rc<Middle>,
     _reserve: gtk::ApplicationWindow,
-    _wallpapers: Vec<gtk::ApplicationWindow>,
+    /// Each display's wallpaper, made again as displays come and go.
+    wallpapers: RefCell<Vec<(gdk::Monitor, gtk::ApplicationWindow)>>,
     page: Cell<Page>,
     spring: RefCell<Option<Spring>>,
 }
@@ -70,8 +71,11 @@ impl Machine {
     pub fn new(shell: &Rc<Shell>) -> Rc<Self> {
         let app = &shell.app;
         let monitor = &shell.primary;
-        let wallpapers: Vec<_> =
-            std::iter::once(monitor).chain(shell.others.iter()).map(|m| crate::wallpaper::surface(app, m)).collect();
+        let picture = shell.desk.settings().background.picture;
+        let wallpapers: Vec<_> = std::iter::once(&**monitor)
+            .chain(shell.others.iter())
+            .map(|m| (m.clone(), crate::wallpaper::surface(app, m, &picture)))
+            .collect();
 
         let reserve = surface::make(
             app,
@@ -172,7 +176,7 @@ impl Machine {
             bar_halves,
             middle,
             _reserve: reserve,
-            _wallpapers: wallpapers,
+            wallpapers: RefCell::new(wallpapers),
             page: Cell::new(Page::Launcher),
             spring: RefCell::new(None),
         });
@@ -197,15 +201,58 @@ impl Machine {
             });
         }
 
-        for w in &me._wallpapers {
+        for (_, w) in me.wallpapers.borrow().iter() {
             w.present();
         }
+        let w = Rc::downgrade(&me);
+        shell.on_monitors(move || {
+            if let Some(m) = w.upgrade() {
+                m.monitors_changed();
+            }
+        });
+        let w = Rc::downgrade(&me);
+        shell.desk.on_change(move |s| {
+            if let Some(m) = w.upgrade() {
+                for (_, win) in m.wallpapers.borrow().iter() {
+                    crate::wallpaper::set(win, &s.background.picture);
+                }
+            }
+        });
         me._reserve.present();
         me.desktop_win.present();
         me.chrome.present();
         me.lay_out(0.0);
         me.launcher.shown();
         me
+    }
+
+    /// The displays changed (monitors.rs): a wallpaper for each one now
+    /// (the gone ones' destroyed), and everything laid out for the primary's size.
+    fn monitors_changed(&self) {
+        let now: Vec<gdk::Monitor> =
+            std::iter::once(self.shell.primary.clone()).chain(self.shell.others.iter().cloned()).collect();
+        let picture = self.shell.desk.settings().background.picture;
+        let mut walls = self.wallpapers.borrow_mut();
+        walls.retain(|(m, w)| {
+            let keep = now.contains(m);
+            if !keep {
+                w.destroy();
+            }
+            keep
+        });
+        for m in &now {
+            if !walls.iter().any(|(x, _)| x == m) {
+                let w = crate::wallpaper::surface(&self.shell.app, m, &picture);
+                w.present();
+                walls.push((m.clone(), w));
+            }
+        }
+        drop(walls);
+        self.lay_out(self.progress());
+        // A surface remapped on another display is drawn again from nothing.
+        for w in [&self.chrome, &self.bar, &self.desktop_win] {
+            w.queue_resize();
+        }
     }
 
     fn size(&self) -> (f64, f64) {

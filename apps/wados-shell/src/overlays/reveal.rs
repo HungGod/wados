@@ -49,6 +49,13 @@ impl Reveal {
         Self { bars }
     }
 
+    /// Its bars gone (the displays changed: new ones are made).
+    pub fn close(&self) {
+        for b in &self.bars {
+            b.win.destroy();
+        }
+    }
+
     pub fn windows_changed(&self) {
         for b in &self.bars {
             b.update();
@@ -116,6 +123,7 @@ impl Bar {
                 height: HEIGHT,
             },
         );
+        surface::stay(&win);
         let bar = gtk::Box::builder()
             .spacing(8)
             .css_classes(["ov-fs"])

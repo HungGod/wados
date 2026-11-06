@@ -15,6 +15,7 @@ mod link;
 mod nav;
 mod panel;
 mod panels;
+mod parts;
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
@@ -89,6 +90,11 @@ fn main() -> glib::ExitCode {
             println!("wados-settings {}", env!("CARGO_PKG_VERSION"));
             return glib::ExitCode::SUCCESS;
         }
+        // Lock Screen & Privacy's password change without the window (the
+        // VM's check): the current password, then the new one, a line each on stdin.
+        Some("--change-password") => return panels::lock::change_from_stdin(),
+        // Power's mode switch without the window (the VM's check).
+        Some("--power-mode") => return panels::power::mode_from_cli(argv.get(2).map(String::as_str)),
         Some("--help" | "-h") => {
             let ids: Vec<_> = nav::panels().map(|p| p.id).collect();
             println!(

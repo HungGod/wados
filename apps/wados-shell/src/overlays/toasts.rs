@@ -33,6 +33,8 @@ pub struct Toast {
     pub undo: Option<String>,
     /// A button of its own: its label (what it does is kept beside it, [`Toasts`]).
     pub action: Option<String>,
+    /// A Lucide icon's name; none: its level's.
+    pub icon: Option<String>,
 }
 
 /// What a toast's own button does.
@@ -124,7 +126,7 @@ impl Queue {
         self.next += 1;
         // The same again (a retry, a double click) moves up rather than piling up.
         self.shown.retain(|t| !(t.title == title && t.undo == undo));
-        self.shown.push(Toast { id: self.next, level, title: title.into(), body, undo, action });
+        self.shown.push(Toast { id: self.next, level, title: title.into(), body, undo, action, icon: None });
         if self.shown.len() > MAX {
             let extra = self.shown.len() - MAX;
             self.shown.drain(..extra);
@@ -174,10 +176,30 @@ impl Toasts {
         Rc::new(Self { shell: shell.clone(), win, col, queue: RefCell::default(), acts: RefCell::default() })
     }
 
-    pub fn push(self: &Rc<Self>, level: Level, title: &str, undo: Option<String>) {
-        let body = take_body(title);
-        let action = take_action(title);
+    /// A notice as a toast: its body (or one the shell expects for it), its
+    /// icon, and its button (a verb of the shell's, else one it expects).
+    pub fn push_notice(
+        self: &Rc<Self>,
+        level: Level,
+        title: &str,
+        undo: Option<String>,
+        body: Option<String>,
+        icon: Option<String>,
+        verb: Option<wad_proto::NoticeAction>,
+    ) {
+        let body = body.or_else(|| take_body(title));
+        let action = match verb.filter(|a| crate::verbs::known(&a.verb)) {
+            Some(a) => {
+                let s = self.shell.clone();
+                let act: Act = Rc::new(move || crate::verbs::run(&s, &a.verb, &a.args));
+                Some((a.label.clone(), act))
+            }
+            None => take_action(title),
+        };
         let id = self.queue.borrow_mut().push(level, title, body, undo, action.as_ref().map(|(l, _)| l.clone()));
+        if let Some(t) = self.queue.borrow_mut().shown.iter_mut().find(|t| t.id == id) {
+            t.icon = icon;
+        }
         {
             let mut acts = self.acts.borrow_mut();
             let shown: Vec<u64> = self.queue.borrow().shown().iter().map(|t| t.id).collect();
@@ -271,7 +293,8 @@ impl Toasts {
     fn card(self: &Rc<Self>, t: &Toast) -> gtk::Box {
         let card = gtk::Box::builder().spacing(10).css_classes(["ov-toast", crate::bar::level_class(t.level)]).build();
         let ic = gtk::Box::builder().css_classes(["ov-tic"]).homogeneous(true).valign(gtk::Align::Start).build();
-        ic.append(&Icon::new(crate::bar::level_icon(t.level), 16));
+        let name = t.icon.as_deref().and_then(wad_gtk::icon::named).unwrap_or(crate::bar::level_icon(t.level));
+        ic.append(&Icon::new(name, 16));
         card.append(&ic);
         let title = gtk::Label::builder()
             .label(&t.title)

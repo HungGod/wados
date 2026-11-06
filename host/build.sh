@@ -38,7 +38,10 @@
 # secrets, which only the stage that signs the modules sees. Without it the
 # nvidia variant is skipped. Nothing else here reads that folder.
 #
-# Env: JOBS (cargo's jobs, 2), RECHUNK (1), WADOS_SECRETS,
+# The image's version (org.opencontainers.image.version, which bootc and the
+# Updates page show): 44.<the day, UTC>.<hour and minute>, or WADOS_VERSION.
+#
+# Env: JOBS (cargo's jobs, 2), RECHUNK (1), WADOS_SECRETS, WADOS_VERSION,
 #      WADOS_VM_PASSWORD, WADOS_VM_SSH_KEY (a public key, or a file of one): qcow2|iso|raw's test user.
 set -euo pipefail
 
@@ -52,10 +55,11 @@ REGISTRY=ghcr.io/hunggod
 BOOTC=quay.io/fedora/fedora-bootc:44@sha256:291bda73006a5cfc6d4ac24f9a261915624f9f555d9ff1a426cb412928f152ac
 SECRETS="${WADOS_SECRETS:-${HOME}/.config/wados/secrets}"
 JOBS="${JOBS:-2}"
+VERSION="${WADOS_VERSION:-44.$(date -u +%Y%m%d).$((10#$(date -u +%H%M)))}"
 
 log() { echo ">> $*"; }
 die() { echo "host/build.sh: $*" >&2; exit "${2:-1}"; }
-usage() { sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; }
 
 TARGET="${1:-}"
 [[ -n "${TARGET}" ]] || { usage; exit 2; }
@@ -214,7 +218,9 @@ build_images() {
         --build-context "bin=${BUILD}/bin" \
         --build-context "share=${BUILD}/share" \
         --build-context "assets=${ROOT}/assets" \
+        --label "org.opencontainers.image.version=${VERSION}" \
         -t "${IMAGE_BASE}:unchunked" "${HERE}"
+    log "${IMAGE_BASE}: version ${VERSION}"
     local built=(host)
     if wants nvidia; then
         if find_mok; then

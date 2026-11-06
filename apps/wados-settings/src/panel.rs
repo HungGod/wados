@@ -97,16 +97,20 @@ pub fn dump_labels(w: &gtk::Widget) -> String {
 }
 
 /// What a panel that isn't here yet says.
+// Every panel's built now (phase 8): kept for one that's added later.
+#[allow(dead_code)]
 pub fn being_built(label: &str) -> String {
     format!("{label} is being built")
 }
 
 /// A panel that isn't here yet: its page says so (and which of its pages was asked for).
+#[allow(dead_code)]
 pub struct Placeholder {
     info: &'static PanelInfo,
     sub: RefCell<Option<gtk::Label>>,
 }
 
+#[allow(dead_code)]
 impl Placeholder {
     /// The placeholder for panel `id` (one of `nav.rs`'s).
     pub fn make(id: &str) -> Rc<dyn Panel> {

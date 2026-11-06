@@ -98,10 +98,21 @@ impl Logind {
         self.change(AUTO, SESSION, "SetBrightness", ("backlight", name, value).to_variant(), said, 5000, done);
     }
 
+    /// Suspends, now (idle's Automatic Suspend: not interactive).
+    pub fn suspend(&self, done: impl FnOnce(Result<bool, String>) + 'static) {
+        self.change(PATH, MANAGER, "Suspend", (false,).to_variant(), "Suspend(false)".into(), 10_000, done);
+    }
+
     /// A "sleep" delay inhibitor: sleep waits (up to logind's
     /// InhibitDelayMaxSec) until its fd is closed.
     pub fn inhibit_sleep(&self, done: impl FnOnce(Result<OwnedFd, String>) + 'static) {
-        let args = ("sleep", "WadSpaces", "Locks the screen before the machine sleeps", "delay").to_variant();
+        self.inhibit("sleep", "Locks the screen before the machine sleeps", "delay", done);
+    }
+
+    /// An inhibitor (`what`: "sleep", "handle-lid-switch"; `mode`: "delay",
+    /// "block"), held until its fd is closed.
+    pub fn inhibit(&self, what: &str, why: &str, mode: &str, done: impl FnOnce(Result<OwnedFd, String>) + 'static) {
+        let args = (what, "WadSpaces", why, mode).to_variant();
         let call = self.bus.call_with_unix_fd_list_future(
             Some(LOGIN1),
             PATH,
@@ -120,6 +131,54 @@ impl Logind {
             });
             done(fd);
         });
+    }
+
+    /// `f` with the lid (true: closed) as logind sees it, at once and each
+    /// time it changes (its `LidClosed`: a PropertiesChanged, and looked at
+    /// every 2 s too, as not every logind says when it changes).
+    pub fn on_lid(self: &Rc<Self>, f: impl Fn(bool) + 'static) {
+        let f: Rc<dyn Fn(bool)> = Rc::new(f);
+        let g = f.clone();
+        let sub = self.bus.subscribe_to_signal(
+            Some(LOGIN1),
+            Some("org.freedesktop.DBus.Properties"),
+            Some("PropertiesChanged"),
+            Some(PATH),
+            Some(MANAGER),
+            gio::DBusSignalFlags::NONE,
+            move |s| {
+                let changed = glib::VariantDict::new(Some(&s.parameters.child_value(1)));
+                if let Ok(Some(b)) = changed.lookup::<bool>("LidClosed") {
+                    g(b);
+                }
+            },
+        );
+        self.subs.borrow_mut().push(sub);
+        let me = Rc::downgrade(self);
+        let look = move || {
+            let Some(me) = me.upgrade() else { return glib::ControlFlow::Break };
+            let call = me.bus.call_future(
+                Some(LOGIN1),
+                PATH,
+                "org.freedesktop.DBus.Properties",
+                "Get",
+                Some(&(MANAGER, "LidClosed").to_variant()),
+                None,
+                gio::DBusCallFlags::NONE,
+                2000,
+            );
+            let f = f.clone();
+            glib::spawn_future_local(async move {
+                if let Ok(v) = call.await
+                    && let Some(b) = v.child_value(0).as_variant().and_then(|x| x.get::<bool>())
+                {
+                    f(b);
+                }
+            });
+            glib::ControlFlow::Continue
+        };
+        look();
+        glib::timeout_add_seconds_local(2, look);
     }
 
     /// `f` at each `PrepareForSleep`.

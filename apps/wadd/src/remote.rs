@@ -191,6 +191,11 @@ async fn open(
     Json(req): Json<OpenRequest>,
 ) -> Answer<WadspaceRun> {
     let w = live(&r, &id)?;
+    if req.file.is_some() {
+        return Err(Failure(ApiError::bad_request(
+            "Open with is the machine's own: its files open in its wadspaces there",
+        )));
+    }
     let run = crate::api_phase7::open(&r.app, &id, req.display).await?;
     notice(&r, format!("{} opened {}", c.name, w.name));
     Ok(Json(run))

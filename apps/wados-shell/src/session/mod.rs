@@ -13,9 +13,21 @@
 //!   suspend) the screen locks, then the inhibitor goes. logind's own `Lock`
 //!   (`loginctl lock-session`) locks it too.
 //! - **The brightness keys**: logind's `SetBrightness` (no root).
-//! - **Locking when idle** (`idle.rs`, ext-idle-notify): after 5 minutes
-//!   (Settings sets it in phase 8). `WADOS_IDLE_LOCK_SECS` sets it (0: never),
-//!   and outside the machine's session only it turns it on.
+//! - **Locking when idle** (`idle.rs`, ext-idle-notify): after Settings ▸
+//!   Lock Screen & Privacy's Automatic Screen Lock (5 minutes to start
+//!   with), picked up as soon as it's changed. `WADOS_IDLE_LOCK_SECS` sets
+//!   it instead (0: never), and outside the machine's session only it turns
+//!   it on.
+//! - **Blanking and suspending when idle**: Settings ▸ Power's Automatic
+//!   Screen Blank (every display off through wlr-output-power, on again at
+//!   the first input) and Automatic Suspend (logind's `Suspend`), in the
+//!   machine's session only.
+//! - **The lid** (Settings ▸ Power's When the Lid Is Closed): Suspend is
+//!   logind's own (the screen locks first, as for any sleep). Lock the
+//!   screen and Do nothing hold logind's `handle-lid-switch` inhibitor (a
+//!   person's own session may: no root, no wadd), so logind leaves the lid
+//!   alone; the shell watches logind's `LidClosed` and locks, or doesn't.
+//! - **Lock on Suspend** off: sleep goes on without locking.
 //!
 //! The volume keys (`media.rs`, `wpctl`) are the user's own sound, so they
 //! work anywhere; the bar's tray shows what they did.
@@ -29,9 +41,9 @@
 //! state|close|lock|restart|off`, `volume [up|down|mute]`, `brightness
 //! [up|down]` and `server off` (Ctrl+Alt+Delete).
 
-mod idle;
+pub(crate) mod idle;
 pub(crate) mod logind;
-mod media;
+pub(crate) mod media;
 mod menu;
 mod sleep;
 
@@ -44,15 +56,16 @@ use std::time::Duration;
 use gtk::glib;
 use wad_proto::Level;
 
+use wad_desk::settings::{Lid, Settings};
+
 use crate::bar::{self, Volume};
 use crate::lock::Lock;
 use crate::shell::Shell;
+use idle::{Idle, Kind};
 use logind::Logind;
 use media::{Mixer, Vol};
 use sleep::{Do, Sleep};
 
-/// How long idle before the screen locks, in the machine's session.
-const IDLE_LOCK: Duration = Duration::from_secs(5 * 60);
 const SERVER_LATER: &str = "Server mode (the screen goes off and it only streams) comes in phase 10";
 
 /// This is the machine's own session (`WADOS_SESSION=machine`).
@@ -71,13 +84,32 @@ pub fn off_here(what: &str) -> String {
 }
 
 /// How long idle before it locks: `WADOS_IDLE_LOCK_SECS` (0: never), else
-/// 5 minutes in the machine's session and never elsewhere.
-fn idle_after(machine: bool, secs: Option<&str>) -> Option<Duration> {
+/// the settings' minutes in the machine's session (0: never), and never elsewhere.
+fn idle_after(machine: bool, secs: Option<&str>, minutes: u32) -> Option<Duration> {
     match secs.map(|s| s.trim().parse::<u64>()) {
         Some(Ok(0)) => None,
         Some(Ok(n)) => Some(Duration::from_secs(n)),
-        _ => machine.then_some(IDLE_LOCK),
+        _ => (machine && minutes > 0).then(|| Duration::from_secs(u64::from(minutes) * 60)),
     }
+}
+
+/// Everything idle does, and after how long: the lock, then (in the
+/// machine's session) the screen blank and suspend.
+fn idle_times(machine: bool, secs: Option<&str>, s: &Settings, can_suspend: bool) -> Vec<(Kind, Duration)> {
+    let min = |m: u32| (m > 0).then(|| Duration::from_secs(u64::from(m) * 60));
+    let mut t = vec![];
+    if let Some(d) = idle_after(machine, secs, s.lock.auto_lock_min) {
+        t.push((Kind::Lock, d));
+    }
+    if machine {
+        if let Some(d) = min(s.power.blank_min) {
+            t.push((Kind::Blank, d));
+        }
+        if let Some(d) = min(s.power.suspend_min).filter(|_| can_suspend) {
+            t.push((Kind::Suspend, d));
+        }
+    }
+    t
 }
 
 /// The start menu's power items (and the power key's menu's).
@@ -131,9 +163,15 @@ pub struct Session {
     shell: Rc<Shell>,
     lock: Rc<Lock>,
     machine: bool,
-    idle_after: Option<Duration>,
+    /// What idle does, and after how long (the settings').
+    idle_times: RefCell<Vec<(Kind, Duration)>>,
+    idle_watch: RefCell<Option<Idle>>,
     /// The idle watch: watching, idle, or why it can't.
     idle: RefCell<String>,
+    /// logind's lid switch, held (Lock the screen, Do nothing).
+    lid_held: RefCell<Option<OwnedFd>>,
+    /// The lid's closed, as logind said last.
+    lid_closed: std::cell::Cell<bool>,
     logind: Option<Rc<Logind>>,
     /// Why there's no logind, in the machine's session.
     no_logind: Option<String>,
@@ -157,7 +195,9 @@ impl Session {
             }
             None => (None, None),
         };
-        let idle_after = idle_after(machine, std::env::var("WADOS_IDLE_LOCK_SECS").ok().as_deref());
+        let settings = shell.desk.settings();
+        let times =
+            idle_times(machine, std::env::var("WADOS_IDLE_LOCK_SECS").ok().as_deref(), &settings, logind.is_some());
         let (mixer, volumes) = Mixer::start();
         let me = Rc::new_cyclic(|w: &std::rc::Weak<Self>| {
             let w = w.clone();
@@ -165,8 +205,11 @@ impl Session {
                 shell: shell.clone(),
                 lock: lock.clone(),
                 machine,
-                idle_after,
+                idle_times: RefCell::new(times),
+                idle_watch: RefCell::default(),
                 idle: RefCell::new("off".into()),
+                lid_held: RefCell::default(),
+                lid_closed: std::cell::Cell::new(false),
                 logind,
                 no_logind,
                 sleep: RefCell::default(),
@@ -180,11 +223,7 @@ impl Session {
                 heard: RefCell::default(),
             }
         });
-        tracing::info!(
-            "session: machine={machine} idle lock={} logind={}",
-            idle_after.map(|d| format!("{}s", d.as_secs())).unwrap_or_else(|| "off".into()),
-            me.logind_state()
-        );
+        tracing::info!("session: machine={machine} idle={} logind={}", me.idle_words(), me.logind_state());
         let w = Rc::downgrade(&me);
         lock.set_power_off(move || {
             if let Some(me) = w.upgrade() {
@@ -193,6 +232,13 @@ impl Session {
         });
         me.watch_idle();
         me.watch_sleep();
+        me.watch_lid();
+        let w = Rc::downgrade(&me);
+        shell.desk.on_change(move |s| {
+            if let Some(me) = w.upgrade() {
+                me.settings_changed(s);
+            }
+        });
         me.watch_volume(volumes);
         me.ctl();
         shell.set_session(&me);
@@ -238,6 +284,29 @@ impl Session {
         }
     }
 
+    /// The volume, mute or output, from the tray's flyout.
+    pub fn sound(&self, v: Vol) {
+        self.mixer.ask(v);
+    }
+
+    /// The backlight to `frac` (0.15 to 1) of its brightest, from the tray's slider.
+    pub fn set_brightness(&self, frac: f64) -> Result<(), String> {
+        if !self.machine {
+            return Err(off_here("Brightness"));
+        }
+        let l = self.logind.as_ref().ok_or("logind isn't there")?;
+        let b = media::backlight().ok_or("this screen has no backlight to set")?;
+        let to = ((frac.clamp(0.15, 1.0) * b.max as f64).round() as u32).clamp(1, b.max);
+        let s = self.shell.clone();
+        let max = b.max;
+        l.set_brightness(&b.name, to, move |r| match r {
+            Ok(false) => bar::set_brightness(&s, to as f64 / max as f64),
+            Ok(true) => {}
+            Err(e) => tracing::warn!("brightness: {e}"),
+        });
+        Ok(())
+    }
+
     fn brightness(&self, up: bool) -> String {
         if !self.machine {
             return format!("error {}", off_here("Brightness"));
@@ -261,21 +330,75 @@ impl Session {
 
     // ------------------------------------------------------------ watching
 
+    /// The settings changed: idle's times, and the lid.
+    fn settings_changed(self: &Rc<Self>, s: &Settings) {
+        let times =
+            idle_times(self.machine, std::env::var("WADOS_IDLE_LOCK_SECS").ok().as_deref(), s, self.logind.is_some());
+        if *self.idle_times.borrow() != times {
+            *self.idle_times.borrow_mut() = times.clone();
+            tracing::info!("idle: {}", self.idle_words());
+            if let Some(w) = &*self.idle_watch.borrow() {
+                w.set(times);
+            }
+            if self.idle_watch.borrow().is_none() {
+                self.watch_idle();
+            }
+        }
+        self.hold_lid(s.power.lid);
+    }
+
+    /// What idle does and after how long, in words ("lock=300s blank=off suspend=off").
+    fn idle_words(&self) -> String {
+        let t = self.idle_times.borrow();
+        [Kind::Lock, Kind::Blank, Kind::Suspend]
+            .iter()
+            .map(|k| {
+                let d = t.iter().find(|(x, _)| x == k).map(|(_, d)| format!("{}s", d.as_secs()));
+                format!("{}={}", k.word(), d.unwrap_or_else(|| "off".into()))
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+
     fn watch_idle(self: &Rc<Self>) {
-        let Some(after) = self.idle_after else { return };
-        let rx = idle::start(after);
+        let times = self.idle_times.borrow().clone();
+        if times.is_empty() {
+            return;
+        }
+        let (watch, rx) = idle::start(times);
+        *self.idle_watch.borrow_mut() = watch;
         let w = Rc::downgrade(self);
         glib::spawn_future_local(async move {
             while let Ok(ev) = rx.recv().await {
                 let Some(me) = w.upgrade() else { return };
                 let said = match ev {
-                    idle::Said::Watching | idle::Said::Back => "watching".to_string(),
-                    idle::Said::Idled => {
-                        tracing::info!("idle for {}s: locking", after.as_secs());
+                    idle::Said::Watching | idle::Said::Back(Kind::Lock | Kind::Suspend) => "watching".to_string(),
+                    idle::Said::Back(Kind::Blank) => {
+                        me.shell.desk.blank(false);
+                        "watching".to_string()
+                    }
+                    idle::Said::Idled(Kind::Lock) => {
+                        tracing::info!("idle: locking");
                         if let Err(e) = me.lock() {
                             tracing::error!("the idle lock: {e}");
                         }
                         "idle".to_string()
+                    }
+                    idle::Said::Idled(Kind::Blank) => {
+                        tracing::info!("idle: the screen goes off");
+                        me.shell.desk.blank(true);
+                        "blank".to_string()
+                    }
+                    idle::Said::Idled(Kind::Suspend) => {
+                        tracing::info!("idle: suspending");
+                        if let Some(l) = &me.logind {
+                            l.suspend(|r| {
+                                if let Err(e) = r {
+                                    tracing::error!("suspend: {e}");
+                                }
+                            });
+                        }
+                        "suspend".to_string()
                     }
                     idle::Said::Failed(e) => {
                         tracing::error!("idle: {e}");
@@ -283,6 +406,56 @@ impl Session {
                     }
                 };
                 *me.idle.borrow_mut() = said;
+            }
+        });
+    }
+
+    /// logind's lid: the shell holds it (and watches it) unless the lid suspends.
+    fn watch_lid(self: &Rc<Self>) {
+        let Some(l) = &self.logind else { return };
+        let w = Rc::downgrade(self);
+        l.on_lid(move |closed| {
+            let Some(me) = w.upgrade() else { return };
+            if me.lid_closed.replace(closed) == closed {
+                return;
+            }
+            let lid = me.shell.desk.settings().power.lid;
+            tracing::info!("the lid {} ({lid:?})", if closed { "closed" } else { "opened" });
+            if closed
+                && lid == Lid::Lock
+                && me.lid_held.borrow().is_some()
+                && let Err(e) = me.lock()
+            {
+                tracing::error!("the lid's lock: {e}");
+            }
+        });
+        self.hold_lid(self.shell.desk.settings().power.lid);
+    }
+
+    fn hold_lid(self: &Rc<Self>, lid: Lid) {
+        let Some(l) = &self.logind else { return };
+        let want = lid != Lid::Suspend;
+        if want == self.lid_held.borrow().is_some() {
+            return;
+        }
+        if !want {
+            tracing::info!("logind handles the lid again (it suspends)");
+            self.lid_held.borrow_mut().take();
+            return;
+        }
+        let w = Rc::downgrade(self);
+        l.inhibit("handle-lid-switch", "Settings: what closing the lid does is the shell's", "block", move |r| {
+            let Some(me) = w.upgrade() else { return };
+            match r {
+                Ok(fd) if me.shell.desk.settings().power.lid != Lid::Suspend => {
+                    tracing::info!("logind: the lid is the shell's (a handle-lid-switch inhibitor)");
+                    *me.lid_held.borrow_mut() = Some(fd);
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    tracing::warn!("logind: the lid can't be held ({e}): closing it suspends");
+                    me.shell.toast(Level::Warn, &format!("Closing the lid will still suspend: {e}"), None);
+                }
             }
         });
     }
@@ -310,9 +483,20 @@ impl Session {
     /// logind's `PrepareForSleep`: lock, then let sleep go on; or, woken,
     /// hold the inhibitor again.
     fn prepare_for_sleep(self: &Rc<Self>, going: bool) {
-        tracing::info!("logind: {}", if going { "going to sleep, so locking first" } else { "awake" });
+        let on_suspend = self.shell.desk.settings().lock.on_suspend;
+        tracing::info!(
+            "logind: {}",
+            match (going, on_suspend) {
+                (true, true) => "going to sleep, so locking first",
+                (true, false) => "going to sleep (Lock on Suspend is off)",
+                (false, _) => "awake",
+            }
+        );
         let next = self.sleep.borrow_mut().prepare(going);
         match next {
+            Do::Lock if !on_suspend => {
+                self.sleep.borrow_mut().locked();
+            }
             Do::Lock => {
                 self.menu.close();
                 let w = Rc::downgrade(self);
@@ -380,15 +564,27 @@ impl Session {
     fn describe(&self) -> String {
         let asked = self.logind.as_ref().map(|l| l.asked()).unwrap_or_default();
         format!(
-            "ok machine={} idle_lock={} idle={} inhibitor={} logind={} calls=[{}] locked={}",
+            "ok machine={} idle_lock={} idle_blank={} idle_suspend={} idle={} inhibitor={} lid={} logind={} calls=[{}] locked={}",
             self.machine,
-            self.idle_after.map(|d| format!("{}s", d.as_secs())).unwrap_or_else(|| "off".into()),
+            self.idle_secs(Kind::Lock),
+            self.idle_secs(Kind::Blank),
+            self.idle_secs(Kind::Suspend),
             self.idle.borrow(),
             if self.logind.is_some() { self.sleep.borrow().state() } else { "none".into() },
+            if self.lid_held.borrow().is_some() { "held" } else { "logind" },
             self.logind_state(),
             asked.join(", "),
             self.lock.is_locked(),
         )
+    }
+
+    fn idle_secs(&self, k: Kind) -> String {
+        self.idle_times
+            .borrow()
+            .iter()
+            .find(|(x, _)| *x == k)
+            .map(|(_, d)| format!("{}s", d.as_secs()))
+            .unwrap_or_else(|| "off".into())
     }
 
     fn heard(&self, words: &str) {
@@ -504,13 +700,35 @@ mod tests {
 
     #[test]
     fn the_idle_lock() {
-        assert_eq!(idle_after(true, None), Some(Duration::from_secs(300)));
-        assert_eq!(idle_after(false, None), None, "a test or a laptop's window doesn't lock by itself");
-        assert_eq!(idle_after(false, Some("5")), Some(Duration::from_secs(5)));
-        assert_eq!(idle_after(true, Some(" 30 ")), Some(Duration::from_secs(30)));
-        assert_eq!(idle_after(true, Some("0")), None);
-        assert_eq!(idle_after(true, Some("soon")), Some(Duration::from_secs(300)));
-        assert_eq!(idle_after(false, Some("soon")), None);
+        assert_eq!(idle_after(true, None, 5), Some(Duration::from_secs(300)));
+        assert_eq!(idle_after(true, None, 10), Some(Duration::from_secs(600)));
+        assert_eq!(idle_after(true, None, 0), None, "Never");
+        assert_eq!(idle_after(false, None, 5), None, "a test or a laptop's window doesn't lock by itself");
+        assert_eq!(idle_after(false, Some("5"), 5), Some(Duration::from_secs(5)));
+        assert_eq!(idle_after(true, Some(" 30 "), 5), Some(Duration::from_secs(30)));
+        assert_eq!(idle_after(true, Some("0"), 5), None);
+        assert_eq!(idle_after(true, Some("soon"), 5), Some(Duration::from_secs(300)));
+        assert_eq!(idle_after(false, Some("soon"), 5), None);
+    }
+
+    #[test]
+    fn idle_blanks_and_suspends_in_the_machine_s_session() {
+        let mut s = Settings::default();
+        s.power.suspend_min = 20;
+        let t = idle_times(true, None, &s, true);
+        assert_eq!(
+            t,
+            [
+                (Kind::Lock, Duration::from_secs(300)),
+                (Kind::Blank, Duration::from_secs(300)),
+                (Kind::Suspend, Duration::from_secs(1200))
+            ]
+        );
+        assert_eq!(idle_times(true, None, &s, false).len(), 2, "no logind: no suspend");
+        assert_eq!(idle_times(false, Some("5"), &s, true), [(Kind::Lock, Duration::from_secs(5))]);
+        s.power.blank_min = 0;
+        s.lock.auto_lock_min = 0;
+        assert_eq!(idle_times(true, None, &s, true), [(Kind::Suspend, Duration::from_secs(1200))]);
     }
 
     #[test]

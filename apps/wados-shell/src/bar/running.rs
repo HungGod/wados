@@ -231,7 +231,7 @@ impl Running {
 
 /// The displays' connectors, the primary first (display 1, 2…).
 pub fn display_connectors(shell: &Shell) -> Vec<String> {
-    std::iter::once(&shell.primary)
+    std::iter::once(&*shell.primary)
         .chain(shell.others.iter())
         .map(|m| m.connector().map(|c| c.to_string()).unwrap_or_default())
         .collect()

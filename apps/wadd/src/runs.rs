@@ -69,7 +69,7 @@ use async_trait::async_trait;
 use tokio::task::JoinHandle;
 use wad_gen::units::{self, container_name, display_name, service};
 use wad_gen::{Machine, Mounts, Run, extras};
-use wad_model::{PartState, Phase, RunState, SessionDisplay, Wadspace, Wallpaper};
+use wad_model::{PartState, Phase, Project, ProjectKind, ProjectSource, RunState, SessionDisplay, Wadspace, Wallpaper};
 use wad_proto::{ApiError, ErrorCode, Event, Level, WadspaceRun};
 
 use crate::backend::{Backend, RUNNING, Res};
@@ -259,6 +259,12 @@ pub struct Runs {
     /// The wadspaces running in a secure stream's VM (started so here, or
     /// taken on by streams.rs after a restart): never exec'd into.
     secure: Mutex<std::collections::HashSet<String>>,
+    /// Files opened with each (Open with) for its next start only: projects
+    /// its units mount then, never saved in its document.
+    opened: Mutex<HashMap<String, Vec<Project>>>,
+    /// What Open with mounted on each one's Desktop the run before: the
+    /// empty files its mounts stood on, cleared from its home the next.
+    stubs: Mutex<HashMap<String, Vec<String>>>,
     me: Weak<Self>,
 }
 
@@ -298,6 +304,8 @@ impl Runs {
             streams: OnceLock::new(),
             moving: Mutex::default(),
             secure: Mutex::default(),
+            opened: Mutex::default(),
+            stubs: Mutex::default(),
             me: me.clone(),
         })
     }
@@ -448,6 +456,143 @@ impl Runs {
         self.start_up(id, display, image, None)
     }
 
+    /// Opens a wadspace with a file or folder in it, for this run only (Open
+    /// with; `machine`: whose it is, none this one). One that isn't running
+    /// opens with it mounted at `~/Desktop/<its name>` (another machine's: a
+    /// copy, over Taildrive), as a project its document doesn't keep. One
+    /// that's running has it copied there now (a file of this machine's).
+    pub async fn open_with(
+        &self,
+        id: &str,
+        display: SessionDisplay,
+        file: &str,
+        machine: Option<&str>,
+    ) -> Result<WadspaceRun, ApiError> {
+        if display == SessionDisplay::Stream {
+            return Err(ApiError::bad_request(
+                "a file opens with a wadspace on the screen, in a window or the background",
+            ));
+        }
+        let ws = self.docs.wadspace(id).ok_or_else(|| ApiError::not_found(format!("no wadspace {id:?}")))?;
+        if ws.is_trashed() {
+            return Err(conflict(format!("{} is in the Trash: restore it first", ws.name)));
+        }
+        let name = file_name(file).ok_or_else(|| ApiError::bad_request(format!("{file:?} isn't a file's path")))?;
+        let projects = self
+            .projects
+            .get()
+            .cloned()
+            .ok_or_else(|| conflict(format!("{} can't take files on this machine", ws.name)))?;
+        let mine = machine.is_none_or(|m| m.is_empty() || m == self.docs.machine());
+        let st = self.state(id);
+        let up = matches!(st.state.phase, Phase::Starting | Phase::Waiting | Phase::Ready);
+        if up && st.display == Some(SessionDisplay::Stream) {
+            return Err(conflict(format!("{} is streaming: open {name} in it once it's back here", ws.name)));
+        }
+        if up {
+            // Still starting, its files not yet taken: one more for it.
+            if let Some(list) = self.opened.lock().unwrap().get_mut(id) {
+                let source = ProjectSource {
+                    machine_id: machine.unwrap_or(self.docs.machine()).to_string(),
+                    paths: vec![file.to_string()],
+                };
+                if mine {
+                    projects.local_path(&name, file).map_err(conflict)?;
+                }
+                let kind = if mine { ProjectKind::Mount { source, make: false } } else { ProjectKind::Copy { source } };
+                list.retain(|p| p.as_name != name);
+                list.push(Project { id: next_opened(list), as_name: name, kind });
+                return Ok(self.state(id));
+            }
+            if !mine {
+                return Err(conflict(format!(
+                    "{} is open: close it to open {name} from another machine in it",
+                    ws.name
+                )));
+            }
+            let real = projects.local_path(&name, file).map_err(conflict)?;
+            self.copy_in(id, &ws.name, &name, &real).await?;
+            self.update(id, |s| s.display = Some(display));
+            self.bus.publish(Event::Notice {
+                level: Level::Ok,
+                title: format!("{name} is in {}", ws.name),
+                undo: None,
+                body: Some("A copy, on its desktop: it's open already, so it can't be mounted".into()),
+                icon: Some("file".into()),
+                action: None,
+                toast: true,
+            });
+            return Ok(self.state(id));
+        }
+        if matches!(st.state.phase, Phase::Stopping) {
+            return Err(conflict(format!("{} is stopping", ws.name)));
+        }
+        let source = ProjectSource {
+            machine_id: if mine { self.docs.machine().to_string() } else { machine.unwrap_or_default().to_string() },
+            paths: vec![file.to_string()],
+        };
+        if mine {
+            // Refused now rather than left out as it opens.
+            projects.local_path(&name, file).map_err(conflict)?;
+        }
+        {
+            let mut opened = self.opened.lock().unwrap();
+            let list = opened.entry(id.to_string()).or_default();
+            list.retain(|p| p.as_name != name);
+            let kind = if mine { ProjectKind::Mount { source, make: false } } else { ProjectKind::Copy { source } };
+            list.push(Project { id: next_opened(list), as_name: name, kind });
+        }
+        let r = self.open(id, display);
+        if r.is_err() {
+            self.opened.lock().unwrap().remove(id);
+        }
+        r
+    }
+
+    /// A file of this machine's copied into a running wadspace's Desktop:
+    /// through its extra folder (labelled for it), then `cp` inside it.
+    async fn copy_in(&self, id: &str, ws_name: &str, name: &str, real: &Path) -> Result<(), ApiError> {
+        if !real.is_file() {
+            return Err(conflict(format!("{ws_name} is open: close it to open the folder {name} in it")));
+        }
+        let dir = PathBuf::from(extras::dir(&self.settings.state_dir.to_string_lossy(), id)).join(OPENED);
+        let to = dir.join(name);
+        let (src, d, t) = (real.to_path_buf(), dir.clone(), to.clone());
+        tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+            std::fs::create_dir_all(&d)?;
+            std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o755))?;
+            std::fs::copy(&src, &t)?;
+            std::fs::set_permissions(&t, std::fs::Permissions::from_mode(0o644))
+        })
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .map_err(|e| conflict(format!("{name} couldn't be copied: {e}")))?;
+        let inside = format!("{}/{OPENED}/{name}", extras::DIR);
+        let at = format!("/config/Desktop/{name}");
+        let out = self
+            .backend
+            .exec(
+                &container_name(id),
+                "abc",
+                &["sh", "-c", "mkdir -p /config/Desktop && cp -f -- \"$1\" \"$2\"", "sh", &inside, &at],
+            )
+            .await;
+        let _ = std::fs::remove_file(&to);
+        match out {
+            Ok(o) if o.code == 0 => Ok(()),
+            Ok(o) => Err(conflict(format!("{name} couldn't be copied into {ws_name}: {}", o.stderr.trim()))),
+            Err(e) => Err(conflict(format!("{name} couldn't be copied into {ws_name}: {e}"))),
+        }
+    }
+
+    /// What it opens with this time (its document's projects, and what Open with gave it).
+    fn with_opened(&self, mut ws: Wadspace) -> Wadspace {
+        if let Some(more) = self.opened.lock().unwrap().remove(&ws.id) {
+            ws.look.projects.extend(more);
+        }
+        ws
+    }
+
     /// The person at the machine opened a streamed wadspace: they win. Its
     /// stream ends (its wadspace stops), then it opens as they asked.
     fn off_its_stream(&self, id: &str, display: SessionDisplay) -> Result<WadspaceRun, ApiError> {
@@ -580,10 +725,11 @@ impl Runs {
     }
 
     async fn bring_up_locked(&self, id: &str, image: &str, stream: Option<&StreamUnit>) -> Res<()> {
-        let ws = self.docs.wadspace(id).ok_or("it's gone")?;
+        let ws = self.with_opened(self.docs.wadspace(id).ok_or("it's gone")?);
         let name = container_name(id);
         let status = self.backend.container_status(&name).await?;
         let mut job: Option<Opening> = None;
+        let fresh = status != RUNNING;
         if status != RUNNING {
             let (mounts, opening) = self.prepare_projects(&ws).await;
             job = opening;
@@ -673,9 +819,36 @@ impl Runs {
         if let (Some(jobs), Some(j)) = (&jobs, &open_job) {
             jobs.finish(j, Ok(()));
         }
+        if fresh && stream.is_none_or(|s| s.vm.is_none()) {
+            self.clear_stubs(&ws, &name).await;
+        }
         self.update(id, |s| s.state.phase = Phase::Ready);
         tracing::info!("{id}: ready");
         Ok(())
+    }
+
+    /// The empty files the last run's Open with mounts stood on (in its
+    /// home's Desktop), gone now they're not mounted.
+    async fn clear_stubs(&self, ws: &Wadspace, container: &str) {
+        let now: Vec<String> = ws
+            .look
+            .projects
+            .iter()
+            .filter(|p| p.id.starts_with("opened-") && matches!(p.kind, ProjectKind::Mount { .. }))
+            .map(|p| p.as_name.clone())
+            .collect();
+        let before = self.stubs.lock().unwrap().insert(ws.id.clone(), now.clone()).unwrap_or_default();
+        let gone: Vec<String> =
+            before.into_iter().filter(|n| !now.contains(n)).map(|n| format!("/config/Desktop/{n}")).collect();
+        if gone.is_empty() {
+            return;
+        }
+        let mut cmd =
+            vec!["sh", "-c", "for f; do [ -f \"$f\" ] && [ ! -s \"$f\" ] && rm -f -- \"$f\"; done; true", "sh"];
+        cmd.extend(gone.iter().map(String::as_str));
+        if let Err(e) = self.backend.exec(container, "root", &cmd).await {
+            tracing::info!("{}: its Open with stubs stay: {e}", ws.id);
+        }
     }
 
     /// Until its desktop is up, or it stops, or it's taken too long.
@@ -753,6 +926,42 @@ impl Runs {
         .await;
         if let Err(e) = r {
             tracing::warn!("{id}: its secure stream's image volume is left: {e}");
+        }
+    }
+
+    /// Every volume of a wadspace deleted for good: its home
+    /// (`wad-<id>-config`), its stream's display and its secure stream's
+    /// image, each once what uses it has gone, with their units.
+    async fn drop_volumes(&self, id: &str) {
+        let Ok(have) = self.backend.volume_names().await else { return };
+        let (display, secure) = (display_name(id), units::secure_volume(id));
+        let users = [container_name(id), display.clone()];
+        let wanted = [
+            (format!("wad-{id}-config"), Vec::<String>::new()),
+            (display.clone(), vec![format!("{display}.volume"), format!("{display}.container")]),
+            (secure.clone(), vec![format!("{secure}.volume")]),
+        ];
+        for (volume, files) in wanted {
+            if !have.contains(&volume) {
+                if !files.is_empty() {
+                    let _ = self.backend.write_units(&[], &files).await;
+                }
+                continue;
+            }
+            let unit = format!("{volume}.volume");
+            let r = crate::backend::drop_volume(
+                &*self.backend,
+                &volume,
+                &unit,
+                &files,
+                &users,
+                self.settings.poll,
+                Duration::from_secs(120),
+            )
+            .await;
+            if let Err(e) = r {
+                tracing::warn!("{id}: deleted for good, but its volume stays: {e}");
+            }
         }
     }
 
@@ -1084,6 +1293,7 @@ impl Runs {
                 let _ = self.stop(id).await;
             }
             let _ = self.backend.write_units(&[], &[format!("{}.container", container_name(id))]).await;
+            self.drop_volumes(id).await;
             if crate::store::safe_id(id) {
                 let _ = std::fs::remove_dir_all(extras::dir(&self.settings.state_dir.to_string_lossy(), id));
             }
@@ -1160,6 +1370,22 @@ impl Runs {
 
 fn ws_name(docs: &Docs, id: &str) -> String {
     docs.wadspace(id).map_or_else(|| id.to_string(), |w| w.name)
+}
+
+/// Open with's copies on their way into a running wadspace, in its extra folder.
+const OPENED: &str = "opened";
+
+/// An id for one more of Open with's projects (`opened-<n>`), none of `list`'s.
+fn next_opened(list: &[Project]) -> String {
+    let n = list.iter().filter_map(|p| p.id.strip_prefix("opened-")?.parse::<u32>().ok()).max().unwrap_or(0);
+    format!("opened-{}", n + 1)
+}
+
+/// A path's last name, if it can be a file's on a wadspace's Desktop.
+fn file_name(path: &str) -> Option<String> {
+    let n = path.trim_end_matches('/').rsplit('/').next()?;
+    (!n.is_empty() && n != "." && n != ".." && n != "~" && !n.starts_with('.') && !n.contains(':') && !n.contains('\0'))
+        .then(|| n.to_string())
 }
 
 /// Writes a file whole, readable inside.

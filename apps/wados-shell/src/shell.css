@@ -113,6 +113,7 @@ window.wados-lock { background: var(--bg); }
 .lock-welcome { font-size: 26px; }
 .lock-entry { min-height: 44px; border-radius: 14px; }
 .lock-error { color: var(--danger); }
+.lock-note { padding: 8px 12px; border-radius: 12px; background-color: rgb(10 6 20 / 0.6); border: 1px solid var(--line); font-size: 13px; }
 /* Its corner (the spike's): Power off. */
 button.lock-power {
   min-width: 34px;

@@ -49,6 +49,8 @@ pub struct FakeNode {
     pub online: bool,
     /// RFC 3339.
     pub last_seen: String,
+    /// It offers to be an exit node (`--advertise-exit-node`, approved).
+    pub exit_option: bool,
 }
 
 impl FakeNode {
@@ -65,7 +67,14 @@ impl FakeNode {
             sharer: 0,
             online: true,
             last_seen: "2026-11-01T10:00:00Z".into(),
+            exit_option: false,
         }
+    }
+
+    /// It offers to be an exit node.
+    pub fn exit_node_option(mut self) -> Self {
+        self.exit_option = true;
+        self
     }
 
     pub fn os(mut self, os: &str, model: &str) -> Self {
@@ -100,6 +109,8 @@ struct Net {
     /// Each served node's BackendState and AuthURL (none: Running).
     states: HashMap<String, (String, String)>,
     whois_calls: u64,
+    /// The exit node in use (a node's id).
+    exit_node: Option<String>,
 }
 
 /// A tailnet for tests: cheap to clone, one tailnet shared.
@@ -138,6 +149,11 @@ impl FakeTailnet {
     }
 
     /// How many whois questions were asked (of any node's tailscaled).
+    /// The exit node in use, as `tailscale set --exit-node` leaves it.
+    pub fn set_exit_node(&self, id: Option<&str>) {
+        self.0.lock().unwrap().exit_node = id.map(String::from);
+    }
+
     pub fn whois_calls(&self) -> u64 {
         self.0.lock().unwrap().whois_calls
     }
@@ -182,6 +198,7 @@ fn peer_json(net: &Net, n: &FakeNode) -> Value {
         "ID": n.id, "HostName": n.name, "DNSName": format!("{}.{}.", n.name, net.suffix), "OS": n.os,
         "UserID": n.user, "TailscaleIPs": n.ips, "Tags": if n.tags.is_empty() { Value::Null } else { json!(n.tags) },
         "Online": n.online, "LastSeen": n.last_seen, "ShareeNode": n.sharer != 0, "Expired": false,
+        "ExitNodeOption": n.exit_option, "ExitNode": net.exit_node.as_deref() == Some(n.id.as_str()),
         "KeyExpiry": "2027-05-01T00:00:00Z",
     })
 }
@@ -222,6 +239,10 @@ async fn status(State(s): State<Served>, h: HeaderMap) -> Response {
         } else { Value::Null },
         "Peer": if running { Value::Object(peers) } else { Value::Null },
         "User": if running { Value::Object(users) } else { Value::Null },
+        "ExitNodeStatus": match net.exit_node.as_ref().and_then(|id| net.nodes.iter().find(|n| &n.id == id)) {
+            Some(n) if running => json!({"ID": n.id, "Online": n.online, "TailscaleIPs": n.ips}),
+            _ => Value::Null,
+        },
     }))
     .into_response()
 }

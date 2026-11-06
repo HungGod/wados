@@ -141,7 +141,8 @@ button.wb-tile wad-icon { color: var(--accent); }
 .wb-ok .wb-eic { color: var(--accent); }
 .wb-warn .wb-eic { color: var(--warn); }
 .wb-error .wb-eic { color: var(--danger); }
-.wb-ev-title { font-size: 13px; }
+.wb-ev-title { font-size: 13px; font-weight: 600; }
+.wb-ev-body { font-size: 12.5px; color: var(--muted); }
 .wb-ev-time { font-size: 11px; color: var(--faint); }
 
 /* The calendar. */

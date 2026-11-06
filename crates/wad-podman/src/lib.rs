@@ -167,6 +167,20 @@ fn rfc3339_secs(s: &str) -> Option<f64> {
     Some((days * 86400 + hh * 3600 + mm * 60 - off) as f64 + ss)
 }
 
+/// A prune's report (`[{"Id", "Err", "Size"}]`): what went, (id, bytes);
+/// what it couldn't remove (an `Err`) isn't in it.
+pub fn pruned(v: &Value) -> Vec<(String, u64)> {
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r.get("Err").is_none_or(Value::is_null))
+        .filter_map(|r| {
+            let id = r.get("Id").and_then(Value::as_str)?;
+            Some((id.to_string(), r.get("Size").and_then(Value::as_u64).unwrap_or(0)))
+        })
+        .collect()
+}
+
 /// What a pull sends as X-Registry-Auth: the registry's user and password
 /// (a token), as docker's API takes them.
 pub fn registry_auth(user: &str, password: &str, server: &str) -> String {
@@ -550,6 +564,33 @@ impl Podman {
         }
     }
 
+    /// Removes the images nothing names or stands on (`podman image prune`:
+    /// dangling ones only, never one with a name); `external`: also what
+    /// unfinished builds left (buildah's containers, and the images under
+    /// them). What went: (id, bytes).
+    pub async fn prune_images(&self, external: bool) -> Result<Vec<(String, u64)>, Error> {
+        let path = format!("/images/prune?all=false&external={external}");
+        self.prune("prune images", &path).await
+    }
+
+    /// Removes stopped containers (`podman container prune`), but those
+    /// with `keep_label` (a wadspace's). What went: (id, bytes).
+    pub async fn prune_containers(&self, keep_label: &str) -> Result<Vec<(String, u64)>, Error> {
+        let filters = serde_json::json!({ "label!": [keep_label] }).to_string();
+        let path = format!("/containers/prune?filters={}", segment(&filters));
+        self.prune("prune containers", &path).await
+    }
+
+    async fn prune(&self, what: &str, path: &str) -> Result<Vec<(String, u64)>, Error> {
+        let res = self.send(Method::POST, path, None).await?;
+        if !res.status().is_success() {
+            return Err(Self::status_error(what, res).await);
+        }
+        let body = Self::body(res).await?;
+        let v: Value = serde_json::from_slice(&body).map_err(|e| Error::Decode(what.into(), e.to_string()))?;
+        Ok(pruned(&v))
+    }
+
     /// running | exited | created | paused | ... ; "missing" when there's no such
     /// container (quadlet runs them with --rm, so a stopped one is gone).
     pub async fn container_status(&self, name: &str) -> Result<String, Error> {
@@ -804,5 +845,21 @@ impl Podman {
         } else {
             Err(Self::status_error(&format!("create secret {name}"), res).await)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_prune_reports_what_went() {
+        let v = serde_json::json!([
+            {"Id": "sha256:a", "Err": null, "Size": 1200},
+            {"Id": "sha256:b", "Err": "image in use", "Size": 99},
+            {"Id": "c", "Size": 0},
+        ]);
+        assert_eq!(pruned(&v), vec![("sha256:a".to_string(), 1200), ("c".to_string(), 0)]);
+        assert!(pruned(&Value::Null).is_empty());
     }
 }

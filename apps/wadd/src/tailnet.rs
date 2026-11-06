@@ -66,6 +66,16 @@ const DRIVE_RETRY: Duration = Duration::from_secs(300);
 /// The share's name: a peer's home is `…/<tailnet>/<machine>/home`.
 pub const HOME_SHARE: &str = "home";
 
+/// A peer that offers to be an exit node.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExitOffer {
+    pub id: String,
+    pub name: String,
+    pub os: String,
+    pub online: bool,
+    pub tagged: bool,
+}
+
 /// The tailnet's settings ([tailnet] in wadd.toml), and where its book is.
 #[derive(Debug, Clone)]
 pub struct Settings {
@@ -786,6 +796,63 @@ impl Tailnet {
         r.map_err(|e| ApiError::new(ErrorCode::Upstream, e.to_string()))?;
         tracing::info!("tailnet: logged out");
         Ok(self.view())
+    }
+
+    // ------------------------------------------------------------ the exit node
+
+    /// While it's running: the exit node in use (its node id, online or not)
+    /// and the peers that offer to be one (Tailscale's `ExitNodeOption`).
+    pub fn exit_nodes(&self) -> (Option<String>, Vec<ExitOffer>) {
+        let i = self.inner.lock().unwrap();
+        let Some(s) = i.status.as_ref().filter(|s| self.enabled() && !i.unreachable && s.running()) else {
+            return (None, vec![]);
+        };
+        let using = s
+            .exit_node_status
+            .as_ref()
+            .map(|e| e.id.clone())
+            .filter(|id| !id.is_empty())
+            .or_else(|| s.peer_list().into_iter().find(|p| p.exit_node).map(|p| p.id.clone()));
+        let offers = s
+            .peer_list()
+            .into_iter()
+            .filter(|p| p.exit_node_option)
+            .map(|p| ExitOffer {
+                id: p.id.clone(),
+                name: p.host_name.clone(),
+                os: p.os.clone(),
+                online: p.online,
+                tagged: !p.tags.is_empty(),
+            })
+            .collect();
+        (using, offers)
+    }
+
+    /// This machine's internet traffic out through the peer `node` (one
+    /// that offers to be an exit node, online), or straight out (none).
+    pub async fn set_exit_node(self: &Arc<Self>, node: Option<&str>) -> Result<(), ApiError> {
+        let ip = {
+            let i = self.inner.lock().unwrap();
+            let Some(s) = i.status.as_ref().filter(|s| self.enabled() && !i.unreachable && s.running()) else {
+                return Err(ApiError::conflict("Join Tailscale first"));
+            };
+            match node {
+                None => None,
+                Some(id) => {
+                    let p = s
+                        .peer_list()
+                        .into_iter()
+                        .find(|p| p.id == id && p.exit_node_option && p.online)
+                        .ok_or_else(|| ApiError::not_found(format!("{id:?} can't be an exit node now")))?;
+                    Some(p.ipv4().map(|a| a.to_string()).unwrap_or_else(|| p.machine_name()))
+                }
+            }
+        };
+        let r = self.cli.set_exit_node(ip.as_deref()).await;
+        self.refresh().await;
+        r.map_err(|e| ApiError::new(ErrorCode::Upstream, e.to_string()))?;
+        tracing::info!("tailnet: the exit node is {}", node.unwrap_or("none"));
+        Ok(())
     }
 
     // ---------------------------------------------------------------- trust

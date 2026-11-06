@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use wad_proto::Event;
 
+mod open_with;
 mod phase6;
 mod phase7;
 mod phase8;
@@ -278,7 +279,20 @@ impl Wadd {
         id: &str,
         display: wad_proto::wad_model_run::SessionDisplay,
     ) -> Result<wad_proto::WadspaceRun, Failure> {
-        self.post(&format!("/v1/wadspaces/{id}/open"), &wad_proto::OpenRequest { display }).await
+        self.post(&format!("/v1/wadspaces/{id}/open"), &wad_proto::OpenRequest::new(display)).await
+    }
+
+    /// Opens a wadspace with a file or folder in it, for this run only (Open
+    /// with): `file` on this machine, or on `machine` ([`wad_proto::OpenRequest`]).
+    pub async fn open_with(
+        &self,
+        id: &str,
+        display: wad_proto::wad_model_run::SessionDisplay,
+        file: &str,
+        machine: Option<&str>,
+    ) -> Result<wad_proto::WadspaceRun, Failure> {
+        let req = wad_proto::OpenRequest { display, file: Some(file.to_string()), machine: machine.map(String::from) };
+        self.post(&format!("/v1/wadspaces/{id}/open"), &req).await
     }
 
     /// Stops a wadspace (`POST /v1/wadspaces/{id}/stop`).

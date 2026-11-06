@@ -97,6 +97,7 @@ pub mod games;
 pub mod groups;
 pub mod look;
 pub mod names;
+pub mod open_with;
 pub mod ops;
 pub mod stack;
 pub mod starter;

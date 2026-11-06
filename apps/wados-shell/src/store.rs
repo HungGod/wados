@@ -47,6 +47,12 @@ pub enum Change {
         level: Level,
         title: String,
         undo: Option<String>,
+        /// Phase 8's: a line under it, its icon, a button of its own, and
+        /// whether it's a toast too (else only in the bell's Notifications).
+        body: Option<String>,
+        icon: Option<String>,
+        action: Option<wad_proto::NoticeAction>,
+        toast: bool,
     },
     /// The tailnet: its state, devices or asks.
     Tailnet,
@@ -60,6 +66,12 @@ pub enum Change {
     PeerSpaces(String),
     /// The streams, or which modes can start.
     Streams,
+    /// WadOS's own update (staged, checking…).
+    Updates,
+    /// The network (Wi-Fi, the wire, airplane mode), as wadd last said.
+    Network,
+    /// Bluetooth and its devices, as wadd last said.
+    Bluetooth,
 }
 
 /// The key a peer's wadspace is kept under: `<peer id>:<its id there>`.
@@ -122,6 +134,11 @@ pub struct Store {
     stream_modes: RefCell<Option<StreamsAvailability>>,
     /// How many `streams` events have come (a list asked for is only taken if none came meanwhile).
     streams_said: Cell<u64>,
+    /// WadOS's own update, as wadd last said (the tray's Updates tile).
+    updates: RefCell<Option<wad_proto::Updates>>,
+    /// The network and Bluetooth, as wadd last said (the tray's flyouts).
+    network: RefCell<Option<wad_proto::Network>>,
+    bluetooth: RefCell<Option<wad_proto::Bluetooth>>,
     watchers: RefCell<Vec<Watcher>>,
 }
 
@@ -198,7 +215,9 @@ impl Store {
                 *self.screen.borrow_mut() = Some(s);
                 Change::Screen
             }
-            Event::Notice { level, title, undo, .. } => Change::Notice { level, title, undo },
+            Event::Notice { level, title, undo, body, icon, action, toast } => {
+                Change::Notice { level, title, undo, body, icon, action, toast }
+            }
             Event::Tailnet(t) => {
                 *self.tailnet.borrow_mut() = Some(t);
                 Change::Tailnet
@@ -219,6 +238,10 @@ impl Store {
                 self.signins.borrow_mut().shift_remove(&provider);
                 Change::SignIn(provider)
             }
+            Event::Updates(u) => {
+                *self.updates.borrow_mut() = Some(*u);
+                Change::Updates
+            }
             Event::Streams { streams, available } => {
                 *self.streams.borrow_mut() = streams;
                 *self.stream_modes.borrow_mut() = Some(available);
@@ -226,11 +249,16 @@ impl Store {
                 Change::Streams
             }
             // Phase 8's system state: the shell doesn't keep it (yet).
-            Event::Network(_)
-            | Event::Bluetooth(_)
-            | Event::BtPrompt { .. }
-            | Event::Updates(_)
-            | Event::Storage(_) => {
+            Event::Network(n) => {
+                *self.network.borrow_mut() = Some(*n);
+                Change::Network
+            }
+            Event::Bluetooth(b) => {
+                *self.bluetooth.borrow_mut() = Some(*b);
+                Change::Bluetooth
+            }
+            // Pairing's prompts are Settings' (pairing starts there).
+            Event::BtPrompt { .. } | Event::Storage(_) => {
                 return;
             }
         };
@@ -312,6 +340,20 @@ impl Store {
     }
 
     // ------------------------------------------------------------ phase 6
+
+    /// WadOS's own update, if wadd has said.
+    /// The network, once wadd's said (none on a wadd without it).
+    pub fn network(&self) -> Option<wad_proto::Network> {
+        self.network.borrow().clone()
+    }
+
+    pub fn bluetooth(&self) -> Option<wad_proto::Bluetooth> {
+        self.bluetooth.borrow().clone()
+    }
+
+    pub fn updates(&self) -> Option<wad_proto::Updates> {
+        self.updates.borrow().clone()
+    }
 
     /// The tailnet, once wadd has said (none: not yet).
     pub fn tailnet(&self) -> Option<Tailnet> {

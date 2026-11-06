@@ -14,12 +14,15 @@ mod assets;
 mod bar;
 mod builder;
 mod ctl;
+mod desk;
 mod desktop;
 mod dnd;
 mod dnd_probe;
 mod home;
 mod lock;
 mod machine;
+mod monitors;
+mod open_with;
 mod overlays;
 mod pam;
 mod peers;
@@ -30,6 +33,7 @@ mod signin;
 mod store;
 mod streams;
 mod surface;
+mod verbs;
 mod wadd;
 mod wallpaper;
 mod wm;
@@ -69,8 +73,9 @@ fn activate(app: &gtk::Application, with_builder: bool) {
         app.quit();
         return;
     }
-    let monitors: Vec<gdk::Monitor> = display.monitors().iter::<gdk::Monitor>().filter_map(Result::ok).collect();
-    let Some((primary, others)) = pick_primary(&monitors) else {
+    // The person's settings and the displays (their kept layout, night light).
+    let desk = desk::Desk::start();
+    let Some((primary, others)) = monitors::pick(&desk, &monitors::monitors()) else {
         tracing::error!("no monitors");
         return;
     };
@@ -113,7 +118,7 @@ fn activate(app: &gtk::Application, with_builder: bool) {
         }
     });
 
-    let shell = Shell::new(app, store, link, placer, primary, others);
+    let shell = Shell::new(app, store, link, placer, primary, others, desk);
     let builder = builder::Builder::new(&shell);
     shell.set_builder(&builder);
     let machine = Machine::new(&shell);
@@ -123,6 +128,19 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     peers::start(&shell);
     signin::start(&shell);
     let session = session::Session::new(&shell, &lock);
+    // The lock screen's notifications: the unread ones, unless Settings turned them off.
+    let s = shell.clone();
+    lock.set_notes(move || {
+        if !s.desk.settings().lock.notifications {
+            return vec![];
+        }
+        let shared = bar::shared::get(&s);
+        let n = shared.notices.borrow();
+        n.newest(50).into_iter().filter(|x| !x.read).map(|x| (x.icon(), x.title.clone())).collect()
+    });
+    // The displays as they change: the primary's surfaces follow it, and
+    // what's per display is made again.
+    monitors::follow(&shell);
     dnd_probe::install(&shell);
     if with_builder {
         builder.present();
@@ -151,15 +169,6 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     });
 }
 
-/// The primary: WADOS_PRIMARY's connector if set, else the first.
-fn pick_primary(all: &[gdk::Monitor]) -> Option<(gdk::Monitor, Vec<gdk::Monitor>)> {
-    let wanted = std::env::var("WADOS_PRIMARY").ok();
-    let i = wanted.and_then(|c| all.iter().position(|m| m.connector().as_deref() == Some(c.as_str()))).unwrap_or(0);
-    let primary = all.get(i)?.clone();
-    let others = all.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, m)| m.clone()).collect();
-    Some((primary, others))
-}
-
 /// One line from wadsctl: the shell's own commands, then each module's.
 fn handle(app: &gtk::Application, m: &Rc<Machine>, shell: &Rc<Shell>, words: &[&str]) -> String {
     match words {
@@ -177,6 +186,7 @@ fn handle(app: &gtk::Application, m: &Rc<Machine>, shell: &Rc<Shell>, words: &[&
             m.toggle();
             return "ok".into();
         }
+        ["desk"] => return shell.desk.describe(),
         ["wadd"] => {
             let screen = shell.store.screen().map(|s| format!("{:?}", s.from)).unwrap_or_else(|| "?".into());
             return format!(
@@ -198,7 +208,7 @@ fn handle(app: &gtk::Application, m: &Rc<Machine>, shell: &Rc<Shell>, words: &[&
         return answer;
     }
     match words {
-        ["help"] => "ok ping | page [desktop|home|toggle] | wadd | wm list|activate|fullscreen|unfullscreen|minimize|unminimize|close <#id|app-id> [output] | lock | locked | session [heard] | power [state|close|lock|restart|off] | volume [up|down|mute] | brightness [up|down] | server off | quit (and each module's own)".into(),
+        ["help"] => "ok ping | page [desktop|home|toggle] | wadd | wm list|activate|fullscreen|unfullscreen|minimize|unminimize|close <#id|app-id> [output] | desk | monitors | lock | locked | session [heard] | power [state|close|lock|restart|off] | volume [up|down|mute] | brightness [up|down] | server off | quit (and each module's own)".into(),
         _ => format!("error unknown: {}", words.join(" ")),
     }
 }

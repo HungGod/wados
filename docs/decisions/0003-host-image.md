@@ -54,8 +54,11 @@ ours and that no portal came along.
    `xdm_var_run_t` and the script restores its label.
 2. **The session script** sets `WADOS_SESSION=machine`, `XCURSOR_THEME=WadOS` (size 24), and pixman/cairo
    rendering when there's no render node (v1's: nomodeset, or a card no driver runs). It runs
-   `labwc -s wados-shell` into the journal (`journalctl -t labwc`) and starts it again if it ends. Five quick
-   ends in a row (under 30 s each) and it gives up, so greetd shows the login prompt.
+   `labwc -m -s wados-shell` into the journal (`journalctl -t labwc`) and starts it again if it ends. Five quick
+   ends in a row (under 30 s each) and it gives up, so greetd shows the login prompt. `-m` (`--merge-config`,
+   phase 8): the person's `~/.config/labwc` (Settings ▸ Mouse & Touchpad and ▸ Keyboard write its `rc.xml` and
+   `environment`) is read over `/etc/xdg/labwc`, whose keybinds stay; without it labwc reads only the first
+   `rc.xml` it finds, so a person's would drop every `wadsctl` keybind.
 3. **The shell locks before anything else shows** (it does unless `WADOS_NO_LOCK` is set; the script unsets
    it). Its password check is PAM service `wados-lock` (`/etc/pam.d/wados-lock`): `system-auth`'s auth and
    account, so pam_unix checks the person's own password through `unix_chkpwd` (setuid on Fedora 44), with
@@ -117,7 +120,9 @@ Whether a wadspace plays sound through it on the machine is the VM's check.
   module is no longer left out.
 - Kernel arguments `usbcore.autosuspend=-1`; GRUB sets the screen's own mode (`gfxpayload=auto`) through
   bootupd's static config; `bootc install` defaults to XFS; NetworkManager's Wi-Fi power save is off (mwifiex).
-- **Updates wait for phase 8:** the base enables `bootc-fetch-apply-updates.timer`, and this image disables it.
+- **Updates are wadd's (phase 8):** the base enables `bootc-fetch-apply-updates.timer`, which stages *and reboots*;
+  this image masks it. wadd checks every 12 hours and stages what it finds; the person restarts into it
+  (`apps/wadd/src/updates.rs`). The image's version is `org.opencontainers.image.version` (`host/build.sh`).
 - `CtrlAltDelBurstAction=none`, `ctrl-alt-del.target` masked (Ctrl+Alt+Delete is the shell's).
 - sshd is the base's, enabled, for keys only (`PermitRootLogin no`, no passwords).
 - The hostname is `wadspaces` until the installer names the machine.
@@ -198,7 +203,7 @@ firmware, Tailscale. The binaries: wadd 12.4 MB, wados-shell 13.8 MB, wadsctl 0.
 - **wlroots won't start without Xwayland** when labwc is built with it (`wlr_xwayland_create` fails and labwc
   exits), so Xwayland is installed; it starts only when an X client connects.
 - **Fedora 44 has no `mesa-va-drivers` package:** VA-API is in `mesa-dri-drivers`.
-- **fedora-bootc:44 enables `bootc-fetch-apply-updates.timer` and sshd.** The timer is disabled (phase 8); sshd
+- **fedora-bootc:44 enables `bootc-fetch-apply-updates.timer` and sshd.** The timer is masked (wadd decides, phase 8); sshd
   is kept, keys only.
 - **`unix_chkpwd` is setuid on Fedora 44**, so the lock's PAM check works as the person. `pam_faillock` can't:
   its tally is root's.

@@ -13,7 +13,7 @@
 //! | `POST /v1/ops` | one edit ([`OpRequest`]) → [`OpResult`] |
 //! | `POST /v1/undo/{id}` | an edit's Undo → [`OpResult`] |
 //! | `POST /v1/wadspaces/{id}/build` | its image built here (a job) → [`BuildAnswer`] |
-//! | `POST /v1/wadspaces/{id}/open` | opened on the screen, in a window or in the background ([`OpenRequest`]) → [`WadspaceRun`] |
+//! | `POST /v1/wadspaces/{id}/open` | opened on the screen, in a window or in the background, with a file for this run if it says (Open with: [`OpenRequest`]) → [`WadspaceRun`] |
 //! | `POST /v1/wadspaces/{id}/stop` | stopped → [`WadspaceRun`] |
 //! | `GET /v1/builds` | each wadspace's image here ([`WadspaceBuild`]) |
 //! | `GET /v1/runs` | each wadspace's run here ([`WadspaceRun`]) |
@@ -233,6 +233,9 @@ async fn open(
     Path(id): Path<String>,
     Json(req): Json<OpenRequest>,
 ) -> Result<Json<WadspaceRun>, Failure> {
+    if let Some(file) = &req.file {
+        return Ok(Json(app.runs.open_with(&id, req.display, file, req.machine.as_deref()).await?));
+    }
     Ok(Json(crate::api_phase7::open(&app, &id, req.display).await?))
 }
 

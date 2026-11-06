@@ -78,6 +78,11 @@ pub struct WifiNetwork {
     pub active: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub band: Option<WifiBand>,
+    /// Its security in words, as Settings shows it ("WPA2 Personal",
+    /// "WPA3 Personal", "None (open network)"…); none: not known (a saved
+    /// one out of range).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

@@ -41,6 +41,11 @@ impl Placer {
     }
 
     /// Calls `f` with every window each time they change (after they're placed).
+    /// The primary display is another now (monitors.rs).
+    pub fn set_primary(&self, connector: &str) {
+        *self.primary.borrow_mut() = connector.to_string();
+    }
+
     pub fn on_windows(&self, f: impl Fn(&[Top]) + 'static) {
         self.on_windows.borrow_mut().push(Box::new(f));
     }

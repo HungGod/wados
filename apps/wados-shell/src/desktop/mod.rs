@@ -190,6 +190,8 @@ pub struct Desktop {
     panel: RefCell<Option<Panel>>,
     rename: RefCell<Option<(String, gtk::Entry)>>,
     menu: RefCell<Option<menu::Open>>,
+    /// Where the last menu opened (Open with's opens there too).
+    menu_at: Flag<(f64, f64)>,
     /// A wadspace's picture, made as its drag's prepared, for its drag's icon (with the hint).
     held_ghost: RefCell<Option<(gdk::Paintable, i32, i32)>>,
     desk_dir: PathBuf,
@@ -219,6 +221,7 @@ impl Desktop {
             panel: RefCell::default(),
             rename: RefCell::default(),
             menu: RefCell::default(),
+            menu_at: Flag::new((0.0, 0.0)),
             held_ghost: RefCell::default(),
             desk_dir: files::desktop_dir(),
             desk_json,
@@ -1356,20 +1359,74 @@ impl Desktop {
 
     // ------------------------------------------------------------ doing things
 
-    /// Opened (double-click, Enter): a wadspace, a folder shown, a file with its app.
+    /// Opened (double-click, Enter): a wadspace, a folder shown, a folder of
+    /// files in Files, a file with the app that opened its kind last (in a
+    /// space that has it), else in Files' viewer (the spike's `shell.open`).
     fn open_key(&self, key: &str) {
         if let Some(id) = key.strip_prefix("ws:") {
             self.shell.edit(id);
         } else if let Some(tag) = key.strip_prefix("folder:") {
             self.open_folder(tag);
         } else if let Some(e) = self.entry(key) {
-            self.launch(&e.file().uri(), &e.display);
+            let path = e.path.to_string_lossy().into_owned();
+            if e.kind == files::Kind::Folder {
+                crate::peers::open_app(&self.shell, &["wados-files", &path]);
+                return;
+            }
+            let f = open_file(&e);
+            match crate::open_with::default_for(&self.shell, &f) {
+                Some((app, ws)) => crate::open_with::open(&self.shell, &[f], app, Some(ws)),
+                None => crate::peers::open_app(&self.shell, &["wados-files", "--view", &path]),
+            }
         } else if key == "trash" {
-            self.launch("trash:///", "the Trash");
+            crate::peers::open_app(&self.shell, &["wados-files", "--trash"]);
         } else if key == "machines" {
             // Files, at Machines: my other machines on the tailnet, their homes and wadspaces.
             crate::peers::open_app(&self.shell, &["wados-files", "--machines"]);
         }
+    }
+
+    /// Open with ▸ for these files: its rows, as a menu of their own where the
+    /// desktop's was (the desktop's menus have no submenus).
+    fn open_with_menu(&self, keys: &[String]) {
+        let files: Vec<crate::open_with::File> =
+            keys.iter().filter_map(|k| self.entry(k)).map(|e| open_file(&e)).collect();
+        if files.is_empty() {
+            return;
+        }
+        let (x, y) = self.menu_at.get();
+        let mut entries = vec![Entry::Heading("Open with".into())];
+        for r in crate::open_with::rows(&self.shell, &files) {
+            match r {
+                wad_model::open_with::Row::Sep => entries.push(Entry::Sep),
+                wad_model::open_with::Row::Nothing => {
+                    entries.push(MenuItem::new("open-with:none", "No app opens it", "", || {}).off(Some("")).entry())
+                }
+                wad_model::open_with::Row::App { app, ws, label, hint, checked } => {
+                    let id = menu::static_id(
+                        &wad_model::open_with::Row::App {
+                            app,
+                            ws: ws.clone(),
+                            label: String::new(),
+                            hint: None,
+                            checked: false,
+                        }
+                        .id(),
+                    );
+                    let (s, f) = (self.shell.clone(), files.clone());
+                    let icon = if ws.is_some() { "monitor-play" } else { "plus" };
+                    let mut it = MenuItem::new(id, label, icon, move || {
+                        crate::open_with::open(&s, &f, app, ws.clone());
+                    })
+                    .checked(checked);
+                    if let Some(h) = hint {
+                        it = it.hint(h);
+                    }
+                    entries.push(it.entry());
+                }
+            }
+        }
+        self.show_menu(x, y, entries, keys.first().cloned(), true);
     }
 
     /// Up on the screen as `display` (shown, if it's running): its menu's
@@ -1380,20 +1437,6 @@ impl Desktop {
         } else {
             self.shell.open(id, display);
         }
-    }
-
-    /// `uri` with the system's app for it.
-    // TODO(phase 8): "Open with" into the wadspaces that have an app for it.
-    fn launch(&self, uri: &str, what: &str) {
-        let ctx = gdk::Display::default().map(|d| d.app_launch_context());
-        let (w, uri, what) = (self.weak(), uri.to_string(), what.to_string());
-        glib::spawn_future_local(async move {
-            let r = gio::AppInfo::launch_default_for_uri_future(&uri, ctx.as_ref()).await;
-            if let (Err(e), Some(m)) = (r, w.upgrade()) {
-                tracing::info!("opening {uri}: {e}");
-                m.toast(Level::Warn, &format!("Nothing on this machine opens {what} yet"));
-            }
-        });
     }
 
     /// Into the Trash: wadspaces (wadd's, with an Undo) and files.
@@ -1428,7 +1471,6 @@ impl Desktop {
             None => (0.0, 0.0),
         };
         let entries = vec![
-            // TODO(phase 8): trashed wadspaces go too (wadd has no way to delete one for good yet).
             Entry::Heading("Empty the Trash?".into()),
             MenuItem::new("empty-trash-yes", "Empty Trash", "trash", self.on(|m| m.empty_trash()))
                 .hint("Everything in it goes for good")
@@ -1439,11 +1481,37 @@ impl Desktop {
         self.show_menu(x, y, entries, Some("trash".into()), true);
     }
 
+    /// Its files gone for good, and its wadspaces (wadd deletes each, with everything in it).
     fn empty_trash(&self) {
+        let trashed = self.trashed_spaces();
+        for id in trashed {
+            let s = self.shell.clone();
+            self.shell.link.call(
+                move |w| async move { w.purge_wadspace(&id).await },
+                move |r| {
+                    if let Err(e) = r {
+                        s.toast(Level::Warn, &format!("A wadspace in the Trash didn't go: {}", e.message), None);
+                    }
+                },
+            );
+        }
         self.off_thread(files::empty_trash, |m, r| match r {
             Ok(()) => m.toast(Level::Info, "The Trash is empty"),
             Err(e) => m.toast(Level::Warn, &format!("Couldn't empty the Trash: {e}")),
         });
+    }
+
+    /// This machine's wadspaces in the Trash.
+    fn trashed_spaces(&self) -> Vec<String> {
+        let me = self.shell.store.machine_id();
+        self.shell
+            .store
+            .library()
+            .wadspaces
+            .iter()
+            .filter(|x| x.is_trashed() && x.machine == me)
+            .map(|x| x.id.clone())
+            .collect()
     }
 
     /// A new wadspace: empty glass after everything; it opens in the
@@ -1632,6 +1700,7 @@ impl Desktop {
     }
 
     fn show_menu(&self, x: f64, y: f64, entries: Vec<Entry>, menu_for: Option<String>, autohide: bool) {
+        self.menu_at.set((x, y));
         let old = self.menu.borrow_mut().take();
         if let Some(old) = old {
             old.popover.popdown();
@@ -1800,7 +1869,7 @@ impl Desktop {
         let ids: Vec<String> = if sel.iter().any(|k| k == key) { sel.to_vec() } else { vec![key.to_string()] };
         let folder = e.kind == files::Kind::Folder;
         let (k_open, k_ren) = (key.to_string(), key.to_string());
-        let (c1, c2, t) = (ids.clone(), ids.clone(), ids.clone());
+        let (c1, c2, t, ow) = (ids.clone(), ids.clone(), ids.clone(), ids.clone());
         let dir = e.path.clone();
         let paste_off = if !folder {
             Some("Paste into a folder")
@@ -1818,6 +1887,7 @@ impl Desktop {
             )
             .key("Enter")
             .entry(),
+            MenuItem::new("open-with", "Open with", "app-window", self.on(move |m| m.open_with_menu(&ow))).entry(),
             Entry::Sep,
             MenuItem::new("cut", "Cut", "scissors", self.on(move |m| m.copy(&c1, true))).key("Ctrl+X").entry(),
             MenuItem::new("copy", "Copy", "copy", self.on(move |m| m.copy(&c2, false))).key("Ctrl+C").entry(),
@@ -1838,7 +1908,7 @@ impl Desktop {
     }
 
     fn trash_menu(&self) -> Vec<Entry> {
-        let full = self.s.borrow().trash_files > 0;
+        let full = self.s.borrow().trash_files > 0 || !self.trashed_spaces().is_empty();
         vec![
             MenuItem::new("open", "Open", "folder-open", self.on(|m| m.open_key("trash"))).entry(),
             MenuItem::new("empty-trash", "Empty Trash", "trash", self.on(|m| m.ask_empty_trash()))
@@ -2090,6 +2160,16 @@ impl Desktop {
 }
 
 /// One wadspace carried (from the desktop, or out of a folder), as it's held.
+/// A desktop file, as Open with has it.
+fn open_file(e: &files::Entry) -> crate::open_with::File {
+    crate::open_with::File {
+        path: e.path.to_string_lossy().into_owned(),
+        name: e.name.clone(),
+        mime: e.content_type.clone(),
+        folder: e.kind == files::Kind::Folder,
+    }
+}
+
 fn held_of(keys: &[String], from_folder: bool) -> Option<Held> {
     let [k] = keys else { return None };
     let id = k.strip_prefix("ws:")?;

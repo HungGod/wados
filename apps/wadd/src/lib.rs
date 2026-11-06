@@ -17,10 +17,11 @@
 //! Phase 8: the system apps' routes (api_phase8.rs: the network,
 //! Bluetooth, updates, storage; 501 until they're made, sample data in
 //! fake_phase8.rs), and deleting a wadspace out of the Trash for good.
+//! WadOS's own updates through bootc and the base images' refresh
+//! (updates.rs), and the disk with its Clean Up (storage.rs).
 //!
 //! Later phases: Open-with files, runs of one time,
-//! keys' sign-in flows, devices, the network, updates, install, server mode,
-//! focus, and the tidy-up of images nothing needs (v1's tidy.rs).
+//! keys' sign-in flows, devices, the network, install, server mode and focus.
 
 pub mod access;
 pub mod api;
@@ -28,6 +29,7 @@ pub mod api_phase6;
 pub mod api_phase7;
 pub mod api_phase8;
 pub mod backend;
+pub mod bluetooth;
 pub mod builds;
 pub mod clip;
 pub mod copies;
@@ -42,6 +44,7 @@ pub mod keys;
 pub mod library;
 pub mod logbuf;
 pub mod mounts;
+pub mod network;
 pub mod packages;
 pub mod peers;
 pub mod projects;
@@ -50,6 +53,7 @@ pub mod remote;
 pub mod runs;
 pub mod screen;
 pub mod selinux;
+pub mod storage;
 pub mod store;
 pub mod streams;
 pub mod systemd;
@@ -58,6 +62,7 @@ pub mod tailnet;
 pub mod tar;
 pub mod tunnel;
 pub mod turn;
+pub mod updates;
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -140,6 +145,10 @@ pub struct Server {
     proxy: Option<(Arc<proxy::RouteTable>, Vec<String>)>,
     /// The machine's streams (none with the sample): adopted, then checked, from `serve`.
     streams: Option<Arc<streams::MachineStreams>>,
+    /// The machine's updates and disk (none with the sample): their schedules start with `serve`.
+    host: Option<(updates::HostUpdates, storage::MachineStorage)>,
+    /// The machine's network and Bluetooth (none with the sample, or `[radios]` off): followed from `serve`.
+    radios: Option<(Arc<network::MachineNetwork>, Arc<bluetooth::MachineBluetooth>)>,
 }
 
 impl Server {
@@ -293,6 +302,8 @@ impl Server {
                 s
             }
         };
+        let mut host = None;
+        let mut radios_on = None;
         let system = match parts.sample {
             Some(step) => {
                 let s = fake_phase8::Sample::new(
@@ -311,7 +322,18 @@ impl Server {
                     storage: Arc::new(s),
                 }
             }
-            None => System::not_yet(),
+            None => {
+                let mut s = System::not_yet();
+                let (u, st) = host_system(&config, profile, &jobs, &bus, &docs, &builds);
+                (s.updates, s.storage) = (Arc::new(u.clone()), Arc::new(st.clone()));
+                host = Some((u, st));
+                if config.radios.enabled {
+                    let (n, b) = radios(&config, &machine, &bus, tailnet.as_ref().map(|t| t.tailnet.clone()), &net);
+                    (s.network, s.bluetooth) = (Arc::new(n.clone()), Arc::new(b.clone()));
+                    radios_on = Some((n, b));
+                }
+                s
+            }
         };
         let state = Arc::new(AppState {
             machine,
@@ -341,6 +363,8 @@ impl Server {
             tailnet,
             proxy: public_proxy,
             streams: machine_streams,
+            host,
+            radios: radios_on,
         })
     }
 
@@ -370,6 +394,14 @@ impl Server {
         }
         if let Some((routes, listen)) = &self.proxy {
             loops.push(tokio::spawn(proxy::serve(routes.clone(), listen.clone())));
+        }
+        if let Some((n, b)) = &self.radios {
+            loops.push(tokio::spawn(n.clone().run()));
+            loops.push(tokio::spawn(b.clone().run()));
+        }
+        if let Some((u, st)) = &self.host {
+            loops.extend(u.start());
+            loops.extend(st.start());
         }
         if let Some(s) = &self.streams {
             loops.push(tokio::spawn(s.clone().run()));
@@ -405,6 +437,66 @@ impl Server {
         }
         res
     }
+}
+
+/// The machine's network (NetworkManager) and Bluetooth (BlueZ), on
+/// `[radios] bus` (the system's by default), and airplane mode over both.
+fn radios(
+    config: &Config,
+    machine: &MachineInfo,
+    bus: &Bus,
+    tailnet: Option<Arc<tailnet::Tailnet>>,
+    net: &Arc<dyn api_phase6::Net>,
+) -> (Arc<network::MachineNetwork>, Arc<bluetooth::MachineBluetooth>) {
+    let r = &config.radios;
+    let every = Duration::from_secs(r.poll_s.max(1));
+    let airplane = network::Airplane::new(&config.daemon.state_dir);
+    let hostname = machine.name.to_lowercase();
+    let b = bluetooth::MachineBluetooth::new(&r.bus, &hostname, bus.clone(), every, airplane.clone());
+    let n = network::MachineNetwork::new(&r.bus, airplane, b.clone(), tailnet, net.clone(), bus.clone(), every);
+    (n, b)
+}
+
+/// The machine's updates (bootc, the base images) and its disk: podman's
+/// at `podman_socket`. A refresh of the bases makes wadspaces built on the
+/// old base show as updates, and the disk is measured again.
+fn host_system(
+    config: &Config,
+    profile: Profile,
+    jobs: &Arc<jobs::Jobs>,
+    bus: &Bus,
+    docs: &Arc<Docs>,
+    builds: &Arc<builds::Builds>,
+) -> (updates::HostUpdates, storage::MachineStorage) {
+    let podman = || wad_podman::Podman::new(&config.daemon.podman_socket);
+    let st = storage::MachineStorage::new(
+        storage::Settings::new(config, profile),
+        Arc::new(storage::PodmanDisk(podman())),
+        docs.clone(),
+        builds.clone(),
+        jobs.clone(),
+        bus.clone(),
+    );
+    let (b, s) = (builds.clone(), st.clone());
+    let hooks = updates::Hooks {
+        bases_changed: Some(Box::new(move || {
+            let (b, s) = (b.clone(), s.clone());
+            tokio::spawn(async move {
+                b.refresh_base().await;
+                b.publish_all();
+                s.poke();
+            });
+        })),
+    };
+    let u = updates::HostUpdates::new(
+        updates::Settings::new(config, profile),
+        Arc::new(updates::SystemBootc::new()),
+        Arc::new(updates::PodmanImages(podman())),
+        jobs.clone(),
+        bus.clone(),
+        hooks,
+    );
+    (u, st)
 }
 
 /// The base, the images built, and the containers, against what wadd

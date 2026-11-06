@@ -319,10 +319,27 @@ pub struct BuildAnswer {
 /// `POST /v1/wadspaces/{id}/open`: how it's shown. `screen` (full screen),
 /// `window` or `background` (started, its window minimized): the shell
 /// places it. `stream` is a later phase's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `file` (phase 8's Open with): a file or folder to open it with, for this
+/// run only: a path on this machine (`~/…` or absolute, in the person's
+/// home), or on `machine` (one of my other machines, over Taildrive). One
+/// that isn't running opens with it mounted at `~/Desktop/<its name>` (a
+/// copy, from another machine); one that's running has it copied there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenRequest {
     pub display: SessionDisplay,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Whose `file` it is (a machine's id); none: this machine's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+}
+
+impl OpenRequest {
+    pub fn new(display: SessionDisplay) -> Self {
+        Self { display, file: None, machine: None }
+    }
 }
 
 /// A wadspace's run on this machine (the `run` event, `GET /v1/runs`):
@@ -417,7 +434,13 @@ mod tests {
         // A job's lines aren't the present: its state is.
         assert_eq!(Event::JobLines { id: "j".into(), from: 0, lines: vec![] }.latest_key(), None);
         let open: OpenRequest = serde_json::from_str(r#"{"display": "background"}"#).unwrap();
-        assert_eq!(open.display, SessionDisplay::Background);
+        assert_eq!(open, OpenRequest::new(SessionDisplay::Background));
+        let with: OpenRequest = serde_json::from_str(r#"{"display": "screen", "file": "~/notes.txt"}"#).unwrap();
+        assert_eq!(with.file.as_deref(), Some("~/notes.txt"));
+        assert_eq!(
+            serde_json::to_value(OpenRequest::new(SessionDisplay::Screen)).unwrap(),
+            serde_json::json!({"display": "screen"})
+        );
         let s: ScreenSession =
             serde_json::from_str(r#"{"waylandSocket": "/run/user/1000/wayland-0", "uid": 1000}"#).unwrap();
         assert_eq!(s.uid, 1000);

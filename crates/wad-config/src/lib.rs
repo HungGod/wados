@@ -40,6 +40,33 @@ pub struct Config {
     pub tailnet: Tailnet,
     pub packages: Packages,
     pub github: Github,
+    pub radios: Radios,
+}
+
+/// The network and Bluetooth (Settings ▸ Wi-Fi, Network, Bluetooth):
+/// NetworkManager and BlueZ, over D-Bus.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Radios {
+    /// A machine's (wadd works its NetworkManager and BlueZ); a laptop's
+    /// are its own desktop's, so off there unless a trial turns them on.
+    pub enabled: bool,
+    /// The D-Bus they're on (`unix:path=…`). Empty: the system bus.
+    pub bus: String,
+    /// How often they're looked at (Bluetooth: every second while it looks for devices or pairs).
+    pub poll_s: u64,
+}
+
+impl Radios {
+    pub fn for_profile(profile: Profile) -> Self {
+        Self { enabled: profile == Profile::System, bus: String::new(), poll_s: 5 }
+    }
+}
+
+impl Default for Radios {
+    fn default() -> Self {
+        Self::for_profile(Profile::System)
+    }
 }
 
 /// GitHub: wadd's sign-in (the OAuth device flow) and the calls it makes
@@ -404,6 +431,7 @@ impl Config {
             tailnet: Tailnet::for_profile(profile),
             packages: Packages::default(),
             github: Github::default(),
+            radios: Radios::for_profile(profile),
         }
     }
 

@@ -3416,6 +3416,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "wad-bt"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "wad-bt",
+ "wad-net",
+ "wad-proto",
+ "zbus",
+]
+
+[[package]]
 name = "wad-clip"
 version = "0.1.0"
 dependencies = [
@@ -3432,6 +3445,19 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "toml",
+]
+
+[[package]]
+name = "wad-desk"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "tempfile",
+ "toml",
+ "tracing",
+ "wayland-client",
+ "wayland-protocols-wlr",
 ]
 
 [[package]]
@@ -3492,6 +3518,19 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "wad-net"
+version = "0.1.0"
+dependencies = [
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+ "wad-net",
+ "wad-proto",
+ "zbus",
 ]
 
 [[package]]
@@ -3566,6 +3605,7 @@ dependencies = [
  "tokio",
  "tracing",
  "wad-config",
+ "wad-model",
  "wad-proto",
  "wadd",
 ]
@@ -3692,11 +3732,13 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wad-bt",
  "wad-config",
  "wad-gen",
  "wad-git",
  "wad-github",
  "wad-model",
+ "wad-net",
  "wad-podman",
  "wad-proto",
  "wad-systemd",
@@ -3704,6 +3746,7 @@ dependencies = [
  "wad-wadd-client",
  "wad-wayland",
  "wiremock",
+ "zbus",
 ]
 
 [[package]]
@@ -3736,6 +3779,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wad-desk",
  "wad-gtk",
  "wad-model",
  "wad-proto",
@@ -3758,6 +3802,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wad-desk",
  "wad-gtk",
  "wad-model",
  "wad-proto",

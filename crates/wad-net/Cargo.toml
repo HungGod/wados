@@ -1,0 +1,23 @@
+[package]
+name = "wad-net"
+description = "The network for wadd through NetworkManager over D-Bus: Wi-Fi on and off, the networks in range and saved, joining (the password goes over D-Bus, never on a command line), leaving, forgetting, and the wired network"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[features]
+# A fake NetworkManager on a private D-Bus (its own dbus-daemon), for
+# wad-net's tests and wadd's.
+fake = ["dep:tempfile", "tokio/process"]
+
+[dependencies]
+tempfile = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+wad-proto.workspace = true
+zbus.workspace = true
+
+[dev-dependencies]
+wad-net = { path = ".", features = ["fake"] }

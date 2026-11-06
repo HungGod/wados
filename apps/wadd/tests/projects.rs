@@ -156,6 +156,7 @@ async fn here() -> Here {
         machine_id: "m-test".into(),
         github: format!("file://{}", github.display()),
         taildrive: url,
+        lookup: wadd::projects::user_of,
     };
     let drive = Arc::new(FakeDrive::default());
     let projects =
@@ -566,4 +567,133 @@ async fn webdav_as_taildrive_answers() {
     // Nobody there.
     let e = Dav::new().stat("http://127.0.0.1:9/x").await.unwrap_err();
     assert!(matches!(e, taildrive::DavError::Unreachable(_)), "{e:?}");
+}
+
+// ------------------------------------------------------------ Open with
+
+#[tokio::test]
+async fn a_file_opened_with_a_wadspace_is_mounted_for_that_run_only() {
+    let h = here().await;
+    let ws = h.rig.wadspace("Terminal", &[AppId::Terminal], &[]);
+    std::fs::create_dir_all(h.rig.home.join("Documents")).unwrap();
+    std::fs::write(h.rig.home.join("Documents/notes.txt"), "remember").unwrap();
+    let st = h.rig.runs.open_with(&ws, SessionDisplay::Screen, "~/Documents/notes.txt", None).await.unwrap();
+    assert_eq!(st.state.phase, Phase::Starting);
+    h.rig.runs.settled(&ws).await;
+    assert_eq!(h.rig.runs.state(&ws).state.phase, Phase::Ready);
+    let home = std::fs::canonicalize(&h.rig.home).unwrap();
+    let mount = format!("Volume={}/Documents/notes.txt:/config/Desktop/notes.txt:rw", home.display());
+    assert!(has(&h.unit(&ws), &mount), "{}", h.unit(&ws));
+    // Its document keeps nothing of it.
+    assert!(h.rig.docs.wadspace(&ws).unwrap().look.projects.is_empty());
+
+    // Running: another file is copied onto its Desktop, inside it.
+    std::fs::write(h.rig.home.join("Documents/more.txt"), "more").unwrap();
+    h.rig.runs.open_with(&ws, SessionDisplay::Screen, "~/Documents/more.txt", None).await.unwrap();
+    let calls = h.rig.fake.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with(&format!("exec wad-{ws} abc sh -c")) && c.contains("/config/Desktop/more.txt")),
+        "{calls:?}"
+    );
+    // Not what's outside the home, nor hidden.
+    let e = h.rig.runs.open_with(&ws, SessionDisplay::Screen, "/etc/passwd", None).await.unwrap_err();
+    assert_eq!(e.code, wad_proto::ErrorCode::Conflict, "{}", e.message);
+
+    // Opened again without it: it's gone.
+    h.stop(&ws).await;
+    h.open(&ws).await;
+    assert!(!h.unit(&ws).contains("notes.txt"), "{}", h.unit(&ws));
+    // And the empty file its mount stood on is cleared from its home.
+    let calls = h.rig.fake.calls();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with(&format!("exec wad-{ws} root sh -c")) && c.ends_with("/config/Desktop/notes.txt")),
+        "{calls:?}"
+    );
+}
+
+/// A machine's person (`sam`, uid 1000), made after wadd started: their home
+/// at `/var/home/sam` reached through `/home` (a link, as on Fedora's atomic
+/// images), found when a file's opened.
+static PERSON: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+fn sam(uid: u32) -> Option<(PathBuf, String)> {
+    if uid != 1000 {
+        return None;
+    }
+    Some((PERSON.get()?.clone(), "sam".to_string()))
+}
+
+#[tokio::test]
+async fn a_machines_person_made_after_wadd_started_has_their_home_found() {
+    let rig = rig();
+    rig.builds.refresh_base().await;
+    let var = rig.dir.path().join("var/home/sam");
+    std::fs::create_dir_all(var.join("Documents")).unwrap();
+    std::fs::write(var.join("Documents/notes.txt"), "remember").unwrap();
+    std::os::unix::fs::symlink(rig.dir.path().join("var/home"), rig.dir.path().join("homes")).unwrap();
+    let sample =
+        Sample::new("test", rig.jobs.clone(), rig.bus.clone(), rig.docs.clone(), rig.builds.clone(), Duration::ZERO);
+    // As wadd started on a machine with no person yet: no home, nothing allowed.
+    let settings = Settings {
+        state_dir: rig.state_dir(),
+        projects_dir: rig.dir.path().join("projects"),
+        uid: 1000,
+        root: false,
+        system: true,
+        home: None,
+        roots: vec![],
+        machine_id: "m-test".into(),
+        github: "file:///nowhere".into(),
+        taildrive: "http://127.0.0.1:9".into(),
+        lookup: sam,
+    };
+    let projects = Projects::new(settings, rig.fake.clone(), rig.jobs.clone(), Arc::new(sample));
+    rig.runs.attach(Arc::new(projects));
+    let ws = rig.wadspace("Terminal", &[AppId::Terminal], &[]);
+    // Not yet made: said so.
+    let e = rig.runs.open_with(&ws, SessionDisplay::Screen, "~/Documents/notes.txt", None).await.unwrap_err();
+    assert!(e.message.contains("no home"), "{}", e.message);
+    // sam made now (useradd): their home, through /home's link.
+    PERSON.set(rig.dir.path().join("homes/sam")).unwrap();
+    let st = rig.runs.open_with(&ws, SessionDisplay::Screen, "~/Documents/notes.txt", None).await.unwrap();
+    assert_eq!(st.state.phase, Phase::Starting);
+    rig.runs.settled(&ws).await;
+    assert_eq!(rig.runs.state(&ws).state.phase, Phase::Ready, "{:?}", rig.runs.state(&ws));
+    let unit = rig.fake.state.lock().unwrap().units[&format!("wad-{ws}.container")].clone();
+    let real = std::fs::canonicalize(&var).unwrap();
+    let mount = format!("Volume={}/Documents/notes.txt:/config/Desktop/notes.txt:rw", real.display());
+    assert!(has(&unit, &mount), "{unit}");
+    // Outside their home: no.
+    let outside = rig.dir.path().join("elsewhere.txt");
+    std::fs::write(&outside, "x").unwrap();
+    assert!(rig.runs.open_with(&ws, SessionDisplay::Screen, outside.to_str().unwrap(), None).await.is_err());
+}
+
+#[tokio::test]
+async fn a_wadspace_deleted_for_good_leaves_no_volume() {
+    let h = here().await;
+    let ws = h.rig.wadspace("Terminal", &[AppId::Terminal], &[]);
+    let other = h.rig.wadspace("Other", &[AppId::Terminal], &[]);
+    h.open(&ws).await;
+    h.stop(&ws).await;
+    {
+        let mut st = h.rig.fake.state.lock().unwrap();
+        for v in [
+            format!("wad-{ws}-config"),
+            format!("wadstream-{ws}"),
+            format!("wadsecure-{ws}"),
+            format!("wad-{other}-config"),
+        ] {
+            st.volumes.insert(v);
+        }
+    }
+    h.rig.edit(Op::Trash { ws: ws.clone() });
+    let out = h.rig.docs.purge(&ws).unwrap();
+    tokio::time::timeout(Duration::from_secs(20), h.rig.runs.edited(&out.changed)).await.expect("it didn't wait long");
+    let left: Vec<String> = h.rig.fake.state.lock().unwrap().volumes.iter().cloned().collect();
+    assert_eq!(left, [format!("wad-{other}-config")], "only the other wadspace's stays");
 }

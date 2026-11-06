@@ -41,7 +41,12 @@ pub struct Lock {
     unshown: RefCell<Vec<glib::WeakRef<gtk::Window>>>,
     /// The app's windows are watched for that (once).
     watching: Cell<bool>,
+    /// What notifications it shows (the unread ones' icons and titles; none
+    /// when Settings' Lock Screen Notifications is off): main.rs's.
+    notes: RefCell<Option<Notes>>,
 }
+
+type Notes = Rc<dyn Fn() -> Vec<(&'static str, String)>>;
 
 /// The signed-in user: their login and the name they're welcomed by.
 fn me() -> (String, String) {
@@ -80,7 +85,39 @@ impl Lock {
             active: Cell::new(false),
             unshown: RefCell::default(),
             watching: Cell::new(false),
+            notes: RefCell::default(),
         })
+    }
+
+    /// Where its notifications come from (the spike's: the last three unread, at the top left).
+    pub fn set_notes(&self, f: impl Fn() -> Vec<(&'static str, String)> + 'static) {
+        *self.notes.borrow_mut() = Some(Rc::new(f));
+    }
+
+    fn notes_box(&self) -> Option<gtk::Box> {
+        let f = self.notes.borrow().clone()?;
+        let notes = f();
+        if notes.is_empty() {
+            return None;
+        }
+        let b = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(6)
+            .halign(gtk::Align::Start)
+            .valign(gtk::Align::Start)
+            .margin_top(24)
+            .margin_start(24)
+            .css_classes(["lock-notes"])
+            .build();
+        b.set_widget_name("lock-notes");
+        for (icon, title) in notes.iter().rev().take(3).rev() {
+            let icon: &'static str = icon;
+            let n = gtk::Box::builder().spacing(8).css_classes(["lock-note"]).build();
+            n.append(&wad_gtk::Icon::new(icon, 14));
+            n.append(&gtk::Label::builder().label(title).xalign(0.0).build());
+            b.append(&n);
+        }
+        Some(b)
     }
 
     /// Each of `app`'s windows (and every one to come) noted if it's shown
@@ -270,6 +307,9 @@ impl Lock {
         col.append(&said);
         overlay.add_overlay(&col);
         overlay.add_overlay(&self.corner());
+        if let Some(n) = self.notes_box() {
+            overlay.add_overlay(&n);
+        }
         w.set_child(Some(&overlay));
         w.add_controller(to_the_password(&entry));
 

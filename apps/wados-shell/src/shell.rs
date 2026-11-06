@@ -7,7 +7,8 @@
 //! Surfaces hold an `Rc<Shell>` and use only what's here; a module that
 //! needs more adds a verb of its own on top of these.
 
-use std::cell::{OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
+use std::ops::Deref;
 use std::rc::{Rc, Weak};
 
 use gtk::{gdk, glib, prelude::*};
@@ -16,6 +17,7 @@ use wad_model::edit::Op;
 use wad_proto::{Event, Level, OpResult};
 
 use crate::builder::Builder;
+use crate::desk::Desk;
 use crate::machine::{Machine, Page};
 use crate::placer::Placer;
 use crate::session::{Power, Session};
@@ -24,13 +26,39 @@ use crate::wadd::Link;
 
 type CtlHandler = Box<dyn Fn(&[&str]) -> String>;
 
+/// The primary display, as it is now: it derefs to its monitor, so
+/// `&shell.primary` is always the current one (monitors.rs changes it when
+/// the displays do). Each one it's been is kept (a few bytes a change), so
+/// a reference taken before a change stays good.
+pub struct Primary(Cell<&'static gdk::Monitor>);
+
+impl Deref for Primary {
+    type Target = gdk::Monitor;
+    fn deref(&self) -> &gdk::Monitor {
+        self.0.get()
+    }
+}
+
+/// The other displays, as they are now (as [`Primary`]).
+pub struct Others(Cell<&'static Vec<gdk::Monitor>>);
+
+impl Deref for Others {
+    type Target = Vec<gdk::Monitor>;
+    fn deref(&self) -> &Vec<gdk::Monitor> {
+        self.0.get()
+    }
+}
+
 pub struct Shell {
     pub app: gtk::Application,
     pub store: Rc<Store>,
     pub link: Rc<Link>,
     pub placer: Rc<Placer>,
-    pub primary: gdk::Monitor,
-    pub others: Vec<gdk::Monitor>,
+    pub primary: Primary,
+    pub others: Others,
+    /// The person's settings, the displays' layouts, night light (desk.rs).
+    pub desk: Rc<Desk>,
+    monitors_subs: RefCell<Vec<Rc<dyn Fn()>>>,
     machine: OnceCell<Weak<Machine>>,
     builder: OnceCell<Weak<Builder>>,
     session: OnceCell<Weak<Session>>,
@@ -45,14 +73,18 @@ impl Shell {
         placer: Rc<Placer>,
         primary: gdk::Monitor,
         others: Vec<gdk::Monitor>,
+        desk: Rc<Desk>,
     ) -> Rc<Self> {
+        crate::surface::set_primary(&primary);
         Rc::new(Self {
             app: app.clone(),
             store,
             link,
             placer,
-            primary,
-            others,
+            primary: Primary(Cell::new(Box::leak(Box::new(primary)))),
+            others: Others(Cell::new(Box::leak(Box::new(others)))),
+            desk,
+            monitors_subs: RefCell::default(),
             machine: OnceCell::new(),
             builder: OnceCell::new(),
             session: OnceCell::new(),
@@ -110,6 +142,27 @@ impl Shell {
                 m.desktop_keys();
             }
         });
+    }
+
+    // ------------------------------------------------------------ the displays
+
+    /// The displays changed (monitors.rs): the primary's surfaces move to
+    /// `primary` (surface.rs), then everyone who asked hears it.
+    pub fn set_monitors(&self, primary: gdk::Monitor, others: Vec<gdk::Monitor>) {
+        crate::surface::set_primary(&primary);
+        self.placer.set_primary(&primary.connector().map(|c| c.to_string()).unwrap_or_default());
+        self.primary.0.set(Box::leak(Box::new(primary)));
+        self.others.0.set(Box::leak(Box::new(others)));
+        let subs = self.monitors_subs.borrow().clone();
+        for f in subs {
+            f();
+        }
+    }
+
+    /// `f` each time the displays change (a new primary, one plugged in or
+    /// out, a size or scale).
+    pub fn on_monitors(&self, f: impl Fn() + 'static) {
+        self.monitors_subs.borrow_mut().push(Rc::new(f));
     }
 
     /// The primary display's size, in logical pixels.
@@ -224,6 +277,18 @@ impl Shell {
         if let Some(Err(e)) = r {
             self.toast(Level::Warn, &e, None);
         }
+    }
+
+    /// The volume, mute or output (the tray's sound flyout).
+    pub fn sound(&self, v: crate::session::media::Vol) {
+        if let Some(s) = self.session.get().and_then(Weak::upgrade) {
+            s.sound(v);
+        }
+    }
+
+    /// The screen's brightness to `frac` of its brightest (the tray's slider).
+    pub fn set_brightness(&self, frac: f64) -> Result<(), String> {
+        self.session.get().and_then(Weak::upgrade).ok_or("no session yet")?.set_brightness(frac)
     }
 
     // ------------------------------------------------------------ toasts

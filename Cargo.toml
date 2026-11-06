@@ -23,6 +23,9 @@ wad-systemd = { path = "crates/wad-systemd" }
 wad-tailscale = { path = "crates/wad-tailscale" }
 wad-github = { path = "crates/wad-github" }
 wad-git = { path = "crates/wad-git" }
+wad-net = { path = "crates/wad-net" }
+wad-bt = { path = "crates/wad-bt" }
+wad-desk = { path = "crates/wad-desk" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

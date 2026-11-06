@@ -23,12 +23,15 @@ use wad_gtk::{Icon, Svg};
 use wad_model::{JobKind, JobStatus};
 use wad_proto::{JobInfo, SignInProvider, Tailnet, TailnetAsk, TailnetState};
 
-use super::notices::{ago, level_class, level_icon};
+use super::notices::{ago, level_class};
 use super::shared::{Shared, Topic, now};
-use super::system::{self, NetState};
+use super::system;
 use super::ui::{self, label, later, set_class};
 use crate::shell::Shell;
 use crate::store::Change;
+
+/// The network and Bluetooth flyouts (wadd's).
+mod radios;
 
 /// What the Tailscale tile says under its name: how many of my machines are
 /// online when it runs, else where it is (Settings' words).
@@ -39,6 +42,18 @@ pub fn tailscale_sub(t: Option<&Tailnet>, online: usize) -> String {
         None => "Not answering".into(),
     }
 }
+
+/// What the Updates tile says under its name (the spike's Flyout).
+pub fn updates_sub(u: Option<&wad_proto::Updates>) -> &'static str {
+    match u {
+        Some(u) if u.staged.is_some() => "Restart to update",
+        Some(u) if u.checking => "Checking…",
+        _ => "Up to date",
+    }
+}
+
+/// The Updates tile's tooltip.
+pub const UPDATES_TIP: &str = "Updates: check for one, or restart into it";
 
 /// A tailnet state as Settings words it (`panels/tailnet.ts`).
 pub fn state_word(s: TailnetState) -> &'static str {
@@ -122,6 +137,8 @@ pub struct Tray {
     clock_d: gtk::Label,
     hidden_icon: Icon,
     resized: RefCell<Option<Rc<dyn Fn()>>>,
+    /// The sound and display flyouts (levels.rs).
+    levels: Rc<super::levels::Levels>,
 }
 
 impl Tray {
@@ -131,6 +148,7 @@ impl Tray {
         {
             wad_gtk::kit::install(&d);
             wad_gtk::theme::add_css(&d, CSS);
+            wad_gtk::theme::add_css(&d, radios::CSS);
         }
         let root = gtk::Box::builder().spacing(1).valign(gtk::Align::Center).build();
         let jobs_ring = Ring::new(18);
@@ -163,6 +181,7 @@ impl Tray {
             clock_d: gtk::Label::builder().css_classes(["wb-clock-d"]).xalign(1.0).build(),
             hidden_icon: Icon::new(if below { "chevron-down" } else { "chevron-up" }, 16),
             resized: RefCell::default(),
+            levels: super::levels::Levels::new(shell),
         });
 
         let hidden = gtk::Overlay::new();
@@ -234,6 +253,13 @@ impl Tray {
             if matches!(c, Change::Streams | Change::PeerSpaces(_) | Change::Peers | Change::Library) {
                 m.streams_changed();
             }
+            // The Updates tile.
+            if matches!(c, Change::Updates) {
+                m.refill_open("hidden");
+            }
+            if matches!(c, Change::Network | Change::Bluetooth) {
+                m.radios_changed();
+            }
         });
         me.jobs_changed();
         me.streams_changed();
@@ -275,6 +301,16 @@ impl Tray {
         });
         self.root.append(&button);
         self.flys.borrow_mut().push(fly);
+    }
+
+    /// Closes whatever's open (a flyout's own button that leaves it).
+    fn closer(self: &Rc<Self>) -> Rc<dyn Fn()> {
+        let w = Rc::downgrade(self);
+        Rc::new(move || {
+            if let Some(m) = w.upgrade() {
+                m.close_all();
+            }
+        })
     }
 
     fn fly(&self, name: &str) -> Option<Rc<Fly>> {
@@ -449,19 +485,14 @@ impl Tray {
 
     fn system_changed(self: &Rc<Self>) {
         let st = self.shared.system.borrow().clone();
-        self.net_icon.set(system::net_icon(st.network.as_ref()));
-        if let Some(b) = self.button("network") {
-            b.set_tooltip_text(Some(&system::net_tip(st.network.as_ref())));
-        }
-        self.bt_icon.set(if st.bluetooth.as_ref().is_some_and(|b| !b.on) { "bluetooth-off" } else { "bluetooth" });
-        if let Some(b) = self.button("bluetooth") {
-            b.set_tooltip_text(Some(&system::bluetooth_tip(st.bluetooth.as_ref())));
-        }
+        self.radio_icons(&st);
         self.vol_icon.set(system::volume_icon(st.volume.as_ref()));
         if let Some(b) = self.button("volume") {
             b.set_tooltip_text(Some(&system::volume_tip(st.volume.as_ref())));
         }
-        for n in ["network", "bluetooth", "brightness", "volume", "hidden"] {
+        // Sound's and Display's flyouts show it in place (a slider may be held).
+        self.levels.update(&st);
+        for n in ["network", "bluetooth", "hidden"] {
             self.refill_open(n);
         }
     }
@@ -473,70 +504,11 @@ impl Tray {
         col.set_size_request(if what == "notifications" { 392 } else { WIDTH }, -1);
         let st = self.shared.system.borrow().clone();
         match what {
-            "network" => {
-                col.append(&head("Network", None));
-                match &st.network {
-                    Some(n) => {
-                        let (icon, title, sub) = match n.state {
-                            NetState::Connected => (
-                                system::net_icon(Some(n)),
-                                n.name.clone().unwrap_or_else(|| "Connected".into()),
-                                match n.kind {
-                                    system::NetKind::Wired => "Wired · connected",
-                                    system::NetKind::Wifi => "Wi-Fi · connected",
-                                    system::NetKind::Other => "Connected",
-                                },
-                            ),
-                            NetState::Connecting => ("wifi", "Connecting…".into(), ""),
-                            NetState::Asleep => ("wifi-off", "Asleep".into(), ""),
-                            NetState::Offline => {
-                                ("wifi-off", "Not connected".into(), if n.wifi_on { "" } else { "Wi-Fi is off" })
-                            }
-                        };
-                        col.append(&row(icon, &title, sub, n.state == NetState::Connected));
-                    }
-                    None => col.append(&ui::label("NetworkManager isn't answering.", &["wb-p"])),
-                }
-                col.append(&later(
-                    "Choosing a network, joining one and turning Wi-Fi off come with Settings (phase 8).",
-                ));
-            }
-            "volume" => {
-                col.append(&head("Sound", None));
-                match &st.volume {
-                    Some(v) => col.append(&row(
-                        system::volume_icon(Some(v)),
-                        if v.muted { "Muted" } else { "Volume" },
-                        &format!("{}%", (v.level * 100.0).round() as i64),
-                        !v.muted,
-                    )),
-                    None => col.append(&ui::label("The sound server (PipeWire) isn't answering.", &["wb-p"])),
-                }
-                col.append(&later("The volume keys change it. A slider and the outputs come with Settings (phase 8)."));
-            }
-            "brightness" => {
-                col.append(&head("Display", None));
-                match st.brightness {
-                    Some(b) => {
-                        col.append(&row("sun", "Brightness", &format!("{}%", (b * 100.0).round() as i64), false))
-                    }
-                    None => col.append(&ui::label("This screen has no brightness to read here.", &["wb-p"])),
-                }
-                col.append(&later(
-                    "The brightness keys change it. A slider and night light come with Settings (phase 8).",
-                ));
-            }
-            "bluetooth" => {
-                col.append(&head("Bluetooth", None));
-                match &st.bluetooth {
-                    Some(b) if b.on => {
-                        col.append(&row("bluetooth", "On", &format!("{} connected", b.connected), b.connected > 0))
-                    }
-                    Some(_) => col.append(&row("bluetooth-off", "Off", "", false)),
-                    None => col.append(&ui::label("No Bluetooth on this machine.", &["wb-p"])),
-                }
-                col.append(&later("Pairing and connecting devices come with Settings (phase 8)."));
-            }
+            "network" => self.network_content(&col, &st),
+            // levels.rs: the sliders, the outputs, night light.
+            "volume" => self.levels.volume(&col, &st, self.closer()),
+            "brightness" => self.levels.brightness(&col, &st, self.closer()),
+            "bluetooth" => self.bluetooth_content(&col, &st),
             "clipboard" => {
                 col.append(&head("Clipboard", None));
                 col.append(&later("What you copy, kept here (the last 25), comes in phase 8."));
@@ -714,18 +686,41 @@ impl Tray {
         for n in list {
             let ev = gtk::Box::builder().spacing(10).css_classes(["wb-ev", level_class(n.level)]).build();
             let ic = gtk::Box::builder().css_classes(["wb-eic"]).homogeneous(true).valign(gtk::Align::Start).build();
-            ic.append(&Icon::new(level_icon(n.level), 14));
+            ic.append(&Icon::new(n.icon(), 14));
             ev.append(&ic);
+            let text = gtk::Box::builder()
+                .orientation(gtk::Orientation::Vertical)
+                .spacing(2)
+                .hexpand(true)
+                .valign(gtk::Align::Center)
+                .build();
             let title = label(&n.title, &["wb-ev-title"]);
             title.set_wrap(true);
-            title.set_hexpand(true);
-            title.set_valign(gtk::Align::Center);
-            ev.append(&title);
+            title.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            text.append(&title);
+            if let Some(b) = &n.body {
+                let body = label(b, &["wb-ev-body"]);
+                body.set_wrap(true);
+                body.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                text.append(&body);
+            }
+            ev.append(&text);
             let side =
                 gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).halign(gtk::Align::End).build();
             let when = label(&ago(t, n.at), &["wb-ev-time"]);
             when.set_xalign(1.0);
             side.append(&when);
+            if let Some(a) = n.action.clone().filter(|a| crate::verbs::known(&a.verb)) {
+                let b = gtk::Button::builder().label(&a.label).css_classes(["wb-ghost"]).build();
+                let (w, s) = (Rc::downgrade(self), self.shell.clone());
+                b.connect_clicked(move |_| {
+                    if let Some(m) = w.upgrade() {
+                        m.close_all();
+                    }
+                    crate::verbs::run(&s, &a.verb, &a.args);
+                });
+                side.append(&b);
+            }
             if let Some(undo) = n.undo.clone() {
                 let b = gtk::Button::builder().label("Undo").css_classes(["wb-ghost"]).build();
                 let (w, s) = (Rc::downgrade(self), self.shell.clone());
@@ -825,7 +820,25 @@ impl Tray {
         });
         grid.attach(&tailscale_tile, 0, 0, 1, 1);
         let tiles = [
-            (tile(Icon::new("download", 20).upcast(), "Updates", "Phase 8"), None, "Updates (bootc) come in phase 8"),
+            {
+                // Updates (Settings' System ▸ Updates); a pip when one's staged.
+                let u = self.shell.store.updates();
+                let b = tile(Icon::new("download", 20).upcast(), "Updates", updates_sub(u.as_ref()));
+                if u.is_some_and(|u| u.staged.is_some())
+                    && let Some(inner) = b.child()
+                {
+                    b.set_child(None::<&gtk::Widget>);
+                    let o = gtk::Overlay::new();
+                    o.set_child(Some(&inner));
+                    let pip = label("", &["wb-pip"]);
+                    pip.set_halign(gtk::Align::End);
+                    pip.set_valign(gtk::Align::Start);
+                    pip.set_can_target(false);
+                    o.add_overlay(&pip);
+                    b.set_child(Some(&o));
+                }
+                (b, Some("updates"), UPDATES_TIP)
+            },
             (
                 tile(Icon::new("activity", 20).upcast(), "Activity", &format!("{jobs} running")),
                 Some("jobs"),
@@ -859,6 +872,15 @@ impl Tray {
             let i = i + 1;
             b.set_tooltip_text(Some(tip));
             match goes {
+                Some("updates") => {
+                    let (w, s) = (Rc::downgrade(self), self.shell.clone());
+                    b.connect_clicked(move |_| {
+                        if let Some(m) = w.upgrade() {
+                            m.close_all();
+                        }
+                        crate::peers::open_app(&s, &["wados-settings", "--page", "updates"]);
+                    });
+                }
                 Some(what @ ("jobs" | "streams")) => {
                     let w = Rc::downgrade(self);
                     b.connect_clicked(move |_| {
@@ -1048,6 +1070,18 @@ mod tests {
         assert_eq!(tailscale_sub(Some(&t), 2), "Not signed in");
         assert_eq!(tailscale_sub(None, 0), "Not answering");
         assert_eq!(state_word(TailnetState::LoggingIn), "Waiting for you to sign in");
+    }
+
+    #[test]
+    fn the_updates_tile_says_whether_to_restart() {
+        let mut u: wad_proto::Updates = serde_json::from_value(serde_json::json!({
+            "online": true, "checking": true, "booted": {"version": "44.20261104.0", "image": "x"}
+        }))
+        .unwrap();
+        assert_eq!(updates_sub(Some(&u)), "Checking…");
+        u.staged = Some(u.booted.clone());
+        assert_eq!(updates_sub(Some(&u)), "Restart to update");
+        assert_eq!(updates_sub(None), "Up to date");
     }
 
     #[test]

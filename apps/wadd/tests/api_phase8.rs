@@ -33,6 +33,7 @@ async fn up(sample: Option<Duration>) -> Up {
     config.packages.pull = false;
     config.streaming.listen = vec![];
     config.streaming.secure_runtime = String::new();
+    config.daemon.podman_socket = dir.path().join("no-podman.sock");
     std::fs::create_dir_all(&config.display.runtime_dir).unwrap();
     let parts = wadd::Parts {
         backend: Arc::new(Fake::new()),
@@ -364,20 +365,37 @@ async fn the_machines_answer_501_until_phase_8_is_made() {
         w.bt_disconnect(MOUSE).await.unwrap_err(),
         w.bt_forget(MOUSE).await.unwrap_err(),
         w.bt_answer("p", &BtAnswer { accept: true, pin: None }).await.unwrap_err(),
-        w.update_status().await.unwrap_err(),
-        w.update_check().await.unwrap_err(),
-        w.update_apply().await.unwrap_err(),
-        w.update_cancel().await.unwrap_err(),
-        w.update_rollback().await.unwrap_err(),
-        w.bases().await.unwrap_err(),
-        w.refresh_bases().await.unwrap_err(),
-        w.storage().await.unwrap_err(),
-        w.storage_cleanup().await.unwrap_err(),
     ];
     for e in all {
         assert_eq!(e.status, 501, "{}", e.message);
         assert!(e.message.ends_with("comes in phase 8"), "{}", e.message);
     }
+}
+
+#[tokio::test]
+async fn the_machines_updates_and_storage_are_real() {
+    // Updates and storage are updates.rs's and storage.rs's (their own tests
+    // drive them on a fake bootc and podman). Here, a laptop: no bootc, and
+    // (the test's) no podman.
+    if std::path::Path::new("/run/ostree-booted").exists() {
+        return;
+    }
+    let up = up(None).await;
+    let w = &up.w;
+    let u = w.update_status().await.unwrap();
+    assert!(!u.online);
+    assert_eq!(u.error.as_deref(), Some("This machine doesn't update through bootc"));
+    for e in [w.update_check().await.unwrap_err(), w.update_rollback().await.unwrap_err()] {
+        assert_eq!(e.status, 409, "{}", e.message);
+    }
+    let b = w.bases().await.unwrap();
+    assert_eq!(
+        b.bases.iter().map(|b| b.image.as_str()).collect::<Vec<_>>(),
+        ["ghcr.io/hunggod/wados-base:44", "ghcr.io/hunggod/wados-stream:44"]
+    );
+    assert!(b.bases.iter().all(|b| b.missing), "podman isn't there");
+    assert!(b.next_refresh_at.is_none(), "a laptop's aren't refreshed by themselves");
+    assert_ne!(w.storage().await.unwrap_err().status, 501);
 }
 
 /// A wadspace of this machine's: its id.

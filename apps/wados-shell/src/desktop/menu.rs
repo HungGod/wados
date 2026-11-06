@@ -9,6 +9,24 @@ use gtk::{gdk, prelude::*};
 
 pub type Run = Rc<dyn Fn()>;
 
+thread_local! {
+    static IDS: std::cell::RefCell<std::collections::HashSet<&'static str>> = std::cell::RefCell::default();
+}
+
+/// An item's id made at run time (Open with's `open-with:<app>:<ws>`), kept
+/// for the session: each one once.
+pub fn static_id(id: &str) -> &'static str {
+    IDS.with(|ids| {
+        let mut ids = ids.borrow_mut();
+        if let Some(&s) = ids.get(id) {
+            return s;
+        }
+        let s: &'static str = Box::leak(id.to_string().into_boxed_str());
+        ids.insert(s);
+        s
+    })
+}
+
 pub enum Entry {
     Heading(String),
     Sep,

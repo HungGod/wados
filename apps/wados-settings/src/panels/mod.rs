@@ -14,9 +14,13 @@ pub mod lock;
 pub mod mouse;
 pub mod network;
 pub mod power;
+/// Wi-Fi's, Network's and Bluetooth's shared bits.
+pub mod radio;
 pub mod sound;
 pub mod storage;
 pub mod system;
+/// System's Updates page (its `updates` sub-page): `updates::updates_page`.
+pub mod updates;
 pub mod wifi;
 
 /// Each panel's `make`, by its id (the sidebar's order is `nav::GROUPS`').

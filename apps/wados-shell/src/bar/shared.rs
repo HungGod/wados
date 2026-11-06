@@ -87,8 +87,9 @@ impl Shared {
         shell.store.watch(move |c| {
             let Some(me) = w.upgrade() else { return };
             match c {
-                Change::Notice { level, title, undo } => {
-                    me.notices.borrow_mut().push(*level, title, undo.clone(), now());
+                Change::Notice { level, title, undo, body, icon, action, .. } => {
+                    let more = super::notices::More { body: body.clone(), icon: icon.clone(), action: action.clone() };
+                    me.notices.borrow_mut().push_more(*level, title, undo.clone(), more, now());
                     me.emit(Topic::Notices);
                 }
                 Change::Job(id) => {

@@ -16,9 +16,19 @@
 #      (screen.py --ink); a second wadbrowser hands its page over (still one
 #      process); a web app's window (wadspaces-webapp-<id>); and in the
 #      wadspace, the browser and its web app's launcher
+#   5b. Open with (phase 8): a text file of sam's opened in the terminal
+#      wadspace while it runs (copied onto its Desktop), then stopped and
+#      opened with another (mounted for that run, written through, gone the
+#      run after); then it's trashed and deleted for good, leaving nothing
+#      (no document, container, unit, volume or wadd state)
 #   6. the machine's session (WADOS_SESSION=machine): the power key opens
 #      the shell's menu, the volume keys, the brightness (none in a VM), the
 #      idle lock, logind's lock-session
+#   6b. Settings' session panels (phase 8): Sound reads the VM's PipeWire
+#      (its outputs, pw-play and pw-record there), Power's mode switch says
+#      plainly why polkit refuses it over SSH (only the active session may:
+#      the switch itself is a hardware check), and sam's password changes as Lock Screen & Privacy does it
+#      (a wrong current one refused; the lock takes the new one; back again)
 #   7. Restart, through the shell and logind: it comes back to the lock screen
 #   8. Power off, through the shell and logind: QEMU ends
 #   9. booted again: suspend locks the screen within logind's 5 s, a key
@@ -104,7 +114,9 @@ check() {
     check_unlock
     check_wadspace
     check_browser
+    check_open_with
     check_session
+    check_settings
     check_restart
     check_power_off
     check_suspend
@@ -400,6 +412,115 @@ check_session() {
     if unlock; then ok "unlocked again"; else fail "couldn't unlock again"; fi
 
     note "session: $(shell session)"
+    step_time
+}
+
+inside() { as_root "podman exec --user abc wad-$1 sh -c '$2'" 2> /dev/null; }
+run_phase() { api GET /v1/runs | jq -r --arg id "$1" '.[] | select(.id == $id) | .phase'; }
+
+check_open_with() {
+    say "5b. Open with: a file in the terminal wadspace (running, then for one run); then deleted for good"
+    local id r
+    id="$(api GET /v1/library | jq -r '.wadspaces[] | select(.name == "VM Terminal") | .id' | head -n1)"
+    [[ -n "${id}" ]] || { fail "no VM Terminal wadspace"; step_time; return; }
+    as_sam 'mkdir -p ~/Documents && printf "opened with\n" > ~/Documents/vm-notes.txt && printf "mounted\n" > ~/Documents/vm-mount.txt'
+    r="$(api POST "/v1/wadspaces/${id}/open" '{"display": "screen", "file": "~/Documents/vm-notes.txt"}')"
+    note "open with (running): $(jq -c '{phase, display, message}' <<< "${r}" 2> /dev/null || echo "${r}")"
+    if [[ "$(inside "${id}" 'cat ~/Desktop/vm-notes.txt')" == "opened with" ]]; then
+        ok "running: vm-notes.txt is on its Desktop (a copy)"
+    else
+        fail "running: no vm-notes.txt inside ($(inside "${id}" 'ls -la ~/Desktop'))"
+    fi
+    r="$(api POST "/v1/wadspaces/${id}/open" '{"display": "screen", "file": "/etc/passwd"}')"
+    if [[ "$(jq -r .code <<< "${r}" 2> /dev/null)" == conflict ]]; then ok "what's outside sam's home isn't let in: $(jq -r .message <<< "${r}")"; else fail "/etc/passwd: ${r}"; fi
+    api POST "/v1/wadspaces/${id}/stop" > /dev/null
+    for _ in $(seq 30); do [[ "$(run_phase "${id}")" == idle ]] && break; sleep 2; done
+    r="$(api POST "/v1/wadspaces/${id}/open" '{"display": "screen", "file": "~/Documents/vm-mount.txt"}')"
+    note "open with (stopped): $(jq -c '{phase, display}' <<< "${r}" 2> /dev/null || echo "${r}")"
+    for _ in $(seq 90); do [[ "$(run_phase "${id}")" =~ ^(ready|error)$ ]] && break; sleep 2; done
+    if [[ "$(run_phase "${id}")" == ready && "$(inside "${id}" 'cat ~/Desktop/vm-mount.txt')" == mounted ]]; then
+        ok "stopped: it opened with vm-mount.txt mounted on its Desktop"
+    else
+        fail "stopped: $(run_phase "${id}"), inside: $(inside "${id}" 'ls -la ~/Desktop')"
+    fi
+    inside "${id}" 'echo edited >> ~/Desktop/vm-mount.txt'
+    if as_sam 'grep -q edited ~/Documents/vm-mount.txt'; then ok "an edit inside is sam's file's (mounted, not copied)"; else fail "the edit didn't reach sam's file"; fi
+    if api GET /v1/library | jq -e --arg id "${id}" '.wadspaces[] | select(.id == $id) | .look.projects | length == 0' > /dev/null; then
+        ok "its document keeps nothing of it"
+    else
+        fail "its document has the opened file"
+    fi
+    api POST "/v1/wadspaces/${id}/stop" > /dev/null
+    for _ in $(seq 30); do [[ "$(run_phase "${id}")" == idle ]] && break; sleep 2; done
+    api POST "/v1/wadspaces/${id}/open" '{"display": "background"}' > /dev/null
+    for _ in $(seq 90); do [[ "$(run_phase "${id}")" =~ ^(ready|error)$ ]] && break; sleep 2; done
+    if as_root "grep -q vm-mount /run/containers/systemd/wad-${id}.container"; then
+        fail "opened again, its unit still mounts vm-mount.txt"
+    else
+        ok "opened again without it: its unit mounts nothing of it (inside: $(inside "${id}" 'ls ~/Desktop' | tr '\n' ' '))"
+    fi
+    shot_to 5b-open-with.png
+
+    # Deleted for good: trashed, then DELETE.
+    api POST "/v1/wadspaces/${id}/stop" > /dev/null
+    for _ in $(seq 30); do [[ "$(run_phase "${id}")" == idle ]] && break; sleep 2; done
+    api POST /v1/ops "{\"op\": {\"op\": \"ws.trash\", \"ws\": \"${id}\"}}" > /dev/null
+    r="$(api DELETE "/v1/wadspaces/${id}")"
+    note "delete for good: ${r}"
+    sleep 3
+    local left=""
+    [[ "$(api GET "/v1/wadspaces/${id}" | jq -r .code 2> /dev/null)" == not_found ]] || left+=" its document;"
+    as_root "podman ps -a --format '{{.Names}}' | grep -qx wad-${id}" && left+=" its container;"
+    as_root "ls /run/containers/systemd/ 2> /dev/null | grep -q wad-${id}" && left+=" its unit;"
+    as_root "podman volume ls --format '{{.Name}}' | grep -q wad-${id}" && left+=" a volume;"
+    as_root "ls /var/lib/wados/extra/${id} /var/lib/wados/copies/${id} /var/lib/wados/projects/${id} > /dev/null 2>&1" && left+=" wadd's state;"
+    if [[ -z "${left}" ]]; then ok "${id} is gone for good: no document, container, unit, volume or wadd state"; else fail "${id} left:${left}"; fi
+    step_time
+}
+
+check_settings() {
+    say "6b. Settings: sound through the VM's PipeWire, power profiles, sam's password"
+    local s env='XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-0' p
+    s="$(as_sam "${env} wados-settings --page sound --dump" 2> /dev/null)"
+    if [[ "${s}" == *"Output Device"* && "${s}" != *"isn't answering"* ]]; then
+        ok "Settings ▸ Sound reads the VM's PipeWire: $(sed -n 's/.*Output Device | \([^|]*\) |.*/\1/p' <<< "${s}")"
+    else
+        fail "Settings ▸ Sound: ${s:-no answer}"
+    fi
+    if as_sam 'command -v pw-play && command -v pw-record' > /dev/null 2>&1; then ok "its speaker test and input level have pw-play and pw-record"; else fail "no pw-play or pw-record"; fi
+
+    # The power mode, as Settings sets it (power-profiles-daemon's
+    # ActiveProfile). polkit lets only the active session switch it, and SSH
+    # isn't that session: refused here, Settings has to say why plainly. The
+    # switch from the screen itself is a hardware check.
+    s="$(as_sam 'wados-settings --power-mode power-saver' 2>&1)"
+    if [[ "${s}" == "The power mode is power-saver now."* ]]; then
+        ok "the power mode changes as sam (${s})"
+        as_sam 'wados-settings --power-mode balanced' > /dev/null 2>&1
+    elif [[ "${s}" == "Couldn't change the power mode: not allowed from here: polkit lets only the person at the machine do it"* ]]; then
+        ok "refused over SSH (not the active session), and Settings says why: ${s}"
+    else
+        fail "the power mode: ${s}"
+    fi
+    s="$(as_sam "${env} wados-settings --page power --dump" 2> /dev/null)"
+    if [[ "${s}" == *"Power Saver"* && "${s}" != *"isn't running"* ]]; then ok "Settings ▸ Power finds power-profiles-daemon"; else fail "Settings ▸ Power: ${s}"; fi
+
+    # sam's password, as Lock Screen & Privacy changes it (PAM, then passwd).
+    local new='Phase8-Wadspaces!' old="${SAM_PASSWORD}"
+    s="$(printf '%s\n%s\n' 'not-it-at-all' "${new}" | as_sam 'wados-settings --change-password' 2>&1)"
+    if [[ "${s}" == *"isn’t your current password"* ]]; then ok "a wrong current password is refused (${s})"; else fail "a wrong current password: ${s}"; fi
+    s="$(printf '%s\n%s\n' "${old}" "${new}" | as_sam 'wados-settings --change-password' 2>&1)"
+    if [[ "${s}" == "Password changed"* ]]; then
+        ok "sam's password changed (${s})"
+        shell lock > /dev/null
+        sleep 2
+        if SAM_PASSWORD="${new}" unlock; then ok "the lock screen takes the new one"; else fail "the new password doesn't unlock it ($(shell locked))"; fi
+        s="$(printf '%s\n%s\n' "${new}" "${old}" | as_sam 'wados-settings --change-password' 2>&1)"
+        if [[ "${s}" == "Password changed"* ]]; then ok "and back again"; else fail "changing it back: ${s} (sam's password is ${new} now)"; SAM_PASSWORD="${new}"; fi
+    else
+        fail "changing sam's password: ${s}"
+        journal -t passwd
+    fi
     step_time
 }
 

@@ -1,0 +1,18 @@
+[package]
+name = "wad-desk"
+description = "The person's session settings (Settings writes them, the shell follows them): the settings file, the displays' saved layouts and output management, night light, sound through wpctl, labwc's rc.xml for the mouse and keyboard, and PAM"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+libc.workspace = true
+serde.workspace = true
+toml.workspace = true
+tracing.workspace = true
+wayland-client.workspace = true
+wayland-protocols-wlr.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

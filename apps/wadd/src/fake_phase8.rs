@@ -81,7 +81,8 @@ struct St {
 }
 
 fn wifi(ssid: &str, signal: u8, secure: bool, saved: bool, band: WifiBand) -> WifiNetwork {
-    WifiNetwork { ssid: ssid.into(), signal, secure, saved, active: false, band: Some(band) }
+    let security = Some(if secure { "WPA2 Personal" } else { "None (open network)" }.into());
+    WifiNetwork { ssid: ssid.into(), signal, secure, saved, active: false, band: Some(band), security }
 }
 
 fn bt(address: &str, name: &str, kind: BtKind, paired: bool, connected: bool, battery: Option<u8>) -> BtDevice {

@@ -85,9 +85,10 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
 
 # Sound: PipeWire, its PulseAudio socket (the session's, which wadd binds
 # into each wadspace on the screen: PULSE_SERVER) and WirePlumber, as the
-# person's user units, socket-activated.
+# person's user units, socket-activated; pw-play and pw-record (Settings ▸
+# Sound's speaker test and input level).
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
-      pipewire pipewire-pulseaudio pipewire-alsa wireplumber alsa-ucm alsa-sof-firmware \
+      pipewire pipewire-pulseaudio pipewire-alsa wireplumber alsa-ucm alsa-sof-firmware pipewire-utils \
     && dnf clean all \
     && systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
 
@@ -95,6 +96,14 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
 # BlueZ (wadd drives both over D-Bus).
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
       NetworkManager-wifi NetworkManager-tui bluez \
+    && dnf clean all
+
+# Power (Settings ▸ Power): UPower (the battery), a power-profiles service
+# (power-profiles-daemon, unless the base has tuned-ppd, which answers the
+# same D-Bus API), and hwdata's pci.ids (System ▸ About's graphics).
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs upower hwdata \
+    && { rpm -q --whatprovides ppd-service > /dev/null \
+         || dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs power-profiles-daemon; } \
     && dnf clean all
 
 # rclone: another machine's folder in a wadspace, mounted over Taildrive's WebDAV (wadd's taildrive.rs).
@@ -214,11 +223,15 @@ RUN systemd-sysusers /usr/lib/sysusers.d/wados.conf \
     && getent group wados > /dev/null && getent passwd wadspaces-clip > /dev/null \
     && for f in /etc/subuid /etc/subgid; do echo "wadspaces:1000000:65536" >> "${f}"; done
 
-# The units. Updates (bootc-fetch-apply-updates.timer, on in the base) wait
-# for phase 8. Ctrl+Alt+Delete and tty1 are the shell's.
+# The units. bootc's own updates timer (bootc-fetch-apply-updates.timer, on
+# in the base) is masked: it stages *and reboots*, and a machine's restart is
+# the person's. wadd checks every 12 hours instead and stages what it finds;
+# the person restarts into it (apps/wadd/src/updates.rs). Ctrl+Alt+Delete and
+# tty1 are the shell's.
 RUN systemctl enable greetd.service podman.socket wadd.socket wadd.service \
       bluetooth.service tailscaled.service cloudflared.service \
     && systemctl disable bootc-fetch-apply-updates.timer \
+    && systemctl mask bootc-fetch-apply-updates.timer \
     && systemctl set-default graphical.target \
     && rm -f /etc/systemd/system/ctrl-alt-del.target \
     && systemctl mask getty@tty1.service ctrl-alt-del.target \
@@ -253,7 +266,8 @@ RUN set -e; \
     tailscale version | head -1; \
     cloudflared --version; \
     for t in Xwayland agreety podman skopeo bootc nmcli nmtui bluetoothctl wpctl pipewire wireplumber \
-             tailscaled vainfo wlr-randr dbus-update-activation-environment systemd-cat semodule restorecon; do \
+             tailscaled vainfo wlr-randr dbus-update-activation-environment systemd-cat semodule restorecon \
+             pw-play pw-record upower passwd; do \
         command -v "${t}" > /dev/null || { echo "missing ${t}" >&2; exit 1; }; \
     done; \
     ls /usr/lib64/libgtk4-layer-shell.so.0 /usr/lib64/libwebkitgtk-6.0.so.4 /usr/lib64/libadwaita-1.so.0 > /dev/null; \
@@ -265,6 +279,8 @@ RUN set -e; \
     grep -q '<name>WadOS</name>' /etc/xdg/labwc/rc.xml; \
     grep -qx 'HandlePowerKey=ignore' /etc/systemd/logind.conf.d/10-wados.conf; \
     grep -qx 'export XCURSOR_THEME=WadOS' /usr/libexec/wados/session; \
+    grep -q 'labwc -m -s wados-shell' /usr/libexec/wados/session; \
+    rpm -q --whatprovides ppd-service > /dev/null; test -f /usr/share/hwdata/pci.ids; \
     test -f /usr/share/wados/assets/wallpapers/art/silk.svg; \
     python3 -c 'import tomllib; tomllib.load(open("/usr/lib/wados/wadd.toml", "rb"))'; \
     mkdir -p /tmp/fake; \
