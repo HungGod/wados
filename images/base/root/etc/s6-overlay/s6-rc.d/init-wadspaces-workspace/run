@@ -134,6 +134,21 @@ for w in json.load(open(sys.argv[1])):
     fi
 fi
 
+# --------------------------------------------------------- Dolphin's games
+# A launcher for each disc on the machine (wadd's discs.json): wadspaces-layout
+# places the ones layout.json names, and one the wadspace starts into opens.
+if [[ -f "${EXTRA}/discs.json" ]]; then
+    python3 -I - "${EXTRA}/discs.json" << 'PY'
+import json, sys
+for d in json.load(open(sys.argv[1])):
+    with open(f"/usr/share/applications/wadspaces-game-{d['id']}.desktop", "w") as f:
+        f.write(
+            "[Desktop Entry]\nType=Application\nIcon=dolphin-emu\n"
+            f"Name={d['name']}\nExec=wadspaces-dolphin -b -e \"/config/Games/{d['id']}/{d['file']}\"\n"
+        )
+PY
+fi
+
 # ---------------------------------------------------------- desktop icons
 # selkies-desktop draws an icon for every .desktop file in $HOME/Desktop. The
 # entries are shipped in /usr/share/applications and copied here each boot.

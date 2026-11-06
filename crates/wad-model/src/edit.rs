@@ -422,6 +422,9 @@ pub enum Op {
     #[serde(rename = "space.forApp")]
     ForApp { app: AppId },
     /// A disc (an .iso or .rvz file) already in the account's packages, as one of its Dolphin games (one that isn't: upload it first, then this). Created: its variant's id.
+    /// A disc on this machine, new or pushed (wadd's discs.rs).
+    #[serde(rename = "discs.keep")]
+    KeepDisc { disc: DiscImage },
     #[serde(rename = "space.addDisc")]
     AddDisc { ws: String, file: String },
 
@@ -777,6 +780,11 @@ impl Tx<'_> {
                 let id = self.create(Some(app_name(app)), Some(category), None)?;
                 self.must_add(&id, Section::Apps, app.as_str(), None).map(drop)
             }
+            Op::KeepDisc { disc } => {
+                self.lib.discs.insert(disc.id.clone(), disc);
+                Ok(())
+            }
+
             Op::AddDisc { ws, file } => {
                 self.get(&ws)?;
                 if !is_disc_file(&file) {

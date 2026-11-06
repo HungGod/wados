@@ -20,8 +20,6 @@ use crate::dnd::Held;
 
 pub const STEAM_LATER: &str = "Steam's games come in phase 10, with Steam's sign-in";
 pub const LINK_STEAM_LATER: &str = "Linking Steam comes in phase 10";
-pub const DOLPHIN_LATER: &str = "Dolphin's games come in phase 10: their discs go in your GitHub packages";
-pub const UPLOAD_LATER: &str = "Uploading discs comes in phase 10";
 
 /// How many suggestions per app.
 pub const SUGGESTED: usize = 4;
@@ -250,7 +248,7 @@ pub fn groups(lib: &Library, x: &Wadspace) -> Vec<Group> {
             lit: has(AppId::Dolphin, &|y| y.id == d.id || y.name.as_deref() == Some(d.name.as_str())),
             add: Some(Op::NewVariant { ws: x.id.clone(), app: AppId::Dolphin, new: NewVariant::Named(d.name.clone()) }),
             drag: None,
-            off: Some(DOLPHIN_LATER.into()),
+            off: None,
         })
         .collect();
 
@@ -372,7 +370,7 @@ mod tests {
     }
 
     #[test]
-    fn games_are_listed_off_till_phase_10() {
+    fn steams_games_are_off_till_its_sign_in_and_discs_work() {
         let lib = sample();
         let couch = lib.wadspace("couch-co-op").unwrap();
         let gs = groups(&lib, couch);
@@ -388,7 +386,7 @@ mod tests {
             dolphin.items.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(),
             ["Mario Kart: Double Dash!!", "Mario Party 4"]
         );
-        assert!(dolphin.items.iter().all(|i| i.lit.is_some() && i.off.is_some()));
+        assert!(dolphin.items.iter().all(|i| i.lit.is_some() && i.off.is_none()));
     }
 
     #[test]

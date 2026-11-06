@@ -36,6 +36,11 @@ impl Wadd {
         self.post("/v1/focus", &wad_proto::FocusRequest { ws: ws.into(), minutes }).await
     }
 
+    /// Keeps a disc on this machine (`POST /v1/discs`): a job.
+    pub async fn disc_add(&self, path: &str, push: bool) -> Result<JobInfo, Failure> {
+        self.post("/v1/discs", &wad_proto::DiscAdd { path: path.into(), push }).await
+    }
+
     /// Server mode (`GET /v1/server`).
     pub async fn server(&self) -> Result<wad_proto::Server, Failure> {
         self.get("/v1/server").await

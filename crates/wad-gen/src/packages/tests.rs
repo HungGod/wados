@@ -179,6 +179,7 @@ fn ci_builds_the_catalog_in_waves() {
             "python",
             "nodejs",
             "rust",
+            "dolphin",
             "vscode",
             "rpm-krita",
             "ext-anthropic.claude-code",

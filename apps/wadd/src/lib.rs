@@ -35,6 +35,7 @@ pub mod builds;
 pub mod clip;
 pub mod console;
 pub mod copies;
+pub mod discs;
 pub mod events;
 pub mod fake;
 pub mod fake_phase6;
@@ -365,6 +366,17 @@ impl Server {
             Profile::System => (server::RUN_DIR.into(), Arc::new(server::SystemHands { uid: d.projects_uid })),
             Profile::User => (d.state_dir.clone(), Arc::new(server::NoSeat)),
         };
+        let registry = Arc::new(discs::Ghcr { accounts: accounts.clone(), backend: parts.backend.clone() });
+        let (who, uid) = (screen.clone(), d.projects_uid);
+        let home = person_of(who, profile, uid);
+        let discs = discs::MachineDiscs::new(
+            &d.state_dir,
+            Box::new(move || home().map(|p| p.home)),
+            registry,
+            docs.clone(),
+            jobs.clone(),
+            bus.clone(),
+        );
         let server = server::ServerMode::new(&server_dir, runs.clone(), focus.clone(), seat, bus.clone());
         let state = Arc::new(AppState {
             machine,
@@ -389,6 +401,7 @@ impl Server {
             setup,
             focus,
             server,
+            discs,
         });
         Ok(Self {
             listener,

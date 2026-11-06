@@ -150,7 +150,16 @@ fn icon(ws: &Wadspace, key: &str) -> Option<Icon> {
             let p = ws.look.projects.iter().find(|p| p.id == id)?;
             Some(Icon { app: None, project: Some(p.id.clone()), desktop: None, label: p.as_name.clone(), autostart })
         }
-        // A game's or a named variant's: started by its app, a later phase's.
+        // A Dolphin game: its launcher is made from discs.json at start.
+        "variant" => {
+            let e = ws.ext(AppId::Dolphin, id)?;
+            let label = e.name.clone().unwrap_or_else(|| id.to_string());
+            let opens = ws.look.launch.as_deref() == Some(key);
+            Some(Icon {
+                autostart: autostart || opens,
+                ..app(format!("game-{id}"), format!("wadspaces-game-{id}.desktop"), label)
+            })
+        }
         _ => None,
     }
 }

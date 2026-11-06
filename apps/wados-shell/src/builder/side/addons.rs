@@ -23,9 +23,7 @@ use wad_model::edit::Op;
 use wad_model::suggest::Suggestion;
 use wad_model::{AppId, BuildCommand, CommandKind, Wadspace};
 
-use super::addon_list::{
-    self, DOLPHIN_LATER, Group, GroupId, Item, LINK_STEAM_LATER, UPLOAD_LATER, focus, focus_toggle, toggle,
-};
+use super::addon_list::{self, Group, GroupId, Item, LINK_STEAM_LATER, focus, focus_toggle, toggle};
 use super::ctl::{self, Row};
 use super::kit::{self, Field};
 use crate::builder::{Builder, Tab};
@@ -105,9 +103,14 @@ impl Panel {
             });
             let link_steam = pill_button("gamepad-2", "Link Steam", LINK_STEAM_LATER);
             link_steam.set_sensitive(false);
-            let disc_upload = pill_button("upload", "Upload iso, rvz file", UPLOAD_LATER);
-            disc_upload.set_sensitive(false);
+            let disc_upload = pill_button("upload", "Upload iso, rvz file", "An .iso or .rvz from this computer");
             disc_upload.set_halign(gtk::Align::Start);
+            let w = me.clone();
+            disc_upload.connect_clicked(move |b| {
+                if let Some(p) = w.upgrade() {
+                    p.choose_disc(b);
+                }
+            });
             let no_discs = note("Its games are discs: upload one and it shows here.");
             let cmds = commands(me);
             let mut parts = vec![];
@@ -151,7 +154,6 @@ impl Panel {
                     GroupId::Dolphin => {
                         card.append(&no_discs);
                         card.append(&disc_upload);
-                        card.append(&note(DOLPHIN_LATER));
                     }
                     _ => {}
                 }
@@ -275,6 +277,54 @@ impl Panel {
         if let (Some(x), Some(i)) = (x, i) {
             self.act(toggle(&x, &i));
         }
+    }
+
+    /// A disc from this computer. It stays on this machine unless the person
+    /// also wants it in their GitHub packages.
+    fn choose_disc(&self, from: &gtk::Button) {
+        let Some(b) = self.builder.upgrade() else { return };
+        let filter = gtk::FileFilter::new();
+        filter.set_name(Some("Discs (.iso, .rvz)"));
+        filter.add_suffix("iso");
+        filter.add_suffix("rvz");
+        let filters = gtk::gio::ListStore::new::<gtk::FileFilter>();
+        filters.append(&filter);
+        let dialog = gtk::FileDialog::builder()
+            .title("Upload iso, rvz file")
+            .modal(true)
+            .filters(&filters)
+            .default_filter(&filter)
+            .build();
+        let window = from.root().and_downcast::<gtk::Window>();
+        let shell = b.shell.clone();
+        let w2 = window.clone();
+        dialog.open(window.as_ref(), gtk::gio::Cancellable::NONE, move |r| {
+            let Some(path) = r.ok().and_then(|f| f.path()) else { return };
+            let ask = gtk::AlertDialog::builder()
+                .message("Add this disc?")
+                .detail("It stays on this machine.")
+                .buttons(["Cancel", "Keep it here", "Also keep it in your GitHub packages"])
+                .cancel_button(0)
+                .default_button(1)
+                .build();
+            let shell = shell.clone();
+            ask.choose(w2.as_ref(), gtk::gio::Cancellable::NONE, move |pick| {
+                let push = match pick {
+                    Ok(1) => false,
+                    Ok(2) => true,
+                    _ => return,
+                };
+                let (s, path) = (shell.clone(), path.display().to_string());
+                shell.link.call(
+                    move |w| async move { w.disc_add(&path, push).await },
+                    move |r| {
+                        if let Err(e) = r {
+                            s.toast(wad_proto::Level::Warn, &e.message, None);
+                        }
+                    },
+                );
+            });
+        });
     }
 
     fn focus_click(&self) {

@@ -1775,7 +1775,7 @@ fn origin_of(link: &str) -> Option<String> {
 
 /// Writes `bytes` to `path` whole, 0600 (as a new file renamed over the
 /// old: Selkies reads whole files), owned by `owner` when it's given.
-fn write_private(path: &Path, bytes: &[u8], owner: Option<u32>) -> std::io::Result<()> {
+pub fn write_private(path: &Path, bytes: &[u8], owner: Option<u32>) -> std::io::Result<()> {
     let dir = path.parent().ok_or_else(|| std::io::Error::other("no folder"))?;
     std::fs::create_dir_all(dir)?;
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");

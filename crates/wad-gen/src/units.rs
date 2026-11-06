@@ -542,6 +542,10 @@ fn home_volumes(ws: &Wadspace, run: &Run, m: &Machine, lines: &mut Vec<String>) 
         lines.push(format!("Volume={}/{}:{SIGNINS_ROOT}/{}:rw,z", esc(&m.signins_dir), s.key.id, s.key.id));
     }
     lines.push(format!("Volume={}:{}:ro,z", esc(&extras::dir(&m.state_dir, id)), extras::DIR));
+    // Dolphin's games: the machine's discs (wadd's discs.rs).
+    if ws.has_app(wad_model::AppId::Dolphin) {
+        lines.push(format!("Volume={}/discs:/config/Games:ro,z", esc(&m.state_dir)));
+    }
     mounted
 }
 

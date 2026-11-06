@@ -83,6 +83,17 @@ impl fmt::Debug for InstallRequest {
     }
 }
 
+/// `POST /v1/discs`: a disc file of the person's, kept on this machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscAdd {
+    /// The file, in the person's home.
+    pub path: String,
+    /// "Also keep it in your GitHub packages".
+    #[serde(default)]
+    pub push: bool,
+}
+
 /// Where Set up WadSpaces is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

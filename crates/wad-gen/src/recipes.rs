@@ -86,7 +86,16 @@ pub static APPS: [(AppId, Recipe); 13] = [
     (AppId::Krita, Recipe::Rpm(Rpm { packages: &["krita"], desktop: Some("org.kde.krita.desktop") })),
     (AppId::Openshot, Recipe::Todo("Fedora's openshot (rpm-openshot)")),
     (AppId::Steam, Recipe::Todo("RPM Fusion's steam with its 32-bit libraries (a feature: it adds the repo)")),
-    (AppId::Dolphin, Recipe::Todo("Fedora's dolphin-emu (rpm-dolphin)")),
+    (
+        AppId::Dolphin,
+        Recipe::Feature(Feature {
+            name: "dolphin",
+            needs: &[],
+            desktop: Some("dolphin-emu.desktop"),
+            probe: Some("rpm -q --qf '%{VERSION}' dolphin-emu"),
+            github: false,
+        }),
+    ),
     (AppId::Obs, Recipe::Todo("Fedora's obs-studio (rpm-obs; RPM Fusion's obs-studio-freeworld for its codecs)")),
     (AppId::Terminal, Recipe::Builtin { desktop: "foot.desktop" }),
 ];
@@ -112,7 +121,7 @@ pub static TOOLS: [(&str, Recipe); 9] = [
 
 /// Features in the order they stack: what others need first, the big,
 /// common ones low. (Each one once: a test checks.)
-pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "vscode"];
+pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "dolphin", "vscode"];
 
 /// An app's recipe (every app has one, if only a `Todo`).
 pub fn app(id: AppId) -> &'static Recipe {
@@ -171,10 +180,7 @@ mod tests {
             .filter(|a| matches!(app(a.id), Recipe::Todo(_)))
             .map(|a| a.id.as_str())
             .collect();
-        assert_eq!(
-            apps,
-            ["obsidian", "tiled", "libresprite", "audacity", "lmms", "openshot", "steam", "dolphin", "obs"]
-        );
+        assert_eq!(apps, ["obsidian", "tiled", "libresprite", "audacity", "lmms", "openshot", "steam", "obs"]);
         let tools: Vec<&str> = wad_model::catalog::tools()
             .iter()
             .filter(|t| !matches!(tool(&t.id), Some(Recipe::Feature(_) | Recipe::Rpm(_))))

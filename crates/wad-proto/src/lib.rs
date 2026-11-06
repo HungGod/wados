@@ -21,7 +21,7 @@ pub mod updates;
 pub use bluetooth::{Bluetooth, BtAnswer, BtAsk, BtDevice, BtKind, BtPrompt};
 pub use error::{ApiError, ErrorCode};
 pub use github::{GithubAccount, Repo, SignInRequest};
-pub use install::{Install, InstallDisk, InstallRequest, Setup, SetupDesign, SetupStep};
+pub use install::{DiscAdd, Install, InstallDisk, InstallRequest, Setup, SetupDesign, SetupStep};
 pub use network::{
     Ethernet, ExitNode, ExitNodeChoice, Network, Switch, WifiBand, WifiConnect, WifiForget, WifiNetwork,
 };

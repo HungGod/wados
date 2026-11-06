@@ -90,6 +90,7 @@ pub struct AppState {
     pub setup: Arc<crate::setup::SetupState>,
     pub focus: Arc<crate::focus::MachineFocus>,
     pub server: Arc<crate::server::ServerMode>,
+    pub discs: Arc<crate::discs::MachineDiscs>,
 }
 
 /// An ApiError as an HTTP response.
@@ -164,6 +165,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/logs", get(logs))
         .route("/v1/focus", get(focus).post(focus_start))
         .route("/v1/server", get(server).post(server_set))
+        .route("/v1/discs", post(disc_add))
         .merge(crate::api_phase6::routes())
         .merge(crate::api_phase7::routes())
         .merge(crate::api_phase8::routes())
@@ -252,6 +254,13 @@ async fn open(
 async fn stop(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<WadspaceRun>, Failure> {
     app.focus.check_stop(&id)?;
     Ok(Json(app.runs.stop(&id).await?))
+}
+
+async fn disc_add(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<wad_proto::DiscAdd>,
+) -> Result<Json<JobInfo>, Failure> {
+    Ok(Json(app.discs.add(req).await?))
 }
 
 async fn server(State(app): State<Arc<AppState>>) -> Json<wad_proto::Server> {

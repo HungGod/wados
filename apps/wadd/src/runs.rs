@@ -1014,6 +1014,14 @@ impl Runs {
             true => ("stream", 1),
             false => ("screen", self.settings.machine.screens.max(1)),
         };
+        // Dolphin's games: what its launchers open (init-wadspaces-workspace).
+        if ws.has_app(wad_model::AppId::Dolphin) {
+            let _ = std::fs::create_dir_all(self.settings.state_dir.join("discs"));
+            let lib = self.docs.snapshot();
+            let list: Vec<serde_json::Value> =
+                lib.discs.values().map(|d| serde_json::json!({ "id": d.id, "name": d.name, "file": d.file })).collect();
+            files.push(("discs.json".into(), serde_json::to_string(&list).ok()));
+        }
         files.push(("display".into(), Some(format!("{display}\n"))));
         files.push(("screens".into(), Some(format!("{screens}\n"))));
         for (name, text) in files {
