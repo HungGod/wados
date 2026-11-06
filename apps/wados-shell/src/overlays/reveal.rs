@@ -56,6 +56,12 @@ impl Reveal {
         }
     }
 
+    pub fn focus_changed(&self) {
+        for b in &self.bars {
+            b.focus_changed();
+        }
+    }
+
     pub fn windows_changed(&self) {
         for b in &self.bars {
             b.update();
@@ -106,6 +112,9 @@ struct Bar {
     ws: RefCell<Option<String>>,
     shown: Cell<bool>,
     pinned: Cell<bool>,
+    /// Its buttons, and what's there instead while focusing.
+    buttons: RefCell<Vec<gtk::Button>>,
+    clock: gtk::Button,
     hiding: RefCell<Option<glib::SourceId>>,
 }
 
@@ -155,6 +164,8 @@ impl Bar {
             shown: Cell::new(false),
             pinned: Cell::new(false),
             hiding: RefCell::default(),
+            buttons: RefCell::default(),
+            clock: gtk::Button::builder().css_classes(["ov-fs-b"]).visible(false).build(),
         });
         let button = |icon: &'static str, text: &str, tip: &str| {
             let r = gtk::Box::builder().spacing(6).build();
@@ -162,6 +173,7 @@ impl Bar {
             r.append(&gtk::Label::new(Some(text)));
             let b = gtk::Button::builder().child(&r).css_classes(["ov-fs-b"]).tooltip_text(tip).build();
             bar.append(&b);
+            me.buttons.borrow_mut().push(b.clone());
             b
         };
         let w = Rc::downgrade(&me);
@@ -180,8 +192,16 @@ impl Bar {
         });
         if of > 1 {
             let next = n % of + 1;
-            button("monitor-up", &format!("To {next}"), "Full screen on another display comes in phase 10")
-                .set_sensitive(false);
+            let to = shell.displays().into_iter().find(|d| d.n == next);
+            let tip = to.as_ref().map_or_else(String::new, |d| format!("Full screen on {} instead", d.name));
+            let w = Rc::downgrade(&me);
+            button("monitor-up", &format!("To {next}"), &tip).connect_clicked(move |_| {
+                if let (Some(m), Some(d)) = (w.upgrade(), &to)
+                    && let Some(id) = m.ws.borrow().clone()
+                {
+                    m.shell.open_on(&id, &d.connector);
+                }
+            });
         }
         // The stream sheet (its link, if it streams already).
         let w = Rc::downgrade(&me);
@@ -203,6 +223,17 @@ impl Bar {
             {
                 m.shell.stop(&id);
             }
+        });
+        // Focusing: this, in place of all of them.
+        me.clock.set_tooltip_text(Some("Focusing: it stays on the screen until the time’s up"));
+        let s = shell.clone();
+        me.clock.connect_clicked(move |_| s.focus_ui(|f| f.held()));
+        bar.append(&me.clock);
+        let w = Rc::downgrade(&me);
+        glib::timeout_add_local(Duration::from_secs(1), move || {
+            let Some(m) = w.upgrade() else { return glib::ControlFlow::Break };
+            m.focus_changed();
+            glib::ControlFlow::Continue
         });
         win.set_child(Some(&bar));
         // Touching the edge brings it down; leaving it lets it go.
@@ -233,6 +264,18 @@ impl Bar {
             }
         });
         me
+    }
+
+    /// Focus on or off, and its countdown.
+    pub fn focus_changed(&self) {
+        let left = self.shell.store.focus().map(|f| f.until - glib::real_time() / 1000);
+        for b in self.buttons.borrow().iter() {
+            b.set_visible(left.is_none());
+        }
+        self.clock.set_visible(left.is_some());
+        if let Some(l) = left {
+            self.clock.set_label(&format!("Focus · {} left", super::focus::left_words(l)));
+        }
     }
 
     fn update(self: &Rc<Self>) {

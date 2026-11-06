@@ -31,6 +31,8 @@ use wad_proto::{
 /// What changed, for watchers.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
+    /// Focus started or ended.
+    Focus,
     /// Connected to wadd, or lost it (it's followed again by itself).
     Connected(bool),
     Machine,
@@ -123,6 +125,7 @@ pub struct Store {
     builds: RefCell<IndexMap<String, WadspaceBuild>>,
     jobs: RefCell<IndexMap<String, JobInfo>>,
     screen: RefCell<Option<ScreenInfo>>,
+    focus: RefCell<Option<wad_model::Focus>>,
     tailnet: RefCell<Option<Tailnet>>,
     peers: RefCell<Vec<PeerInfo>>,
     signins: RefCell<IndexMap<SignInProvider, SignIn>>,
@@ -206,7 +209,7 @@ impl Store {
                 self.jobs.borrow_mut().insert(id.clone(), *job);
                 Change::Job(id)
             }
-            Event::JobLines { .. } => return,
+            Event::JobLines { .. } | Event::Server { .. } => return,
             Event::JobGone { id } => {
                 self.jobs.borrow_mut().shift_remove(&id);
                 Change::Job(id)
@@ -230,6 +233,10 @@ impl Store {
             }
             // The shell shows no account: Settings does.
             Event::Github { .. } => Change::Github,
+            Event::Focus { focus } => {
+                *self.focus.borrow_mut() = focus;
+                Change::Focus
+            }
             Event::SignIn { provider, url, code } => {
                 self.signins.borrow_mut().insert(provider, SignIn { url, code });
                 Change::SignIn(provider)
@@ -301,6 +308,10 @@ impl Store {
 
     pub fn job(&self, id: &str) -> Option<JobInfo> {
         self.jobs.borrow().get(id).cloned()
+    }
+
+    pub fn focus(&self) -> Option<wad_model::Focus> {
+        self.focus.borrow().clone()
     }
 
     pub fn screen(&self) -> Option<ScreenInfo> {

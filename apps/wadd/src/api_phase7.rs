@@ -94,9 +94,12 @@ impl Streams for NotYet {
 /// through the streams, as a private stream (`POST …/stream`, without
 /// `takeover`). Its run as it is now.
 pub async fn open(app: &AppState, id: &str, display: SessionDisplay) -> Result<WadspaceRun, ApiError> {
+    app.focus.check_open(id, display)?;
+    app.server.check_open(display)?;
     if display != SessionDisplay::Stream {
         return app.runs.open(id, display);
     }
+    app.focus.check_stream(id)?;
     app.streams.start(id, StreamRequest { mode: StreamMode::Private, takeover: false }).await?;
     Ok(app.runs.state(id))
 }
@@ -141,6 +144,7 @@ async fn start(
     Path(id): Path<String>,
     Json(req): Json<StreamRequest>,
 ) -> Answer<JobInfo> {
+    app.focus.check_stream(&id)?;
     Ok(Json(app.streams.start(&id, req).await?))
 }
 

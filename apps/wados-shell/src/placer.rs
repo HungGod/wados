@@ -2,7 +2,8 @@
 //! run's display): **screen** is full screen on the primary display (the
 //! launcher and desktop are under it), **window** an ordinary window,
 //! **background** minimized (it keeps running). wadd starts the container;
-//! the shell places its window (docs/decisions/0002). A window is a
+//! the shell places its window (docs/decisions/0002). Open on 2 and To 2 say
+//! another display ([`Placer::set_output`]). A window is a
 //! wadspace's when its app id is `io.wadspaces.<id>` (0001's labwc patch).
 
 use std::cell::RefCell;
@@ -19,6 +20,8 @@ pub struct Placer {
     store: Rc<Store>,
     /// The primary display's connector ("eDP-1", "HEADLESS-1").
     primary: RefCell<String>,
+    /// Where a full-screen wadspace goes when that isn't the primary (Open on 2, To 2).
+    outputs: RefCell<HashMap<String, String>>,
     windows: RefCell<Vec<Top>>,
     /// What each window was last told (by its toplevel id), so it's told once.
     applied: RefCell<HashMap<u32, SessionDisplay>>,
@@ -34,6 +37,7 @@ impl Placer {
             wm,
             store,
             primary: RefCell::new(primary.to_string()),
+            outputs: RefCell::default(),
             windows: RefCell::default(),
             applied: RefCell::default(),
             on_windows: RefCell::default(),
@@ -44,6 +48,28 @@ impl Placer {
     /// The primary display is another now (monitors.rs).
     pub fn set_primary(&self, connector: &str) {
         *self.primary.borrow_mut() = connector.to_string();
+    }
+
+    /// `ws` full screen on this display from now on (none: the primary).
+    pub fn set_output(&self, ws: &str, connector: Option<&str>) {
+        let mut o = self.outputs.borrow_mut();
+        match connector {
+            Some(c) => o.insert(ws.to_string(), c.to_string()),
+            None => o.remove(ws),
+        };
+    }
+
+    /// The display `ws` is full screen on.
+    pub fn output_of(&self, ws: &str) -> String {
+        self.outputs.borrow().get(ws).cloned().unwrap_or_else(|| self.primary.borrow().clone())
+    }
+
+    /// The wadspaces sent to `connector`: they're forgotten, for it's gone.
+    pub fn take_output(&self, connector: &str) -> Vec<String> {
+        let mut o = self.outputs.borrow_mut();
+        let on: Vec<String> = o.iter().filter(|(_, c)| *c == connector).map(|(w, _)| w.clone()).collect();
+        o.retain(|_, c| c != connector);
+        on
     }
 
     pub fn on_windows(&self, f: impl Fn(&[Top]) + 'static) {
@@ -113,7 +139,7 @@ impl Placer {
         let which = || Which(format!("#{}", t.id));
         match want {
             SessionDisplay::Screen => {
-                wm.send(Cmd::Fullscreen(which(), Some(self.primary.borrow().clone())));
+                wm.send(Cmd::Fullscreen(which(), Some(self.output_of(ws))));
                 wm.send(Cmd::Activate(which()));
             }
             SessionDisplay::Window => {

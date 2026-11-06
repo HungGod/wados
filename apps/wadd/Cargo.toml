@@ -11,6 +11,7 @@ async-trait.workspace = true
 axum.workspace = true
 base64.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 # The streaming proxy (proxy.rs): v1's hyper plumbing, WebSockets passed through.
@@ -42,6 +43,8 @@ wad-podman.workspace = true
 wad-proto.workspace = true
 wad-systemd.workspace = true
 wad-tailscale.workspace = true
+# wadd console, a client of its own daemon.
+wad-wadd-client.workspace = true
 wad-wayland.workspace = true
 # The network's and Bluetooth's errors (NetworkManager's and BlueZ's, over D-Bus).
 zbus.workspace = true

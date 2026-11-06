@@ -35,6 +35,47 @@ pub fn pick(desk: &Desk, all: &[gdk::Monitor]) -> Option<(gdk::Monitor, Vec<gdk:
     Some((primary, others))
 }
 
+/// A display as the shell's menus say it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Display {
+    /// 1 is the primary.
+    pub n: usize,
+    pub name: String,
+    pub connector: String,
+}
+
+pub fn numbered(primary: &gdk::Monitor, others: &[gdk::Monitor]) -> Vec<Display> {
+    std::iter::once(primary)
+        .chain(others)
+        .enumerate()
+        .map(|(i, m)| {
+            let c = connector(m);
+            let name = display_name(m.model().as_deref(), &c);
+            Display { n: i + 1, name, connector: c }
+        })
+        .collect()
+}
+
+/// Its model, unless it hasn't one: wlroots says "Unknown" for those.
+fn display_name(model: Option<&str>, connector: &str) -> String {
+    model.filter(|m| !m.is_empty() && *m != "Unknown").unwrap_or(connector).to_string()
+}
+
+/// What left and what came, between two lists of displays.
+pub fn changes(was: &[Display], now: &[Display]) -> (Vec<Display>, Vec<Display>) {
+    let has = |l: &[Display], d: &Display| l.iter().any(|x| x.connector == d.connector);
+    (was.iter().filter(|d| !has(now, d)).cloned().collect(), now.iter().filter(|d| !has(was, d)).cloned().collect())
+}
+
+/// The toast for a display gone: `spaces` are what went to the background.
+pub fn unplugged_body(spaces: &[String]) -> String {
+    match spaces {
+        [] => "Its windows moved here.".into(),
+        [one] => format!("Its windows moved here; {one} is still running, in the background."),
+        many => format!("Its windows moved here; {} are still running, in the background.", many.join(", ")),
+    }
+}
+
 pub fn connector(m: &gdk::Monitor) -> String {
     m.connector().map(|c| c.to_string()).unwrap_or_default()
 }
@@ -144,5 +185,41 @@ impl Follow {
         tracing::info!("displays: {} (was {})", sig, self.last.borrow());
         *self.last.borrow_mut() = sig;
         shell.set_monitors(primary, others);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn d(n: usize, c: &str) -> Display {
+        Display { n, name: c.to_uppercase(), connector: c.into() }
+    }
+
+    #[test]
+    fn swapping_the_primary_is_neither_a_plug_nor_an_unplug() {
+        let (gone, new) = changes(&[d(1, "a"), d(2, "b")], &[d(1, "b"), d(2, "a")]);
+        assert!(gone.is_empty() && new.is_empty());
+    }
+
+    #[test]
+    fn a_display_leaving_and_one_coming_are_told_apart() {
+        let (gone, new) = changes(&[d(1, "a"), d(2, "b")], &[d(1, "a"), d(2, "c")]);
+        assert_eq!(gone, [d(2, "b")]);
+        assert_eq!(new, [d(2, "c")]);
+    }
+
+    #[test]
+    fn a_display_with_no_model_goes_by_its_connector() {
+        assert_eq!(display_name(Some("DELL U2720Q"), "DP-1"), "DELL U2720Q");
+        assert_eq!(display_name(Some("Unknown"), "HDMI-A-1"), "HDMI-A-1");
+        assert_eq!(display_name(None, "DP-2"), "DP-2");
+    }
+
+    #[test]
+    fn the_unplug_toast_says_whats_still_running() {
+        assert_eq!(unplugged_body(&[]), "Its windows moved here.");
+        assert!(unplugged_body(&["Krita".into()]).contains("Krita is still running"));
+        assert!(unplugged_body(&["A".into(), "B".into()]).contains("A, B are still running"));
     }
 }

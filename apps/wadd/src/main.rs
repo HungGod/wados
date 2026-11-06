@@ -46,6 +46,8 @@ enum Cmd {
         #[arg(long)]
         sample: bool,
     },
+    /// Server mode's console on tty1 (wados-console.service).
+    Console,
     /// A machine's public address, on the build computer, with the secrets.
     Tunnel {
         #[command(subcommand)]
@@ -74,7 +76,24 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Cmd::Serve { user, config, socket, state_dir, sample } => serve(user, config, socket, state_dir, sample),
+        Cmd::Console => console(),
         Cmd::Tunnel { cmd: TunnelCmd::Remove { id, secrets } } => tunnel_remove(&id, &secrets),
+    }
+}
+
+fn console() -> ExitCode {
+    let r = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .map_err(|e| e.to_string())
+        .and_then(|rt| rt.block_on(wadd::console::run()));
+    match r {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("wadd: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

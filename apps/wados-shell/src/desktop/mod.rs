@@ -1776,6 +1776,11 @@ impl Desktop {
             })
             .entry(),
         );
+        for d in self.shell.displays().into_iter().skip(1) {
+            let label = format!("{} on {}: {}", if running { "Show" } else { "Open" }, d.n, d.name);
+            let (s, i) = (self.shell.clone(), i.clone());
+            out.push(MenuItem::new("open-on", &label, "monitor-up", move || s.open_on(&i, &d.connector)).entry());
+        }
         // Stream: the stream sheet (Private | Public), or its link while it streams.
         let streaming = self.shell.store.stream(id);
         out.push(

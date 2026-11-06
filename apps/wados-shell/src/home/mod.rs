@@ -764,11 +764,10 @@ impl Launcher {
                     peers::copy_here(&self.shell, &id);
                 }
             }
-            ActId::Focus => {
-                if let Some(p) = self.peer_shown() {
-                    self.focus_elsewhere(&p, &id);
-                }
-            }
+            ActId::Focus => match self.peer_shown() {
+                Some(p) => self.focus_elsewhere(&p, &id),
+                None => self.shell.focus_ui(|f| f.setup(&id)),
+            },
             ActId::Stream | ActId::Private => {
                 let mode = if a.id == ActId::Stream { StreamMode::Public } else { StreamMode::Private };
                 let store = &self.shell.store;
@@ -893,8 +892,14 @@ impl Launcher {
             Item::Heading(ws.name.clone()),
             Item::Row(Row::new("monitor-play", if running { "Show" } else { "Open" }, open)),
             Item::Row(Row::new("app-window", "Open in window", window)),
-            Item::Row(Row::new("radio", "Stream", || {}).submenu(stream_rows(&shell.store, id))),
         ];
+        for d in shell.displays().into_iter().skip(1) {
+            let (s, i) = (shell.clone(), id.to_string());
+            let what = if running { "Show" } else { "Open" };
+            let label = format!("{what} on {}: {}", d.n, d.name);
+            items.push(Item::Row(Row::new("monitor-up", label, move || s.open_on(&i, &d.connector))));
+        }
+        items.push(Item::Row(Row::new("radio", "Stream", || {}).submenu(stream_rows(&shell.store, id))));
         // Another machine's shows in the Builder but doesn't change there: as the spike's, it's only this machine's.
         if here {
             items.push(Item::Row(Row::new("blocks", "Edit in the Builder", edit).hint("What's in it, to change")));

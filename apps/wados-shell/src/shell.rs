@@ -53,6 +53,7 @@ pub struct Shell {
     pub app: gtk::Application,
     pub store: Rc<Store>,
     pub link: Rc<Link>,
+    focus_ui: RefCell<Weak<crate::overlays::focus::FocusUi>>,
     pub placer: Rc<Placer>,
     pub primary: Primary,
     pub others: Others,
@@ -80,6 +81,7 @@ impl Shell {
             app: app.clone(),
             store,
             link,
+            focus_ui: RefCell::default(),
             placer,
             primary: Primary(Cell::new(Box::leak(Box::new(primary)))),
             others: Others(Cell::new(Box::leak(Box::new(others)))),
@@ -148,7 +150,19 @@ impl Shell {
 
     /// The displays changed (monitors.rs): the primary's surfaces move to
     /// `primary` (surface.rs), then everyone who asked hears it.
-    pub fn set_monitors(&self, primary: gdk::Monitor, others: Vec<gdk::Monitor>) {
+    pub fn set_monitors(self: &Rc<Self>, primary: gdk::Monitor, others: Vec<gdk::Monitor>) {
+        let was = self.displays();
+        let on_primary: Vec<String> = self
+            .store
+            .running()
+            .into_iter()
+            .map(|w| w.id)
+            .filter(|id| {
+                self.store.display(id) == Some(SessionDisplay::Screen)
+                    && self.placer.output_of(id) == crate::monitors::connector(&self.primary)
+            })
+            .collect();
+        let old_primary = crate::monitors::connector(&self.primary);
         crate::surface::set_primary(&primary);
         self.placer.set_primary(&primary.connector().map(|c| c.to_string()).unwrap_or_default());
         self.primary.0.set(Box::leak(Box::new(primary)));
@@ -157,6 +171,45 @@ impl Shell {
         for f in subs {
             f();
         }
+        let (gone, came) = crate::monitors::changes(&was, &self.displays());
+        for d in gone {
+            let mut spaces = self.placer.take_output(&d.connector);
+            if d.connector == old_primary {
+                spaces.extend(on_primary.iter().cloned());
+            }
+            self.unplugged(&d, &spaces);
+        }
+        for d in came {
+            self.say_display(&format!("{} is connected", d.name), "Drag a window onto it, or open a wadspace on it.");
+        }
+    }
+
+    /// What was on a display that's gone: full-screen wadspaces go to the
+    /// background and keep running (a focus stays, on the primary now).
+    fn unplugged(self: &Rc<Self>, d: &crate::monitors::Display, spaces: &[String]) {
+        let focus = self.store.focus().map(|f| f.ws);
+        let mut names = vec![];
+        for id in spaces {
+            if focus.as_deref() == Some(id) {
+                self.placer.run_changed(id);
+                continue;
+            }
+            names.push(self.store.wadspace(id).map_or_else(|| id.clone(), |w| w.name));
+            self.open(id, SessionDisplay::Background);
+        }
+        self.say_display(&format!("{} unplugged", d.name), &crate::monitors::unplugged_body(&names));
+    }
+
+    fn say_display(&self, title: &str, body: &str) {
+        self.store.apply(Event::Notice {
+            level: Level::Info,
+            title: title.to_string(),
+            undo: None,
+            body: Some(body.to_string()),
+            icon: Some("monitor".into()),
+            action: None,
+            toast: true,
+        });
     }
 
     /// `f` each time the displays change (a new primary, one plugged in or
@@ -266,6 +319,30 @@ impl Shell {
     /// This is the machine's own session (`WADOS_SESSION=machine`, as
     /// greetd starts it), not a test or a window on a laptop: only then do
     /// Restart, Power off and the brightness keys reach the machine.
+    /// The displays, the primary first: display 1, 2, …
+    pub fn displays(&self) -> Vec<crate::monitors::Display> {
+        crate::monitors::numbered(&self.primary, &self.others)
+    }
+
+    /// `id` full screen on this display.
+    pub fn open_on(self: &Rc<Self>, id: &str, connector: &str) {
+        let primary = crate::monitors::connector(&self.primary);
+        self.placer.set_output(id, (connector != primary).then_some(connector));
+        self.open(id, SessionDisplay::Screen);
+        self.placer.run_changed(id);
+    }
+
+    pub fn set_focus_ui(&self, f: &Rc<crate::overlays::focus::FocusUi>) {
+        *self.focus_ui.borrow_mut() = Rc::downgrade(f);
+    }
+
+    /// Focus's dialogs (overlays' own: the launcher and the bar reach them here).
+    pub fn focus_ui(&self, f: impl FnOnce(&crate::overlays::focus::FocusUi)) {
+        if let Some(u) = self.focus_ui.borrow().upgrade() {
+            f(&u);
+        }
+    }
+
     pub fn is_machine(&self) -> bool {
         crate::session::is_machine()
     }

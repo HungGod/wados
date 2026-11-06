@@ -88,6 +88,8 @@ pub struct AppState {
     /// The installer stick's install, and Set up WadSpaces ([`crate::api_phase9`]).
     pub install: Arc<dyn crate::api_phase9::Installer>,
     pub setup: Arc<crate::setup::SetupState>,
+    pub focus: Arc<crate::focus::MachineFocus>,
+    pub server: Arc<crate::server::ServerMode>,
 }
 
 /// An ApiError as an HTTP response.
@@ -160,6 +162,8 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/undo/{id}", post(undo))
         .route("/v1/events", get(events))
         .route("/v1/logs", get(logs))
+        .route("/v1/focus", get(focus).post(focus_start))
+        .route("/v1/server", get(server).post(server_set))
         .merge(crate::api_phase6::routes())
         .merge(crate::api_phase7::routes())
         .merge(crate::api_phase8::routes())
@@ -237,6 +241,8 @@ async fn open(
     Path(id): Path<String>,
     Json(req): Json<OpenRequest>,
 ) -> Result<Json<WadspaceRun>, Failure> {
+    app.focus.check_open(&id, req.display)?;
+    app.server.check_open(req.display)?;
     if let Some(file) = &req.file {
         return Ok(Json(app.runs.open_with(&id, req.display, file, req.machine.as_deref()).await?));
     }
@@ -244,7 +250,30 @@ async fn open(
 }
 
 async fn stop(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<WadspaceRun>, Failure> {
+    app.focus.check_stop(&id)?;
     Ok(Json(app.runs.stop(&id).await?))
+}
+
+async fn server(State(app): State<Arc<AppState>>) -> Json<wad_proto::Server> {
+    Json(app.server.get())
+}
+
+async fn server_set(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<wad_proto::Server>,
+) -> Result<Json<wad_proto::Server>, Failure> {
+    Ok(Json(app.server.set(req.on).await?))
+}
+
+async fn focus(State(app): State<Arc<AppState>>) -> Json<Option<wad_model::Focus>> {
+    Json(app.focus.get())
+}
+
+async fn focus_start(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<wad_proto::FocusRequest>,
+) -> Result<Json<wad_model::Focus>, Failure> {
+    Ok(Json(app.focus.start(&req.ws, req.minutes)?))
 }
 
 async fn builds(State(app): State<Arc<AppState>>) -> Json<Vec<WadspaceBuild>> {

@@ -193,18 +193,19 @@ impl Running {
             let (s, id) = (s.clone(), id.to_string());
             entry(&format!("Stop {}", ws.name), "square", move || s.stop(&id)).danger()
         };
-        ui::menu(
-            &self.root,
-            &item.button,
-            vec![
-                how("Full screen", "monitor-play", SessionDisplay::Screen),
-                how("In a window", "app-window", SessionDisplay::Window),
-                how("Hide it (it keeps running)", "eye-off", SessionDisplay::Background),
-                Entry::Sep,
-                stop,
-            ],
-            true,
-        );
+        let mut rows = vec![how("Full screen", "monitor-play", SessionDisplay::Screen)];
+        for d in s.displays().into_iter().skip(1) {
+            let (sh, id) = (s.clone(), id.to_string());
+            let label = format!("Full screen on {}: {}", d.n, d.name);
+            rows.push(entry(&label, "monitor-up", move || sh.open_on(&id, &d.connector)));
+        }
+        rows.extend([
+            how("In a window", "app-window", SessionDisplay::Window),
+            how("Hide it (it keeps running)", "eye-off", SessionDisplay::Background),
+            Entry::Sep,
+            stop,
+        ]);
+        ui::menu(&self.root, &item.button, rows, true);
         true
     }
 

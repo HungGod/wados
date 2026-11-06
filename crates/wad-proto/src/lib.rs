@@ -75,6 +75,21 @@ pub struct MachineInfo {
     pub profile: Profile,
 }
 
+/// `GET|POST /v1/server`: server mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Server {
+    pub on: bool,
+}
+
+/// `POST /v1/focus`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FocusRequest {
+    pub ws: String,
+    pub minutes: u32,
+}
+
 /// `POST /v1/ops`: one edit, as the spike's actions are.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -220,6 +235,14 @@ pub enum Event {
     Updates(Box<Updates>),
     /// The disk, as `GET /v1/storage` has it.
     Storage(Box<Storage>),
+    /// Server mode on or off.
+    Server {
+        on: bool,
+    },
+    /// The focus on now, as `GET /v1/focus` has it; none: none. Nested, as `peers`.
+    Focus {
+        focus: Option<wad_model::Focus>,
+    },
 }
 
 impl Event {
@@ -241,6 +264,8 @@ impl Event {
             Event::BtPrompt { .. } => Some("btPrompt".into()),
             Event::Updates(_) => Some("updates".into()),
             Event::Storage(_) => Some("storage".into()),
+            Event::Focus { .. } => Some("focus".into()),
+            Event::Server { .. } => Some("server".into()),
             Event::Library(_)
             | Event::Wadspace(_)
             | Event::WadspaceGone { .. }

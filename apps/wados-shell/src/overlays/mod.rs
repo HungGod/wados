@@ -23,6 +23,7 @@
 //! - `log`: what it was asked to show.
 
 mod dialog;
+pub mod focus;
 mod reveal;
 mod search;
 mod switcher;
@@ -120,6 +121,12 @@ button.ov-r.ov-on { background-color: rgb(127 211 255 / 0.16); }
 .ov-none { padding: 18px; color: var(--muted); }
 .ov-foot { padding: 9px 16px; border-top: 1px solid var(--line); font-size: 11.5px; color: var(--faint); }
 
+/* Focus. */
+.ov-focus-cover { background-color: #000; color: var(--muted); }
+.ov-focus-left { font-family: 'Space Grotesk', Inter, sans-serif; font-size: 36px; font-weight: 600; color: var(--fg); }
+.ov-focus-note { font-size: 14px; color: var(--muted); }
+.ov-focus-until { margin-top: 8px; font-size: 13px; color: var(--muted); }
+
 /* A full-screen wadspace's bar: tucked up out of sight until it's wanted. */
 .ov-fs {
   padding: 6px 6px 6px 14px;
@@ -152,6 +159,7 @@ pub struct Overlays {
     log: RefCell<Vec<String>>,
     /// The wadspace in front last (to tell the switcher).
     front: RefCell<Option<String>>,
+    pub focus: Rc<focus::FocusUi>,
 }
 
 impl Overlays {
@@ -169,7 +177,9 @@ impl Overlays {
             displays: RefCell::new(Displays::new(shell)),
             log: RefCell::default(),
             front: RefCell::default(),
+            focus: focus::FocusUi::new(shell),
         });
+        shell.set_focus_ui(&me.focus);
         let w = Rc::downgrade(&me);
         me.switcher.on_pick(move |id| {
             if let Some(m) = w.upgrade() {
@@ -193,6 +203,7 @@ impl Overlays {
                         m.toasts.push_notice(*level, title, undo.clone(), body.clone(), icon.clone(), action.clone());
                     }
                 }
+                Change::Focus => m.reveal().focus_changed(),
                 Change::Run(_) => {
                     let running: Vec<String> = s.store.running().into_iter().map(|w| w.id).collect();
                     m.switcher.mru.borrow_mut().keep(&running);
@@ -243,6 +254,36 @@ impl Overlays {
 
     fn ctl(self: &Rc<Self>, shell: &Rc<Shell>) {
         let w = Rc::downgrade(self);
+        let s = shell.clone();
+        shell.on_ctl("displays", move |args| match args {
+            [] => {
+                let all: Vec<String> =
+                    s.displays().iter().map(|d| format!("{}={}({})", d.n, d.connector, d.name)).collect();
+                format!("ok {}", all.join(" "))
+            }
+            ["open", ws, n] => match s.displays().iter().find(|d| d.n.to_string() == *n) {
+                Some(d) => {
+                    s.open_on(ws, &d.connector);
+                    "ok".into()
+                }
+                None => format!("error no display {n}"),
+            },
+            ["on", ws] => format!("ok {}", s.placer.output_of(ws)),
+            _ => "error displays [open <ws> <n> | on <ws>]".into(),
+        });
+        let f = Rc::downgrade(&self.focus);
+        let s = shell.clone();
+        shell.on_ctl("focus", move |args| match (args, f.upgrade()) {
+            (["start", id, minutes], Some(f)) => {
+                f.start(id, minutes.parse().unwrap_or(0));
+                "ok".into()
+            }
+            ([], _) => match s.store.focus() {
+                Some(x) => format!("ok on {} {}", x.ws, x.until),
+                None => "ok off".into(),
+            },
+            _ => "error focus [start <ws> <minutes>]".into(),
+        });
         shell.on_ctl("switcher", move |args| {
             let Some(m) = w.upgrade() else { return "error gone".into() };
             match args {

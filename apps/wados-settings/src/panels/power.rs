@@ -8,7 +8,7 @@
 //!   (the settings: the shell's idle watch picks them up at once), and what
 //!   closing the lid does (the shell holds logind's lid switch for Lock
 //!   the screen and Do nothing: no root needed).
-//! - **Server Mode** comes in phase 10: shown, off, saying so.
+//! - **Server Mode**: its confirm, then wadd (apps/wadd/src/server.rs).
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
@@ -49,8 +49,6 @@ pub const MODES: [(&str, &str, &str, &str); 3] = [
     ("balanced", "Balanced", "Standard performance and power usage", "scale"),
     ("power-saver", "Power Saver", "Reduced performance and power usage", "leaf"),
 ];
-
-pub const SERVER_LATER: &str = "Server mode (the screen goes off and this machine only streams) comes in phase 10.";
 
 /// The battery as UPower says it is.
 #[derive(Debug, Clone, PartialEq)]
@@ -387,10 +385,34 @@ impl Panel for Power {
         );
         let b = kit::button("Turn On Server Mode…", Variant::Secondary, Some("power"), false);
         b.set_widget_name("server-mode");
-        b.set_sensitive(false);
-        b.set_tooltip_text(Some(SERVER_LATER));
+        let note = parts::note("", "set-note");
+        note.set_visible(false);
+        let (link, window, said) = (ctx.link.clone(), ctx.window.clone(), note.clone());
+        b.connect_clicked(move |_| {
+            let (link, said) = (link.clone(), said.clone());
+            let d = gtk::AlertDialog::builder()
+                .message("Turn on server mode?")
+                .detail("The screen goes off and this machine only streams. Wadspaces open on this screen or in windows stop; streams keep going.\n\nTo come back, press Ctrl+Alt+Delete and unlock.")
+                .buttons(["Cancel", "Turn On"])
+                .cancel_button(0)
+                .default_button(0)
+                .build();
+            d.choose(Some(&window), gtk::gio::Cancellable::NONE, move |r| {
+                if r == Ok(1) {
+                    link.call(
+                        |w| async move { w.server_set(true).await },
+                        move |r| {
+                            if let Err(e) = r {
+                                said.set_label(&e.message);
+                                said.set_visible(true);
+                            }
+                        },
+                    );
+                }
+            });
+        });
         sctl.append(&b);
-        sctl.append(&parts::note(SERVER_LATER, "set-note"));
+        sctl.append(&note);
         server.add(&srow);
         page.add(&server.root);
         let _ = ctx;

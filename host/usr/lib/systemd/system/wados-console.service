@@ -1,0 +1,18 @@
+# Server mode's console on tty1 (apps/wadd/src/console.rs). The inhibitor
+# keeps the machine up, lid shut too, while it only streams.
+[Unit]
+Description=WadOS server mode's console
+After=greetd.service wadd.service
+
+[Service]
+# The kernel's messages off this screen.
+ExecStartPre=-/usr/bin/dmesg --console-level emerg
+ExecStopPost=-/usr/bin/dmesg --console-on
+ExecStart=/usr/bin/systemd-inhibit --what=sleep:idle:handle-lid-switch:handle-power-key --who=WadSpaces --why=Streams --mode=block /usr/bin/wadd console
+StandardInput=tty-force
+StandardOutput=tty
+TTYPath=/dev/tty1
+TTYReset=yes
+TTYVHangup=yes
+Restart=on-failure
+RestartSec=2

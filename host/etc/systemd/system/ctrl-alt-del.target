@@ -1,0 +1,6 @@
+# Ctrl+Alt+Delete reaches systemd only from a text console. WadOS's sessions
+# are graphical, so this is server mode's way back: it opens the console's
+# menu (apps/wadd/src/console.rs), and never restarts the machine.
+[Unit]
+Description=Ctrl+Alt+Delete: server mode's menu
+Wants=wados-console-menu.service

@@ -7,7 +7,7 @@
 //! - **Restart and Power off** (`logind.rs`: `Reboot`/`PowerOff`,
 //!   interactive, so polkit asks if it must), from the start menu, the power
 //!   key's menu (`menu.rs`) and the lock screen. Elsewhere they're off, and
-//!   their tooltips say so. Server mode comes in phase 10.
+//!   their tooltips say so. Server mode is wadd's (apps/wadd/src/server.rs).
 //! - **Locking before sleep** (`sleep.rs`): a delay inhibitor while awake;
 //!   at logind's `PrepareForSleep` (the lid, the suspend key, an idle
 //!   suspend) the screen locks, then the inhibitor goes. logind's own `Lock`
@@ -66,7 +66,7 @@ use logind::Logind;
 use media::{Mixer, Vol};
 use sleep::{Do, Sleep};
 
-const SERVER_LATER: &str = "Server mode (the screen goes off and it only streams) comes in phase 10";
+const SERVER_TIP: &str = "Server mode: the screen goes off and it only streams";
 
 /// This is the machine's own session (`WADOS_SESSION=machine`).
 pub fn is_machine() -> bool {
@@ -164,7 +164,7 @@ pub fn items(machine: bool) -> Vec<Item> {
     };
     vec![
         item(Power::Lock, "lock", "Lock", true, None),
-        item(Power::Server, "server", "Server mode", false, Some(SERVER_LATER)),
+        item(Power::Server, "server", "Server mode", machine, Some(SERVER_TIP)),
         item(Power::Restart, "rotate-ccw", "Restart", machine, None),
         item(Power::Off, "power", "Power off", machine, None),
     ]
@@ -267,7 +267,10 @@ impl Session {
     pub fn power(&self, p: Power) -> Result<(), String> {
         let reboot = match p {
             Power::Lock => return self.lock(),
-            Power::Server => return Err(SERVER_LATER.into()),
+            Power::Server => {
+                crate::overlays::focus::server_confirm(&self.shell);
+                return Ok(());
+            }
             Power::Restart => true,
             Power::Off => false,
         };
@@ -688,7 +691,7 @@ impl Session {
                 // Ctrl+Alt+Delete: back from server mode.
                 ["off"] => {
                     m.heard("server off");
-                    "ok not in server mode (it comes in phase 10)".into()
+                    "ok not in server mode".into()
                 }
                 _ => "error server off".into(),
             }
@@ -749,7 +752,7 @@ mod tests {
             here,
             [
                 (Power::Lock, true, "Lock".to_string()),
-                (Power::Server, false, SERVER_LATER.to_string()),
+                (Power::Server, false, SERVER_TIP.to_string()),
                 (Power::Restart, false, "Restart: off outside the machine's own session".to_string()),
                 (Power::Off, false, "Power off: off outside the machine's own session".to_string()),
             ]
@@ -757,6 +760,6 @@ mod tests {
         let machine: Vec<(Power, bool, String)> = items(true).into_iter().map(|i| (i.power, i.on, i.tip)).collect();
         assert_eq!(machine[2], (Power::Restart, true, "Restart".to_string()));
         assert_eq!(machine[3], (Power::Off, true, "Power off".to_string()));
-        assert!(!machine[1].1, "server mode is phase 10's");
+        assert!(machine[1].1, "server mode works on the machine");
     }
 }

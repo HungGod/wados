@@ -33,12 +33,14 @@ pub mod backend;
 pub mod bluetooth;
 pub mod builds;
 pub mod clip;
+pub mod console;
 pub mod copies;
 pub mod events;
 pub mod fake;
 pub mod fake_phase6;
 pub mod fake_phase7;
 pub mod fake_phase8;
+pub mod focus;
 pub mod github;
 pub mod install;
 pub mod jobs;
@@ -55,6 +57,7 @@ pub mod remote;
 pub mod runs;
 pub mod screen;
 pub mod selinux;
+pub mod server;
 pub mod setup;
 pub mod storage;
 pub mod store;
@@ -353,6 +356,16 @@ impl Server {
             }
         };
         let setup = setup::SetupState::new(&d.state_dir, docs.clone(), system.updates.clone());
+        let focus_dir = match profile {
+            Profile::System => PathBuf::from(focus::RUN_DIR),
+            Profile::User => d.state_dir.clone(),
+        };
+        let focus = focus::MachineFocus::new(&focus_dir, docs.clone(), runs.clone(), bus.clone());
+        let (server_dir, seat): (PathBuf, Arc<dyn server::Hands>) = match profile {
+            Profile::System => (server::RUN_DIR.into(), Arc::new(server::SystemHands { uid: d.projects_uid })),
+            Profile::User => (d.state_dir.clone(), Arc::new(server::NoSeat)),
+        };
+        let server = server::ServerMode::new(&server_dir, runs.clone(), focus.clone(), seat, bus.clone());
         let state = Arc::new(AppState {
             machine,
             profile,
@@ -374,6 +387,8 @@ impl Server {
             storage: system.storage,
             install,
             setup,
+            focus,
+            server,
         });
         Ok(Self {
             listener,
@@ -408,6 +423,7 @@ impl Server {
             tokio::spawn(app.jobs.clone().run()),
             tokio::spawn(watch_machine(app.clone(), self.reconcile_every)),
             tokio::spawn(watch_screen(app.clone())),
+            tokio::spawn(app.focus.clone().run()),
         ];
         if let Some(t) = &self.tailnet {
             loops.extend(t.start(app.clone()));

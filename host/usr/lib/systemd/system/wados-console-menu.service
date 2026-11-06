@@ -1,0 +1,8 @@
+# Asks server mode's console for its menu.
+[Unit]
+Description=WadOS server mode: the menu
+ConditionPathExists=/run/wados/server/on
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/touch /run/wados/server/menu

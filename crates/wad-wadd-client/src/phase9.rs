@@ -30,4 +30,19 @@ impl Wadd {
     pub async fn setup_design(&self, starter: bool) -> Result<Setup, Failure> {
         self.post("/v1/setup/design", &SetupDesign { starter }).await
     }
+
+    /// Starts a focus (`POST /v1/focus`).
+    pub async fn focus_start(&self, ws: &str, minutes: u32) -> Result<wad_model::Focus, Failure> {
+        self.post("/v1/focus", &wad_proto::FocusRequest { ws: ws.into(), minutes }).await
+    }
+
+    /// Server mode (`GET /v1/server`).
+    pub async fn server(&self) -> Result<wad_proto::Server, Failure> {
+        self.get("/v1/server").await
+    }
+
+    /// Server mode on or off (`POST /v1/server`).
+    pub async fn server_set(&self, on: bool) -> Result<wad_proto::Server, Failure> {
+        self.post("/v1/server", &wad_proto::Server { on }).await
+    }
 }

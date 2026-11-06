@@ -207,6 +207,7 @@ async fn stop(
     Path(id): Path<String>,
 ) -> Answer<WadspaceRun> {
     let w = live(&r, &id)?;
+    r.app.focus.check_stop(&id)?;
     let run = r.app.runs.stop(&id).await?;
     notice(&r, format!("{} stopped {}", c.name, w.name));
     Ok(Json(run))
@@ -228,6 +229,7 @@ async fn stream(
     Json(req): Json<StreamRequest>,
 ) -> Answer<StreamShare> {
     let w = live(&r, &id)?;
+    r.app.focus.check_stream(&id)?;
     let job = match stream_of(&r, &id).await? {
         Some(s) if s.mode == req.mode => s.job,
         _ => Some(r.app.streams.start(&id, req).await?.job.id),

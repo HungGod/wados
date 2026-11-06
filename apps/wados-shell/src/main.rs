@@ -172,6 +172,10 @@ fn activate(app: &gtk::Application, with_builder: bool) {
 
 /// One line from wadsctl: the shell's own commands, then each module's.
 fn handle(app: &gtk::Application, m: &Rc<Machine>, shell: &Rc<Shell>, words: &[&str]) -> String {
+    // Focusing, the keys that would leave do nothing: Super+Tab, Alt+Space, Ctrl+Alt+↓.
+    if shell.store.focus().is_some() && leaves(words) {
+        return "ok focusing".into();
+    }
     match words {
         ["ping"] => return "ok pong".into(),
         ["page"] => return format!("ok {:?} {:.2}", m.page(), m.progress()),
@@ -212,6 +216,11 @@ fn handle(app: &gtk::Application, m: &Rc<Machine>, shell: &Rc<Shell>, words: &[&
         ["help"] => "ok ping | page [desktop|home|toggle] | wadd | wm list|activate|fullscreen|unfullscreen|minimize|unminimize|close <#id|app-id> [output] | desk | monitors | lock | locked | session [heard] | power [state|close|lock|restart|off] | volume [up|down|mute] | brightness [up|down] | server off | quit (and each module's own)".into(),
         _ => format!("error unknown: {}", words.join(" ")),
     }
+}
+
+/// What a key does that would leave a focus.
+fn leaves(words: &[&str]) -> bool {
+    matches!(words, ["switcher", ..] | ["search", ..] | ["windowed", ..] | ["spaces", ..] | ["page", _])
 }
 
 /// `wadsctl wm …`: the windows, and moving them.

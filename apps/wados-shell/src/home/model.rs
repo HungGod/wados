@@ -167,9 +167,6 @@ pub struct Action {
     pub enabled: bool,
 }
 
-/// When Focus comes, for its tooltip.
-pub const FOCUS_LATER: &str = "Focus comes in a later phase";
-
 /// Another machine's card's buttons (`peer` its name): Launch (it streams
 /// from there, privately, into a window here), Focus (which runs here: it
 /// asks to copy it first) and Copy here.
@@ -234,15 +231,12 @@ pub fn actions(
                 "play",
             )
         },
-        Action {
-            enabled: false,
-            ..act(
-                ActId::Focus,
-                "Focus",
-                format!("Focus: {name} full screen for a time you set, with no leaving it until then ({FOCUS_LATER})"),
-                "timer",
-            )
-        },
+        act(
+            ActId::Focus,
+            "Focus",
+            format!("Focus: {name} full screen for a time you set, with no leaving it until then"),
+            "timer",
+        ),
         Action { enabled: public.enabled, ..act(ActId::Stream, "Stream", public.hint, "radio") },
         Action { enabled: private.enabled, ..act(ActId::Private, "Private", private.hint, "tailscale") },
         update,
@@ -431,10 +425,8 @@ mod tests {
             actions("X", false, Some(Built::Update), can(Public), can(Private))[4].hint,
             "Rebuild it (it’s out of date)"
         );
-        // Focus isn't here yet: shown, not working, and its tooltip says when.
-        let off: Vec<ActId> = a.iter().filter(|x| !x.enabled).map(|x| x.id).collect();
-        assert_eq!(off, [ActId::Focus]);
-        assert!(a[1].hint.contains(FOCUS_LATER));
+        assert!(a.iter().all(|x| x.enabled));
+        assert!(a[1].hint.starts_with("Focus: "));
         // The streams: publicly (radio) and privately (Tailscale's mark).
         assert_eq!((a[2].hint.as_str(), a[2].icon), ("Stream it publicly", "radio"));
         assert_eq!((a[3].hint.as_str(), a[3].icon), ("Stream it privately, on your tailnet", "tailscale"));

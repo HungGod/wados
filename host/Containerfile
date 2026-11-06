@@ -233,8 +233,8 @@ RUN systemctl enable greetd.service podman.socket wadd.socket wadd.service wados
     && systemctl disable bootc-fetch-apply-updates.timer \
     && systemctl mask bootc-fetch-apply-updates.timer \
     && systemctl set-default graphical.target \
-    && rm -f /etc/systemd/system/ctrl-alt-del.target \
-    && systemctl mask getty@tty1.service ctrl-alt-del.target \
+    && systemctl mask getty@tty1.service \
+    && grep -q wados-console-menu /etc/systemd/system/ctrl-alt-del.target \
     && rm -rf /var/log/dnf5.log* /var/lib/dnf /var/cache/libdnf5 /run/dnf \
               /var/cache/ldconfig /var/cache/swcatalog /run/selinux-policy
 
