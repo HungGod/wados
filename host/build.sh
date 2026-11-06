@@ -34,9 +34,12 @@
 # host/labwc/*.patch is built in its first stage), then rechunked by package
 # with rpm-ostree (RECHUNK=0: as built, quicker for trying things).
 #
-# Secrets. None is in this repo, the build's context or a layer: the image is
+# Secrets. host/secrets is gitignored, kept out of the image's context by
+# .containerignore, and hidden from the cargo builder (which mounts the whole
+# repo) by a tmpfs over it: `notmpcopyup`, for by default podman copies what's
+# under a tmpfs into it. None is in this repo, the build's context or a layer: the image is
 # the same for everyone. The one this script uses is NVIDIA's module signing
-# key, from ${WADOS_SECRETS:-~/.config/wados/secrets}/mok/ (wadspaces.priv and
+# key, from ${SECRETS}/mok/: host/secrets, or WADOS_SECRETS (wadspaces.priv and
 # wadspaces.der, or one .priv and one .der): it's handed to podman as build
 # secrets, which only the stage that signs the modules sees. Without it the
 # nvidia variant is skipped. The stick's `installer` reads cloudflare.toml
@@ -57,7 +60,12 @@ BUILDER=localhost/wados-host-builder:44
 REGISTRY=ghcr.io/hunggod
 # The base every image here is built and rechunked with (host/Containerfile's).
 BOOTC=quay.io/fedora/fedora-bootc:44@sha256:291bda73006a5cfc6d4ac24f9a261915624f9f555d9ff1a426cb412928f152ac
-SECRETS="${WADOS_SECRETS:-${HOME}/.config/wados/secrets}"
+# host/secrets (gitignored), unless WADOS_SECRETS says, or it isn't there.
+SECRETS="${WADOS_SECRETS:-}"
+if [[ -z "${SECRETS}" ]]; then
+    SECRETS="${HERE}/secrets"
+    [[ -d "${SECRETS}" ]] || SECRETS="${HOME}/.config/wados/secrets"
+fi
 JOBS="${JOBS:-2}"
 VERSION="${WADOS_VERSION:-44.$(date -u +%Y%m%d).$((10#$(date -u +%H%M)))}"
 
@@ -116,6 +124,7 @@ build_bins() {
     log "building wadd, wados-shell, wadsctl, wadspaces-clipboard, wadbrowser, wados-settings, wados-files and wados-installer (cargo -j${JOBS}, in the builder)"
     podman run --rm --security-opt label=disable \
         -v "${ROOT}:/src:ro" \
+        --tmpfs /src/host/secrets:notmpcopyup \
         -v "${BUILD}/cargo/registry:/usr/local/cargo/registry" \
         -v "${BUILD}/cargo/git:/usr/local/cargo/git" \
         -v "${BUILD}/target:/target" -e CARGO_TARGET_DIR=/target \

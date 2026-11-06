@@ -145,7 +145,7 @@ dark. foot's colours are v1's, and its windows are `io.wados.Terminal`.
   RPM Fusion's repos are removed again. nouveau is kept away by kernel arguments. Checked: the module is for the
   image's kernel, its license is the open one's, and its signer is the key's certificate's name. The public
   certificate is in the image (`/usr/share/wados/mok/wados-mok.der`) for a machine to enroll (phase 8).
-- **The MOK key** comes from `${WADOS_SECRETS:-~/.config/wados/secrets}/mok/` (`wadspaces.priv` and
+- **The MOK key** comes from `host/secrets/mok/` (or `WADOS_SECRETS`) (`wadspaces.priv` and
   `wadspaces.der`, or one `.priv` and one `.der`), handed to podman as build secrets: the signing step sees them
   in `/run/secrets`, gives akmods a group-readable copy and removes it in the same step, so it's in no layer.
   `build.sh` looks only at the files' names. **Without it the variant is skipped**, with a message; nothing

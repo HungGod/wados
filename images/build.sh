@@ -84,6 +84,7 @@ build_bins() {
     # label=disable, not :z: relabelling would rewrite the whole checkout.
     podman run --rm --security-opt label=disable \
         -v "${ROOT}":/src:ro \
+        --tmpfs /src/host/secrets:notmpcopyup \
         -v wados-cargo-registry:/usr/local/cargo/registry \
         -v wados-target-44:/target -e CARGO_TARGET_DIR=/target \
         -v "${BIN}":/out \

@@ -73,4 +73,4 @@ stop_labwc
 
 ## Secrets
 
-None are in this repo, in a build's context, or in an image's layers. Only the installer stick carries the Cloudflare tunnel and TURN credentials: `host/build.sh installer` reads them from `${WADOS_SECRETS:-~/.config/wados/secrets}`. Everything builds and runs without them: public streams are simply off.
+None are in this repo, in a build's context, or in an image's layers. Only the installer stick carries the Cloudflare tunnel and TURN credentials: `host/build.sh installer` reads them from `host/secrets` (gitignored), or `WADOS_SECRETS`. Everything builds and runs without them: public streams are simply off.
