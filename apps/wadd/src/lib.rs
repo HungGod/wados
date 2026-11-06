@@ -60,6 +60,7 @@ pub mod screen;
 pub mod selinux;
 pub mod server;
 pub mod setup;
+pub mod steam;
 pub mod storage;
 pub mod store;
 pub mod streams;
@@ -366,9 +367,21 @@ impl Server {
             Profile::System => (server::RUN_DIR.into(), Arc::new(server::SystemHands { uid: d.projects_uid })),
             Profile::User => (d.state_dir.clone(), Arc::new(server::NoSeat)),
         };
-        let registry = Arc::new(discs::Ghcr { accounts: accounts.clone(), backend: parts.backend.clone() });
+        let registry: Arc<dyn discs::Registry> = Arc::new(discs::Ghcr {
+            accounts: accounts.clone(),
+            backend: parts.backend.clone(),
+            state_dir: d.state_dir.clone(),
+        });
         let (who, uid) = (screen.clone(), d.projects_uid);
         let home = person_of(who, profile, uid);
+        let steam = steam::MachineSteam::new(
+            &d.signins_dir,
+            Arc::new(steam::RealSpaces { docs: docs.clone(), builds: builds.clone(), runs: runs.clone() }),
+            registry.clone(),
+            docs.clone(),
+            jobs.clone(),
+            steam::SIGN_IN_FOR,
+        );
         let discs = discs::MachineDiscs::new(
             &d.state_dir,
             Box::new(move || home().map(|p| p.home)),
@@ -402,6 +415,7 @@ impl Server {
             focus,
             server,
             discs,
+            steam,
         });
         Ok(Self {
             listener,

@@ -21,7 +21,7 @@ pub fn game_of(id: &str, name: Option<&str>) -> Game {
     steam_game(id).cloned().unwrap_or_else(|| Game {
         id: id.to_string(),
         name: name.unwrap_or(id).to_string(),
-        appid: 0,
+        appid: crate::vdf::appid_of(id).unwrap_or(0),
         size_mb: 2000,
         cover: "Midnight".to_string(),
         dlc: vec![],
@@ -84,7 +84,11 @@ pub fn owned_games(steam: &IndexMap<String, SteamLibrary>) -> Vec<OwnedGame> {
         .flat_map(|(account, lib)| {
             lib.owned.iter().map(move |id| OwnedGame {
                 account: account.clone(),
-                game: steam_games().iter().find(|g| g.id == *id).cloned().unwrap_or_else(|| game_of(id, None)),
+                game: steam_games()
+                    .iter()
+                    .find(|g| g.id == *id)
+                    .cloned()
+                    .unwrap_or_else(|| game_of(id, lib.names.get(id).map(String::as_str))),
                 installed: lib.has(id),
             })
         })

@@ -18,9 +18,6 @@ use wad_model::{AppId, Ext, NewVariant, Section, Wadspace};
 
 use crate::dnd::Held;
 
-pub const STEAM_LATER: &str = "Steam's games come in phase 10, with Steam's sign-in";
-pub const LINK_STEAM_LATER: &str = "Linking Steam comes in phase 10";
-
 /// How many suggestions per app.
 pub const SUGGESTED: usize = 4;
 
@@ -235,7 +232,7 @@ pub fn groups(lib: &Library, x: &Wadspace) -> Vec<Group> {
             icon: ItemIcon::Glyph("gamepad-2"),
             add: Some(Op::AddGame { ws: x.id.clone(), account: g.account, game: g.game.id }),
             drag: None,
-            off: Some(STEAM_LATER.into()),
+            off: None,
         })
         .collect();
     let dolphin = lib
@@ -370,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    fn steams_games_are_off_till_its_sign_in_and_discs_work() {
+    fn steams_games_and_discs_are_listed() {
         let lib = sample();
         let couch = lib.wadspace("couch-co-op").unwrap();
         let gs = groups(&lib, couch);
@@ -378,8 +375,7 @@ mod tests {
         assert_eq!(steam.items.len(), 6);
         let stardew = item(steam, "steam:old-steam:stardew-valley");
         assert!(stardew.lit.is_some());
-        assert_eq!(stardew.off.as_deref(), Some(STEAM_LATER));
-        assert_eq!(toggle(couch, stardew), None);
+        assert_eq!(stardew.off, None);
         let retro = lib.wadspace("retro").unwrap();
         let dolphin = group(&groups(&lib, retro), GroupId::Dolphin).clone();
         assert_eq!(

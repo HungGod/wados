@@ -41,6 +41,21 @@ impl Wadd {
         self.post("/v1/discs", &wad_proto::DiscAdd { path: path.into(), push }).await
     }
 
+    /// The Steam accounts signed in here (`GET /v1/steam`).
+    pub async fn steam(&self) -> Result<Vec<wad_proto::SteamAccount>, Failure> {
+        self.get("/v1/steam").await
+    }
+
+    /// Signs in to a Steam account (`POST /v1/steam/signin`): a job.
+    pub async fn steam_signin(&self, name: &str) -> Result<JobInfo, Failure> {
+        self.post("/v1/steam/signin", &wad_proto::SteamSignIn { name: name.into() }).await
+    }
+
+    /// Pushes games to the account's packages (`POST /v1/steam/push`): a job.
+    pub async fn steam_push(&self, account: &str, games: Vec<String>) -> Result<JobInfo, Failure> {
+        self.post("/v1/steam/push", &wad_proto::SteamPush { account: account.into(), games }).await
+    }
+
     /// Server mode (`GET /v1/server`).
     pub async fn server(&self) -> Result<wad_proto::Server, Failure> {
         self.get("/v1/server").await

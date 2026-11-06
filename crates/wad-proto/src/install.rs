@@ -94,6 +94,43 @@ pub struct DiscAdd {
     pub push: bool,
 }
 
+/// A game a Steam account has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamGame {
+    pub id: String,
+    pub name: String,
+    /// Downloaded on this machine.
+    pub installed: bool,
+    /// In the account's GitHub packages.
+    pub pushed: bool,
+}
+
+/// A Steam account signed in here (`GET /v1/steam`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamAccount {
+    /// Its key.
+    pub id: String,
+    pub name: String,
+    pub games: Vec<SteamGame>,
+}
+
+/// `POST /v1/steam/signin`: its key's name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamSignIn {
+    pub name: String,
+}
+
+/// `POST /v1/steam/push`: the games ticked in the push dialog.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SteamPush {
+    pub account: String,
+    pub games: Vec<String>,
+}
+
 /// Where Set up WadSpaces is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -592,6 +592,9 @@ pub struct SteamLibrary {
     /// Downloaded into its folder (`true`).
     #[serde(default)]
     pub installed: IndexMap<String, bool>,
+    /// The names of games the catalog doesn't know, by id.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub names: IndexMap<String, String>,
 }
 
 impl SteamLibrary {

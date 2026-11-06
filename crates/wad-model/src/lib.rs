@@ -106,6 +106,7 @@ pub mod suggest;
 pub mod tags;
 pub mod types;
 pub mod variants;
+pub mod vdf;
 pub mod wallpapers;
 
 pub use check::CheckError;

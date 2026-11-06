@@ -73,7 +73,7 @@ fn what_each_wadspace_is_made_of() {
     assert_eq!(un("vanua-academy"), ["terminal:firebase"]);
     assert!(pk("cosmic-bodybuilding").is_empty());
     assert_eq!(un("cosmic-bodybuilding"), ["app:obsidian"]);
-    assert_eq!(un("couch-co-op"), ["app:steam"], "its games aren't packages");
+    assert!(un("couch-co-op").is_empty(), "its games aren't packages");
     assert!(un("retro").is_empty());
 
     // The starter's set: its packages and its four commands.

@@ -1,6 +1,6 @@
 # 0009: focus, displays, server mode, Play together and games
 
-Phase 10, except Steam, which isn't done (see "Not yet").
+Phase 10. Steam is built, but hasn't met a real account or client (see "Not yet").
 
 ## Focus
 
@@ -53,6 +53,24 @@ Phase 10, except Steam, which isn't done (see "Not yet").
 - **The push's login** is a 0600 file in wadd's state folder, removed after. It's never in the disc's folder, which is
   the build's context and is mounted into wadspaces.
 
+## Steam
+
+- **An account is a key,** whose folder keeps Steam's session and its library (`steamapps/`), so a game downloads once
+  however many wadspaces use it.
+- **Signing in is the real client, in a temporary wadspace** with that key, in a window. wadd watches the folder for
+  `loginusers.vdf`, reads the library, then removes the wadspace. It never sees a password. Steam Guard and QR
+  sign-in are the client's own.
+- **The library comes from the client's own files** (`wad_model::vdf`), with no Web API key: `localconfig.vdf` for what
+  the account has on this client, `appmanifest_*.acf` for what's downloaded. So a game never opened here may not show.
+- **Those folders are written from inside wadspaces, and wadd is root:** only plain files of a sane size are read, links
+  are never followed, and a manifest's folder name can't be a path.
+- **Packages are opt-in:** a game is pushed only if it's ticked in Settings ▸ Accounts (the spike stages everything).
+  The first push asks for a second GitHub sign-in, for `write:packages`. Another machine pulls with
+  `POST /v1/steam/{account}/pull/{game}`.
+- **One client per account:** opening a second wadspace on an account in use is refused, with the spike's words.
+- **A game starts** as `gamescope -f -- wadspaces-steam -silent -applaunch <appid>`, from a launcher made from
+  `games.json`.
+
 ## Testing
 
 - **`tools/vm.sh modes-check`:** focus, a second display through labwc's virtual output, and server mode on the
@@ -63,14 +81,16 @@ Phase 10, except Steam, which isn't done (see "Not yet").
 
 ## Not yet
 
-- **Steam isn't done:** its feature script, gamescope, the sign-in container, the library, the push dialog and Set up's
-  Steam card. They depend on the real client and a real account, which the tests may not use, so a mock wouldn't prove
-  them.
+- **Steam has only met fixtures.** Its package installs on the base, and everything around the client is tested with
+  files shaped like the client's, on a fake registry. No real sign-in, library, download, game, gamescope or Proton
+  has run, and which of an account's games `localconfig.vdf` really lists is unknown.
+- **The Play and Get ready job stages** of the spike aren't there; Steam shows its own download.
+- **A failed sign-in leaves its empty key** in the library.
 - **`GCPadNew.ini` is unverified.** Dolphin opened the four pads in a container, but this release build doesn't log
   device names, so the names and axis numbers come from Selkies' pad name and Dolphin's documented numbering. It needs
   a real game.
 - **Not run end to end:** a whole Play together stream through wadd in a browser, and a Dolphin game in a wadspace
   (the `dolphin` package isn't published yet).
 - **Pulling a disc on another machine** and copying one over Taildrive.
-- **`write:packages`** comes from a second GitHub sign-in that nothing asks for yet, so a real push may be refused.
+- **A real push** hasn't run: the second sign-in and `podman push` are only tested with a fake registry.
 - **Selkies' touch gamepad** hasn't been seen on a phone.

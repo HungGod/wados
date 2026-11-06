@@ -2,7 +2,7 @@
 //! opened by the shell at the first sign-in on a new machine. Welcome,
 //! Wi-Fi, Accounts, WadOS, Done. wadd keeps where it's got to, so closed
 //! early it opens again where it was. Wi-Fi and Accounts are Settings' own panels.
-//! Steam's sign-in comes in phase 10.
+//! Steam is on the Accounts page, Settings' own.
 
 use std::cell::RefCell;
 use std::rc::Rc;

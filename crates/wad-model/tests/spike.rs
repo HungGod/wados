@@ -893,7 +893,7 @@ mod two_clicks {
             },
         );
         assert_eq!(made.created.as_deref(), Some("key:app:steam"));
-        assert_eq!(lib.key("weekend").map(|k| k.paths.len()), Some(3));
+        assert_eq!(lib.key("weekend").map(|k| k.paths.len()), Some(4));
         lib.steam.insert(
             s("weekend"),
             SteamLibrary { owned: NEW_ACCOUNT_GAMES.map(String::from).to_vec(), ..Default::default() },

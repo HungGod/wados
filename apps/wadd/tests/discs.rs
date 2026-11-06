@@ -9,21 +9,24 @@ use async_trait::async_trait;
 use common::{Rig, rig};
 use wad_model::JobStatus;
 use wad_proto::DiscAdd;
-use wadd::discs::{MachineDiscs, NEEDS_GITHUB, Registry};
+use wadd::discs::{Account, MachineDiscs, NEEDS_GITHUB, NEEDS_PACKAGES, Registry};
 
 #[derive(Default)]
 struct Fake {
-    login: Option<(String, String)>,
+    login: Option<Account>,
     pushed: Mutex<Vec<(PathBuf, String)>>,
 }
 
 #[async_trait]
 impl Registry for Fake {
-    async fn login(&self) -> Result<Option<(String, String)>, String> {
+    async fn login(&self) -> Result<Option<Account>, String> {
         Ok(self.login.clone())
     }
-    async fn push(&self, file: &Path, reference: &str, _: &str, _: &str) -> Result<(), String> {
-        self.pushed.lock().unwrap().push((file.to_path_buf(), reference.to_string()));
+    async fn push(&self, context: &Path, _: &[String], reference: &str, _: &Account) -> Result<(), String> {
+        self.pushed.lock().unwrap().push((context.to_path_buf(), reference.to_string()));
+        Ok(())
+    }
+    async fn pull(&self, _: &str, _: &Path, _: &Account) -> Result<(), String> {
         Ok(())
     }
 }
@@ -67,7 +70,8 @@ async fn a_disc_stays_here_unless_its_asked_to_go_to_packages() {
 #[tokio::test]
 async fn asked_it_goes_to_the_accounts_packages() {
     let rig = rig();
-    let fake = Arc::new(Fake { login: Some(("hunggod".into(), "t".into())), ..Fake::default() });
+    let who = Account { login: "hunggod".into(), token: "t".into(), scopes: vec!["write:packages".into()] };
+    let fake = Arc::new(Fake { login: Some(who), ..Fake::default() });
     let (d, home) = discs(&rig, fake.clone());
     let file = home.join("mario-party-4.iso");
     std::fs::write(&file, b"a disc").unwrap();
@@ -85,6 +89,9 @@ async fn it_refuses_a_push_with_no_account_and_anything_outside_the_home() {
     let file = home.join("a.iso");
     std::fs::write(&file, b"x").unwrap();
     assert_eq!(d.add(add(&file, true)).await.unwrap_err().message, NEEDS_GITHUB);
+    let first = Account { login: "me".into(), token: "t".into(), scopes: vec!["repo".into()] };
+    let (d2, _) = discs(&rig, Arc::new(Fake { login: Some(first), ..Fake::default() }));
+    assert_eq!(d2.add(add(&file, true)).await.unwrap_err().message, NEEDS_PACKAGES);
     // Root reads what it's told to: only the person's own files are taken.
     let secret = rig.dir.path().join("elsewhere.iso");
     std::fs::write(&secret, b"x").unwrap();

@@ -85,7 +85,16 @@ pub static APPS: [(AppId, Recipe); 13] = [
     // Fedora's: newer than Debian's, so not v1's AppImage.
     (AppId::Krita, Recipe::Rpm(Rpm { packages: &["krita"], desktop: Some("org.kde.krita.desktop") })),
     (AppId::Openshot, Recipe::Todo("Fedora's openshot (rpm-openshot)")),
-    (AppId::Steam, Recipe::Todo("RPM Fusion's steam with its 32-bit libraries (a feature: it adds the repo)")),
+    (
+        AppId::Steam,
+        Recipe::Feature(Feature {
+            name: "steam",
+            needs: &[],
+            desktop: Some("steam.desktop"),
+            probe: Some("rpm -q --qf '%{VERSION}' steam"),
+            github: false,
+        }),
+    ),
     (
         AppId::Dolphin,
         Recipe::Feature(Feature {
@@ -121,7 +130,7 @@ pub static TOOLS: [(&str, Recipe); 9] = [
 
 /// Features in the order they stack: what others need first, the big,
 /// common ones low. (Each one once: a test checks.)
-pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "dolphin", "vscode"];
+pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "dolphin", "steam", "vscode"];
 
 /// An app's recipe (every app has one, if only a `Todo`).
 pub fn app(id: AppId) -> &'static Recipe {
@@ -180,7 +189,7 @@ mod tests {
             .filter(|a| matches!(app(a.id), Recipe::Todo(_)))
             .map(|a| a.id.as_str())
             .collect();
-        assert_eq!(apps, ["obsidian", "tiled", "libresprite", "audacity", "lmms", "openshot", "steam", "obs"]);
+        assert_eq!(apps, ["obsidian", "tiled", "libresprite", "audacity", "lmms", "openshot", "obs"]);
         let tools: Vec<&str> = wad_model::catalog::tools()
             .iter()
             .filter(|t| !matches!(tool(&t.id), Some(Recipe::Feature(_) | Recipe::Rpm(_))))

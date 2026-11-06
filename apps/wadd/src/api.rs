@@ -91,6 +91,7 @@ pub struct AppState {
     pub focus: Arc<crate::focus::MachineFocus>,
     pub server: Arc<crate::server::ServerMode>,
     pub discs: Arc<crate::discs::MachineDiscs>,
+    pub steam: Arc<crate::steam::MachineSteam>,
 }
 
 /// An ApiError as an HTTP response.
@@ -166,6 +167,10 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/focus", get(focus).post(focus_start))
         .route("/v1/server", get(server).post(server_set))
         .route("/v1/discs", post(disc_add))
+        .route("/v1/steam", get(steam))
+        .route("/v1/steam/signin", post(steam_signin))
+        .route("/v1/steam/push", post(steam_push))
+        .route("/v1/steam/{account}/pull/{game}", post(steam_pull))
         .merge(crate::api_phase6::routes())
         .merge(crate::api_phase7::routes())
         .merge(crate::api_phase8::routes())
@@ -245,6 +250,7 @@ async fn open(
 ) -> Result<Json<WadspaceRun>, Failure> {
     app.focus.check_open(&id, req.display)?;
     app.server.check_open(req.display)?;
+    steam_free(&app, &id)?;
     if let Some(file) = &req.file {
         return Ok(Json(app.runs.open_with(&id, req.display, file, req.machine.as_deref()).await?));
     }
@@ -254,6 +260,46 @@ async fn open(
 async fn stop(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<WadspaceRun>, Failure> {
     app.focus.check_stop(&id)?;
     Ok(Json(app.runs.stop(&id).await?))
+}
+
+/// Steam runs one client per account: a second wadspace on it has to wait.
+fn steam_free(app: &AppState, id: &str) -> Result<(), ApiError> {
+    let lib = app.docs.snapshot();
+    let Some(x) = lib.wadspace(id) else { return Ok(()) };
+    let states = app.runs.states();
+    let running: Vec<&str> = states.iter().filter(|r| r.display.is_some()).map(|r| r.id.as_str()).collect();
+    match wad_model::games::steam_busy(&lib.wadspaces, &running, x) {
+        Some(other) => {
+            let on = wad_model::games::plays_steam(x).and_then(|t| t.account).unwrap_or_default();
+            Err(ApiError::conflict(format!("{} is playing on {on}: Steam runs one at a time per account", other.name)))
+        }
+        None => Ok(()),
+    }
+}
+
+async fn steam(State(app): State<Arc<AppState>>) -> Json<Vec<wad_proto::SteamAccount>> {
+    Json(app.steam.accounts())
+}
+
+async fn steam_signin(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<wad_proto::SteamSignIn>,
+) -> Result<Json<JobInfo>, Failure> {
+    Ok(Json(app.steam.sign_in(req)?))
+}
+
+async fn steam_push(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<wad_proto::SteamPush>,
+) -> Result<Json<JobInfo>, Failure> {
+    Ok(Json(app.steam.push(req).await?))
+}
+
+async fn steam_pull(
+    State(app): State<Arc<AppState>>,
+    Path((account, game)): Path<(String, String)>,
+) -> Result<Json<JobInfo>, Failure> {
+    Ok(Json(app.steam.pull(&account, &game).await?))
 }
 
 async fn disc_add(

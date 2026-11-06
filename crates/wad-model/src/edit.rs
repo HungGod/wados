@@ -24,8 +24,8 @@ use crate::ops::{
 };
 use crate::tags::{GENERAL_ID, GENERAL_NAME, TAG_COLORS};
 use crate::types::{
-    AppId, BrowserApp, BuildCommand, Category, CommandKind, DiscImage, KeyGroup, KeyRef, Project, ProjectKind,
-    ProjectSource, Secret, SecretKind, SteamLibrary, Tag, Wadspace, Wallpaper,
+    AppId, BrowserApp, BuildCommand, Category, CommandKind, DiscImage, GamePackage, KeyGroup, KeyRef, Project,
+    ProjectKind, ProjectSource, Secret, SecretKind, SteamLibrary, Tag, Wadspace, Wallpaper,
 };
 use crate::variants::{VariantKind, find_variant, key_kind_of, sign_in_of, variants_of};
 
@@ -52,6 +52,9 @@ pub struct Library {
     /// Dolphin's games: discs uploaded to the account's GitHub packages, by id.
     #[serde(default)]
     pub discs: IndexMap<String, DiscImage>,
+    /// Steam games pushed to the account's GitHub packages, by game.
+    #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
+    pub game_packages: IndexMap<String, GamePackage>,
     /// The last number a new id took ('cmd-101', 'undo-102').
     #[serde(default)]
     pub seq: u64,
@@ -422,6 +425,12 @@ pub enum Op {
     #[serde(rename = "space.forApp")]
     ForApp { app: AppId },
     /// A disc (an .iso or .rvz file) already in the account's packages, as one of its Dolphin games (one that isn't: upload it first, then this). Created: its variant's id.
+    /// What a Steam account has, as its client's files say (wadd's steam.rs).
+    #[serde(rename = "steam.library")]
+    SteamLibrary { key: String, library: SteamLibrary },
+    /// A game pushed to the account's packages (wadd's steam.rs).
+    #[serde(rename = "steam.package")]
+    SteamPackage { package: GamePackage },
     /// A disc on this machine, new or pushed (wadd's discs.rs).
     #[serde(rename = "discs.keep")]
     KeepDisc { disc: DiscImage },
@@ -780,6 +789,14 @@ impl Tx<'_> {
                 let id = self.create(Some(app_name(app)), Some(category), None)?;
                 self.must_add(&id, Section::Apps, app.as_str(), None).map(drop)
             }
+            Op::SteamLibrary { key, library } => {
+                self.lib.steam.insert(key, library);
+                Ok(())
+            }
+            Op::SteamPackage { package } => {
+                self.lib.game_packages.insert(package.game.clone(), package);
+                Ok(())
+            }
             Op::KeepDisc { disc } => {
                 self.lib.discs.insert(disc.id.clone(), disc);
                 Ok(())
@@ -1135,7 +1152,9 @@ impl Tx<'_> {
         let id = free_id(&ids, &name);
         // A Steam account's sign-in is its Steam folders.
         let paths = if kind == SecretKind::Steam {
-            [".steam/", ".local/share/Steam/config/", ".local/share/Steam/userdata/"].map(String::from).to_vec()
+            [".steam/", ".local/share/Steam/config/", ".local/share/Steam/userdata/", ".local/share/Steam/steamapps/"]
+                .map(String::from)
+                .to_vec()
         } else {
             vec![]
         };

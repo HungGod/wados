@@ -15,9 +15,6 @@ use wad_model::{AppId, SecretKind, Section, Wadspace};
 
 use crate::dnd::Held;
 
-/// Steam's sign-in is a job of its own (the browser, Steam's account and password): phase 10.
-pub const STEAM_LATER: &str = "Signing in to Steam comes in phase 10";
-
 /// A kind of key, as a new one's title names it ("A new VS Code key").
 pub fn kind_name(k: SecretKind) -> &'static str {
     match k {
@@ -103,7 +100,7 @@ fn new_key(kind: SecretKind, then: SignIns) -> Pick {
         label: "New key…".into(),
         icon: "plus",
         checked: false,
-        off: (kind == SecretKind::Steam).then(|| STEAM_LATER.to_string()),
+        off: None,
         act: Act::NewKey { kind, then },
     }
 }
@@ -439,7 +436,7 @@ mod tests {
     }
 
     #[test]
-    fn a_things_dropdown_and_steams_new_key_waits_for_phase_10() {
+    fn a_things_dropdown_and_steams_new_key() {
         let lib = sample();
         let x = lib.wadspace("vanua-academy").unwrap();
         let ls = lines(x, AppId::Vscode);
@@ -461,7 +458,7 @@ mod tests {
         assert_eq!(line_label(&account[0]), "Account");
         let menu = thing_key_items(&lib, couch, &account[0]);
         assert!(pick(&menu, "key:old-steam").checked);
-        assert_eq!(pick(&menu, "key:new").off.as_deref(), Some(STEAM_LATER));
+        assert_eq!(pick(&menu, "key:new").off, None);
     }
 
     #[test]

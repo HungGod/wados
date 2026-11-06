@@ -150,9 +150,9 @@ fn icon(ws: &Wadspace, key: &str) -> Option<Icon> {
             let p = ws.look.projects.iter().find(|p| p.id == id)?;
             Some(Icon { app: None, project: Some(p.id.clone()), desktop: None, label: p.as_name.clone(), autostart })
         }
-        // A Dolphin game: its launcher is made from discs.json at start.
+        // A game: its launcher is made from games.json at start.
         "variant" => {
-            let e = ws.ext(AppId::Dolphin, id)?;
+            let e = ws.ext(AppId::Dolphin, id).or_else(|| ws.ext(AppId::Steam, id))?;
             let label = e.name.clone().unwrap_or_else(|| id.to_string());
             let opens = ws.look.launch.as_deref() == Some(key);
             Some(Icon {
@@ -272,7 +272,9 @@ pub fn default_paths(kind: SecretKind) -> &'static [&'static str] {
         SecretKind::Obsidian => &[".config/obsidian/Local Storage/"],
         // Claude Code's CLI, its settings beside its login.
         SecretKind::VscodeClaudeCode => &[".claude/", ".claude.json"],
-        SecretKind::Steam => &[".steam/", ".local/share/Steam/config/", ".local/share/Steam/userdata/"],
+        SecretKind::Steam => {
+            &[".steam/", ".local/share/Steam/config/", ".local/share/Steam/userdata/", ".local/share/Steam/steamapps/"]
+        }
     }
 }
 

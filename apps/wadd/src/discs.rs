@@ -19,13 +19,39 @@ use crate::jobs::{Jobs, now_ms};
 use crate::library::Docs;
 
 pub const NEEDS_GITHUB: &str = "Link GitHub first: keeping it in your packages needs your account";
+/// A first push: the token from the first sign-in can't write packages.
+pub const NEEDS_PACKAGES: &str = "GitHub hasn’t said this machine may push packages: sign in to GitHub once more";
 
-/// Pushing to the account's packages.
+/// An account that may be pushed as.
+#[derive(Clone)]
+pub struct Account {
+    pub login: String,
+    pub token: String,
+    pub scopes: Vec<String>,
+}
+
+impl Account {
+    pub fn may_push(&self) -> bool {
+        self.scopes.iter().any(|s| s == "write:packages")
+    }
+}
+
+/// GitHub's packages.
 #[async_trait]
 pub trait Registry: Send + Sync + 'static {
-    /// The account's login and token, if it's signed in.
-    async fn login(&self) -> Result<Option<(String, String)>, String>;
-    async fn push(&self, file: &Path, reference: &str, login: &str, token: &str) -> Result<(), String>;
+    /// The account, if it's signed in.
+    async fn login(&self) -> Result<Option<Account>, String>;
+    /// `paths` of `context` as an image, pushed as `reference`.
+    async fn push(&self, context: &Path, paths: &[String], reference: &str, who: &Account) -> Result<(), String>;
+    /// `reference`'s files, into `to`.
+    async fn pull(&self, reference: &str, to: &Path, who: &Account) -> Result<(), String>;
+}
+
+/// The account, able to push, or why not.
+pub async fn pusher(registry: &dyn Registry) -> Result<Account, ApiError> {
+    let who = registry.login().await.map_err(ApiError::internal)?;
+    let who = who.ok_or_else(|| ApiError::conflict(NEEDS_GITHUB))?;
+    if who.may_push() { Ok(who) } else { Err(ApiError::conflict(NEEDS_PACKAGES)) }
 }
 
 pub struct MachineDiscs {
@@ -68,17 +94,12 @@ impl MachineDiscs {
         if !is_disc_file(&file) || disc_id(&file).is_empty() {
             return Err(ApiError::bad_request("A disc is an .iso or an .rvz file"));
         }
-        let account = if req.push {
-            let got = self.registry.login().await.map_err(ApiError::internal)?;
-            Some(got.ok_or_else(|| ApiError::conflict(NEEDS_GITHUB))?)
-        } else {
-            None
-        };
-        let reference = account.as_ref().map(|(login, _)| disc_package_ref(login, &disc_id(&file)));
+        let account = if req.push { Some(pusher(self.registry.as_ref()).await?) } else { None };
+        let reference = account.as_ref().map(|a| disc_package_ref(&a.login, &disc_id(&file)));
         let mut stages = vec![("reading".to_string(), format!("Reading {file}"))];
-        if let Some((login, _)) = &account {
+        if let Some(a) = &account {
             stages.push(("packing".into(), "Packing it".into()));
-            stages.push(("pushing".into(), format!("Pushing it to ghcr.io/{login}")));
+            stages.push(("pushing".into(), format!("Pushing it to ghcr.io/{}", a.login)));
         }
         let job = self.jobs.create(JobKind::DiscStage, &format!("Adding {file}"), &disc_id(&file), &stages);
         let (me, id) = (self.clone(), job.clone());
@@ -96,7 +117,7 @@ impl MachineDiscs {
         job: &str,
         from: &Path,
         file: &str,
-        account: Option<(String, String)>,
+        account: Option<Account>,
         reference: Option<String>,
     ) -> Result<(), String> {
         let id = disc_id(file);
@@ -109,10 +130,10 @@ impl MachineDiscs {
         std::fs::rename(&part, &to).map_err(say)?;
         let bytes = std::fs::metadata(&to).map_err(say)?.len();
         self.jobs.stage(job, "reading", PartState::Done, None);
-        if let (Some((login, token)), Some(r)) = (&account, &reference) {
+        if let (Some(who), Some(r)) = (&account, &reference) {
             self.jobs.stage(job, "packing", PartState::Done, None);
             self.jobs.stage(job, "pushing", PartState::Working, None);
-            self.registry.push(&to, r, login, token).await?;
+            self.registry.push(&dir, &[file.to_string()], r, who).await?;
             self.jobs.stage(job, "pushing", PartState::Done, None);
         }
         let disc = DiscImage {
@@ -143,58 +164,89 @@ impl MachineDiscs {
     }
 }
 
-/// The machine's: the GitHub account, and podman on the command line.
+/// The machine's: the GitHub account, and podman on the command line. The
+/// login is a file of podman's, 0600, in wadd's state folder and removed after:
+/// never on a command line, in a build's context, or anywhere a wadspace sees.
 pub struct Ghcr {
     pub accounts: Arc<dyn crate::api_phase6::Accounts>,
     pub backend: Arc<dyn crate::backend::Backend>,
+    pub state_dir: PathBuf,
+}
+
+struct AuthFile(PathBuf);
+
+impl AuthFile {
+    fn new(dir: &Path, who: &Account) -> Result<Self, String> {
+        use base64::Engine;
+        let pair = base64::engine::general_purpose::STANDARD.encode(format!("{}:{}", who.login, who.token));
+        let path = dir.join(format!(".ghcr-auth-{}.json", std::process::id()));
+        let body = format!(r#"{{"auths":{{"ghcr.io":{{"auth":"{pair}"}}}}}}"#);
+        crate::streams::write_private(&path, body.as_bytes(), None).map_err(|e| e.to_string())?;
+        Ok(Self(path))
+    }
+}
+
+impl Drop for AuthFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+async fn podman(args: &[String]) -> Result<String, String> {
+    let out = tokio::process::Command::new("podman").args(args).output().await.map_err(|e| e.to_string())?;
+    if out.status.success() {
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    } else {
+        Err(format!("podman: {}", String::from_utf8_lossy(&out.stderr).trim()))
+    }
+}
+
+/// `FROM scratch`, with `paths` kept where they are.
+pub fn recipe(paths: &[String]) -> String {
+    let mut text = String::from("FROM scratch\n");
+    for p in paths {
+        let quoted = serde_json::to_string(p).unwrap_or_default();
+        let to = serde_json::to_string(&format!("/{p}")).unwrap_or_default();
+        text.push_str(&format!("COPY [{quoted}, {to}]\n"));
+    }
+    text
 }
 
 #[async_trait]
 impl Registry for Ghcr {
-    async fn login(&self) -> Result<Option<(String, String)>, String> {
+    async fn login(&self) -> Result<Option<Account>, String> {
         let Some(who) = self.accounts.github().await.map_err(|e| e.message)? else { return Ok(None) };
-        let token = self.backend.secret_value("github_token").await?;
-        Ok(token.map(|t| (who.login, t.trim().to_string())).filter(|(_, t)| !t.is_empty()))
+        let token = self.backend.secret_value("github_token").await?.map(|t| t.trim().to_string());
+        Ok(token.filter(|t| !t.is_empty()).map(|token| Account { login: who.login, token, scopes: who.scopes }))
     }
 
-    async fn push(&self, file: &Path, reference: &str, login: &str, token: &str) -> Result<(), String> {
-        use base64::Engine;
-        let dir = file.parent().ok_or("the disc has no folder")?;
-        let name = file.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default();
-        let recipe = dir.join("Containerfile.push");
-        std::fs::write(&recipe, format!("FROM scratch\nCOPY [\"{name}\", \"/{name}\"]\n"))
-            .map_err(|e| e.to_string())?;
-        // Never in the disc's folder: wadspaces see it, and it's the build's context.
-        let state = dir.parent().and_then(Path::parent).ok_or("the discs have no folder")?;
-        let auth = state.join(".disc-push-auth.json");
-        let pair = base64::engine::general_purpose::STANDARD.encode(format!("{login}:{token}"));
-        let body = format!(r#"{{"auths":{{"ghcr.io":{{"auth":"{pair}"}}}}}}"#);
-        crate::streams::write_private(&auth, body.as_bytes(), None).map_err(|e| e.to_string())?;
-        let podman = |args: Vec<String>| async move {
-            let out = tokio::process::Command::new("podman").args(&args).output().await.map_err(|e| e.to_string())?;
-            if out.status.success() {
-                Ok(())
-            } else {
-                Err(format!("podman: {}", String::from_utf8_lossy(&out.stderr).trim()))
-            }
-        };
+    async fn push(&self, context: &Path, paths: &[String], reference: &str, who: &Account) -> Result<(), String> {
+        let auth = AuthFile::new(&self.state_dir, who)?;
+        let recipe_file = self.state_dir.join(format!(".ghcr-recipe-{}", std::process::id()));
+        std::fs::write(&recipe_file, recipe(paths)).map_err(|e| e.to_string())?;
         let f = |s: &str| s.to_string();
-        let built = podman(vec![
+        let built = podman(&[
             f("build"),
             f("-q"),
             f("-t"),
             f(reference),
             f("-f"),
-            recipe.display().to_string(),
-            dir.display().to_string(),
+            recipe_file.display().to_string(),
+            context.display().to_string(),
         ])
         .await;
-        let pushed = match built {
-            Ok(()) => podman(vec![f("push"), f("--authfile"), auth.display().to_string(), f(reference)]).await,
-            Err(e) => Err(e),
-        };
-        let _ = std::fs::remove_file(&auth);
-        let _ = std::fs::remove_file(&recipe);
-        pushed
+        let _ = std::fs::remove_file(&recipe_file);
+        built?;
+        podman(&[f("push"), f("--authfile"), auth.0.display().to_string(), f(reference)]).await.map(drop)
+    }
+
+    async fn pull(&self, reference: &str, to: &Path, who: &Account) -> Result<(), String> {
+        let auth = AuthFile::new(&self.state_dir, who)?;
+        let f = |s: &str| s.to_string();
+        podman(&[f("pull"), f("-q"), f("--authfile"), auth.0.display().to_string(), f(reference)]).await?;
+        let id = podman(&[f("create"), f(reference), f("/nothing")]).await?;
+        let copied = podman(&[f("cp"), format!("{id}:/."), to.display().to_string()]).await;
+        let _ = podman(&[f("rm"), f("-f"), id]).await;
+        copied.map(drop)
     }
 }

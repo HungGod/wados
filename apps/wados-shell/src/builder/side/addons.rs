@@ -23,7 +23,7 @@ use wad_model::edit::Op;
 use wad_model::suggest::Suggestion;
 use wad_model::{AppId, BuildCommand, CommandKind, Wadspace};
 
-use super::addon_list::{self, Group, GroupId, Item, LINK_STEAM_LATER, focus, focus_toggle, toggle};
+use super::addon_list::{self, Group, GroupId, Item, focus, focus_toggle, toggle};
 use super::ctl::{self, Row};
 use super::kit::{self, Field};
 use crate::builder::{Builder, Tab};
@@ -101,8 +101,13 @@ impl Panel {
                     p.ask_site(b.upcast_ref());
                 }
             });
-            let link_steam = pill_button("gamepad-2", "Link Steam", LINK_STEAM_LATER);
-            link_steam.set_sensitive(false);
+            let link_steam = pill_button("gamepad-2", "Link Steam", "Sign in to Steam, in Settings ▸ Accounts");
+            let w = me.clone();
+            link_steam.connect_clicked(move |_| {
+                if let Some(b) = w.upgrade().and_then(|p| p.builder.upgrade()) {
+                    crate::peers::open_app(&b.shell, &["wados-settings", "--page", "accounts"]);
+                }
+            });
             let disc_upload = pill_button("upload", "Upload iso, rvz file", "An .iso or .rvz from this computer");
             disc_upload.set_halign(gtk::Align::Start);
             let w = me.clone();
@@ -139,7 +144,7 @@ impl Panel {
                 card.append(&for_line(&format!("for {}", app_name(app)), Some((app, focus.as_ref()))));
                 if g == GroupId::Steam {
                     let line = gtk::Box::builder().spacing(10).css_classes(["side-link-steam"]).build();
-                    let l = note("Its games come in phase 10, with Steam's sign-in.");
+                    let l = note("Its games show here once your Steam account is linked.");
                     l.set_hexpand(true);
                     line.append(&l);
                     link_steam.set_valign(gtk::Align::Center);
