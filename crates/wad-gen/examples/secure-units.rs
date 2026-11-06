@@ -57,6 +57,7 @@ fn main() {
         transport: Transport::WebSockets,
         dir: &auth,
         origin: None,
+        players: 0,
     };
     let vm = Vm { runtime: &runtime, cpus: num("cpus", "2"), ram_mib: num("ram-mib", "2048") };
     let mounts = Mounts::new();

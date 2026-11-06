@@ -77,7 +77,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use wad_gen::units::{self, container_name, display_name, master_secret};
 use wad_model::{JobKind, PartState, Phase, ProjectKind, SessionDisplay, StreamMode, StreamStage, Transport, Wadspace};
-use wad_proto::streams::{SECURE_PUBLIC_LATER, TURN_DOWN, stages};
+use wad_proto::streams::{MAX_PLAYERS, PLAYS_PUBLIC, PlayerLink, SECURE_PUBLIC_LATER, TURN_DOWN, stages};
 use wad_proto::{
     ApiError, Availability, ErrorCode, Event, JobInfo, Level, StreamInfo, StreamList, StreamRequest, StreamShare,
     StreamsAvailability,
@@ -112,15 +112,34 @@ pub fn key_secret(id: &str) -> String {
     format!("{SECRET_PREFIX}key_{id}")
 }
 
+/// Play together's other players' keys (a JSON list, slot 2 first), as a podman secret.
+pub fn players_secret(id: &str) -> String {
+    format!("{SECRET_PREFIX}players_{id}")
+}
+
 /// A public stream's password, as a podman secret.
 pub fn password_secret(id: &str) -> String {
     format!("{SECRET_PREFIX}password_{id}")
 }
 
+/// Selkies' token table: an ordinary stream's one controller, or Play
+/// together's: player 1 at the controls, and the others in their own slots.
+fn token_table(key: &str, others: &[String], players: u8) -> Value {
+    if players == 0 {
+        return json!({ key: { "role": "controller", "slot": null } });
+    }
+    let mut table = serde_json::Map::new();
+    table.insert(key.to_string(), json!({ "role": "controller", "slot": 1 }));
+    for (i, k) in others.iter().enumerate() {
+        table.insert(k.clone(), json!({ "role": "viewer", "slot": i + 2 }));
+    }
+    Value::Object(table)
+}
+
 /// Which wadspace a stream secret is of, by its name.
 fn secret_owner(name: &str) -> Option<&str> {
     let rest = name.strip_prefix(SECRET_PREFIX)?;
-    ["master_", "key_", "password_"].iter().find_map(|k| rest.strip_prefix(k))
+    ["master_", "key_", "password_", "players_"].iter().find_map(|k| rest.strip_prefix(k))
 }
 
 // ------------------------------------------------------------ secrets
@@ -439,6 +458,9 @@ struct Entry {
     /// It moved here from the screen as it ran, shown so (stopped, it moves back).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     moved_from: Option<SessionDisplay>,
+    /// Play together's players, or 0.
+    #[serde(default)]
+    players: u8,
 }
 
 /// Another machine's stream here.
@@ -769,6 +791,12 @@ impl MachineStreams {
         if self.streaming(ws).is_some() {
             return Err(already());
         }
+        if req.players != 0 {
+            let right = (2..=MAX_PLAYERS).contains(&req.players);
+            if !right || !req.mode.is_public() || req.mode.is_secure() || !wad_model::games::plays_together(&doc) {
+                return Err(conflict(PLAYS_PUBLIC));
+            }
+        }
         // After an end that's still tidying up, if there is one.
         let held = self.lock_for(ws).lock_owned().await;
         if self.streaming(ws).is_some() {
@@ -808,7 +836,11 @@ impl MachineStreams {
             return Err(conflict(format!("{} is on the screen: streaming it takes it off the screen", doc.name)));
         }
         // Off the screen as it runs, when it can (a secure one starts again in its VM).
-        let moving = shown.is_some_and(|d| d != SessionDisplay::Stream) && !req.mode.is_secure() && self.runs.moves(ws);
+        // Gamepads need its apps started with the interposer: it starts again too.
+        let moving = req.players == 0
+            && shown.is_some_and(|d| d != SessionDisplay::Stream)
+            && !req.mode.is_secure()
+            && self.runs.moves(ws);
         let (web_port, mux_port, private_port) = self.ports(req.mode)?;
         let guid = random_hex(16);
         let link = match private_port {
@@ -838,6 +870,7 @@ impl MachineStreams {
             turn_users: vec![],
             job: Some(job.clone()),
             moved_from: shown.filter(|_| moving),
+            players: req.players,
         };
         {
             let mut st = self.st.lock().unwrap();
@@ -968,6 +1001,7 @@ impl MachineStreams {
                 }),
                 false => None,
             },
+            players: e.players,
         };
         for stage in plan {
             self.jobs.stage(job, stage.as_str(), PartState::Working, None);
@@ -1004,6 +1038,7 @@ impl MachineStreams {
                     let route = Route {
                         web_port: e.web_port,
                         key: key.clone(),
+                        players: self.player_keys(id).await,
                         user: e.user.clone().unwrap_or_default(),
                         password: password.clone(),
                         name: ws.name.clone(),
@@ -1041,7 +1076,8 @@ impl MachineStreams {
     /// and the mint coming.
     async fn prepare(&self, e: &Entry) -> Result<(String, String, Option<Mint>), String> {
         let (key, password) = self.make_secrets(e).await?;
-        self.write_folder(e, &key)?;
+        let others = self.player_keys(&e.id).await;
+        self.write_folder(e, &key, &others)?;
         let mint = match e.mode.is_public() {
             true => {
                 let me = self.me.upgrade().ok_or("wadd is stopping")?;
@@ -1050,6 +1086,12 @@ impl MachineStreams {
             false => None,
         };
         Ok((key, password, mint))
+    }
+
+    /// Play together's other players' keys (none: not Play together).
+    async fn player_keys(&self, id: &str) -> Vec<String> {
+        let kept = self.backend.secret_value(&players_secret(id)).await.ok().flatten();
+        kept.and_then(|k| serde_json::from_str(&k).ok()).unwrap_or_default()
     }
 
     /// Its secrets, new: the master token, its key and (public) its password.
@@ -1063,6 +1105,10 @@ impl MachineStreams {
         };
         make(master_secret(&e.id), master).await?;
         make(key_secret(&e.id), key.clone()).await?;
+        if e.players > 1 {
+            let others: Vec<String> = (1..e.players).map(|_| random_hex(16)).collect();
+            make(players_secret(&e.id), serde_json::to_string(&others).expect("json")).await?;
+        }
         if e.mode.is_public() {
             make(password_secret(&e.id), password.clone()).await?;
         }
@@ -1071,7 +1117,7 @@ impl MachineStreams {
 
     /// The sidecar's folder: its token table, and (public) its ICE servers
     /// (STUN only until TURN answers).
-    fn write_folder(&self, e: &Entry, key: &str) -> Result<(), String> {
+    fn write_folder(&self, e: &Entry, key: &str, others: &[String]) -> Result<(), String> {
         let dir = self.folder(&e.id);
         let say = |e: std::io::Error| format!("{}: {e}", dir.display());
         // Never a link someone left there.
@@ -1084,7 +1130,7 @@ impl MachineStreams {
             nix::unistd::chown(&dir, Some(uid.into()), Some(uid.into()))
                 .map_err(|e| format!("{}: {e}", dir.display()))?;
         }
-        let tokens = serde_json::to_vec_pretty(&json!({ key: { "role": "controller", "slot": null } })).expect("json");
+        let tokens = serde_json::to_vec_pretty(&token_table(key, others, e.players)).expect("json");
         write_private(&dir.join(units::TOKENS_FILE), &tokens, self.s.owner).map_err(say)?;
         if e.mode.is_public() {
             write_private(&dir.join(units::RTC_FILE), &turn::rtc_json(&turn::stun_only()), self.s.owner)
@@ -1281,7 +1327,7 @@ impl MachineStreams {
         if e.mode.is_secure() {
             self.runs.drop_secure_volume(id).await;
         }
-        for name in [master_secret(id), key_secret(id), password_secret(id)] {
+        for name in [master_secret(id), key_secret(id), password_secret(id), players_secret(id)] {
             if let Err(err) = self.backend.delete_secret(&name).await {
                 tracing::warn!("removing {name}: {err}");
             }
@@ -1361,6 +1407,7 @@ impl MachineStreams {
         }
         let name = self.docs.wadspace(&e.id).map_or_else(|| e.id.clone(), |w| w.name);
         let route = Route {
+            players: self.player_keys(&e.id).await,
             web_port: e.web_port,
             key,
             user: e.user.clone().unwrap_or_default(),
@@ -1833,12 +1880,19 @@ impl Streams for MachineStreams {
             true => Some(read(password_secret(ws)).await?),
             false => None,
         };
+        let others = self.player_keys(ws).await;
+        let players = std::iter::once(&key)
+            .chain(&others)
+            .enumerate()
+            .map(|(i, k)| PlayerLink { slot: i as u8 + 1, open_link: format!("{}#token={k}", e.link) })
+            .collect();
         Ok(StreamShare {
             mode: e.mode,
             open_link: format!("{}#token={key}", e.link),
             link: e.link,
             user: e.user.filter(|_| e.mode.is_public()),
             password,
+            players: if e.players == 0 { vec![] } else { players },
         })
     }
 
@@ -1877,6 +1931,17 @@ mod tests {
             let n = s.matches(c).count();
             assert!((800..1200).contains(&n), "{c}: {n}");
         }
+    }
+
+    #[test]
+    fn an_ordinary_stream_has_one_controller_and_play_together_a_slot_each() {
+        let one = token_table("k1", &[], 0);
+        assert_eq!(one["k1"]["role"], "controller");
+        assert!(one["k1"]["slot"].is_null());
+        let four = token_table("k1", &["k2".into(), "k3".into(), "k4".into()], 4);
+        assert_eq!(four["k1"], json!({ "role": "controller", "slot": 1 }));
+        assert_eq!(four["k3"], json!({ "role": "viewer", "slot": 3 }));
+        assert_eq!(four["k4"]["slot"], 4);
     }
 
     #[test]

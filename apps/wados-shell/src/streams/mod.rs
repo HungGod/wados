@@ -479,7 +479,7 @@ impl Streams {
                 &format!("{why}: streaming it here goes over your tailnet."),
             );
         }
-        let req = StreamRequest { mode: StreamMode::Private, takeover: false };
+        let req = StreamRequest { mode: StreamMode::Private, takeover: false, players: 0 };
         self.asked.borrow_mut().insert(key.to_string(), req);
         let title = format!("{name} · from {from}");
         let (shell, k, p, w) = (self.shell.clone(), key.to_string(), peer.to_string(), ws.to_string());

@@ -33,6 +33,19 @@
 # images/base: s6-overlay, user abc), and Selkies and every wheel it needs by
 # version and sha256 (requirements.txt, written by lock.sh). Nothing secret
 # is in it. Build it with images/build.sh --only stream.
+# Selkies' Input Interposer and fake-udev, built from the wheel's own tag
+# (2.2.1, by the tarball's sha256): Play together's gamepads. They're preloaded
+# in the wadspace, from the display volume (init-stream-display copies them).
+FROM registry.fedoraproject.org/fedora:44 AS pads
+RUN dnf -y install --setopt=install_weak_deps=False gcc make tar gzip \
+    && curl -fsSLo /tmp/selkies.tgz https://github.com/selkies-project/selkies/archive/refs/tags/2.2.1.tar.gz \
+    && echo "f47eb3912a8030a8ea634dd257d04872c288fa13a845beef121c1438aed28412  /tmp/selkies.tgz" | sha256sum -c - \
+    && mkdir /src /out && tar xzf /tmp/selkies.tgz -C /src --strip-components=1 \
+    && make -C /src/addons/input-interposer selkies_input_interposer.so \
+    && make -C /src/addons/fake-udev \
+    && cp /src/addons/input-interposer/selkies_input_interposer.so /out/ \
+    && cp -L /src/addons/fake-udev/libudev.so.1 /out/libudev.so.1
+
 FROM ghcr.io/linuxserver/baseimage-fedora:44@sha256:f262a934dd87c6d1e959f32a9af75207c4c67f6f7a9893f28077c0f1aba34fc4
 
 LABEL maintainer="dwadsworth"
@@ -48,11 +61,9 @@ LABEL org.opencontainers.image.source="https://github.com/HungGod/wados"
 # Nothing that would land in the sidecar rather than the wadspace: no file
 # transfers, printing, webcam, apps catalog or commands, and the sidebar
 # doesn't offer them. Sharing links are WadOS's share sheet's, not Selkies'.
-# HOOK(gamepads): phase 10's Play together turns gamepads on: players' rows
-# in the tokens file (role controller, slot 2-4), SELKIES_GAMEPAD_ENABLED,
-# and the joystick interposer (Selkies' addons/input-interposer, built from
-# the same tag) preloaded in the wadspace's apps, with SELKIES_JS_SOCKET_PATH
-# on the display volume both containers share.
+# Gamepads are off but for Play together, whose unit turns them on: a row per
+# player in the tokens file, SELKIES_GAMEPAD_ENABLED, and the interposer's
+# sockets in the display volume both containers share.
 ENV LSIO_FIRST_PARTY=false \
     HOME="/config" \
     LANG="en_US.UTF-8" \
@@ -140,6 +151,7 @@ RUN \
   /opt/selkies/bin/selkies --help > /dev/null && \
   rm -rf /tmp/* /config/.cache
 
+COPY --from=pads /out/ /usr/lib/wados-pads/
 COPY root/ /
 RUN chmod +x /etc/s6-overlay/s6-rc.d/*/run
 

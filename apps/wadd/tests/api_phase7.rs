@@ -145,7 +145,8 @@ async fn a_stream_starts_as_a_job_goes_live_and_stops() {
     let w = &up.w;
     let id = create(w, "Studio").await;
     let (follow, mut rx) = follow(w).await;
-    let job = w.start_stream(&id, &StreamRequest { mode: StreamMode::Private, takeover: false }).await.unwrap();
+    let job =
+        w.start_stream(&id, &StreamRequest { mode: StreamMode::Private, takeover: false, players: 0 }).await.unwrap();
     assert_eq!((job.job.kind, job.job.subject.as_deref()), (JobKind::Stream, Some(id.as_str())));
     let labels: Vec<&str> = job.job.stages.iter().map(|s| s.label.as_str()).collect();
     assert_eq!(labels, ["Starting its container", "Starting the Selkies sidecar", "Serving it on your tailnet"]);
@@ -156,7 +157,7 @@ async fn a_stream_starts_as_a_job_goes_live_and_stops() {
     assert_eq!((s.transport, s.job.as_deref()), (Transport::Websocket, Some(job.job.id.as_str())));
 
     // One stream each: stop it first.
-    let again = StreamRequest { mode: StreamMode::Public, takeover: false };
+    let again = StreamRequest { mode: StreamMode::Public, takeover: false, players: 0 };
     assert_eq!(w.start_stream(&id, &again).await.unwrap_err().status, 409);
     // Stopped: ended, then gone.
     let stopped = w.stop_stream(&id).await.unwrap();
@@ -201,15 +202,25 @@ async fn what_cant_start_says_why() {
     let up = sample().await;
     let w = &up.w;
     let id = create(w, "Studio").await;
-    let e = w.start_stream(&id, &StreamRequest { mode: StreamMode::PublicSecure, takeover: false }).await.unwrap_err();
+    let e = w
+        .start_stream(&id, &StreamRequest { mode: StreamMode::PublicSecure, takeover: false, players: 0 })
+        .await
+        .unwrap_err();
     assert_eq!((e.status, e.message.as_str()), (409, SECURE_PUBLIC_LATER));
-    let e = w.start_stream("nope", &StreamRequest { mode: StreamMode::Private, takeover: false }).await.unwrap_err();
+    let e = w
+        .start_stream("nope", &StreamRequest { mode: StreamMode::Private, takeover: false, players: 0 })
+        .await
+        .unwrap_err();
     assert_eq!(e.status, 404);
     // Streaming already (the sample's public one).
-    let e = w.start_stream(STARTER, &StreamRequest { mode: StreamMode::Public, takeover: true }).await.unwrap_err();
+    let e = w
+        .start_stream(STARTER, &StreamRequest { mode: StreamMode::Public, takeover: true, players: 0 })
+        .await
+        .unwrap_err();
     assert_eq!(e.status, 409, "{}", e.message);
     // A stream still starting, stopped: its job stops too, and it's gone.
-    let job = w.start_stream(&id, &StreamRequest { mode: StreamMode::Public, takeover: false }).await.unwrap();
+    let job =
+        w.start_stream(&id, &StreamRequest { mode: StreamMode::Public, takeover: false, players: 0 }).await.unwrap();
     w.stop_stream(&id).await.unwrap();
     let j = ended(w, &job).await;
     assert!(matches!(j.job.status, JobStatus::Cancelled | JobStatus::Done), "{:?}", j.job.status);
@@ -251,7 +262,7 @@ async fn the_machines_streams_say_what_can_start() {
     assert_eq!(l.available.private.reason.as_deref(), Some(PRIVATE_NEEDS_TAILNET));
     assert_eq!(l.available.public.reason.as_deref(), Some(PUBLIC_NEEDS_TUNNEL));
     assert_eq!(l.available.public_secure.reason.as_deref(), Some(SECURE_PUBLIC_LATER));
-    let req = StreamRequest { mode: StreamMode::Private, takeover: false };
+    let req = StreamRequest { mode: StreamMode::Private, takeover: false, players: 0 };
     let e = w.start_stream(STARTER, &req).await.unwrap_err();
     assert_eq!((e.status, e.message.as_str()), (409, PRIVATE_NEEDS_TAILNET));
     assert_eq!(w.start_stream("nope", &req).await.unwrap_err().status, 404);
@@ -265,7 +276,7 @@ async fn the_machines_streams_say_what_can_start() {
 async fn the_sample_streams_from_its_peer() {
     let up = sample().await;
     let w = &up.w;
-    let req = StreamRequest { mode: StreamMode::Private, takeover: false };
+    let req = StreamRequest { mode: StreamMode::Private, takeover: false, players: 0 };
     let share = w.start_peer_stream("m-desk", "music", &req).await.unwrap();
     assert!(share.open_link.contains("#token=") && share.link.contains(".invalid"), "{share:?}");
     let s = w.streams().await.unwrap().streams.into_iter().find(|s| s.id == "music").expect("listed");

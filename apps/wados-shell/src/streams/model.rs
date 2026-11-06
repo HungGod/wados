@@ -286,6 +286,15 @@ pub fn share_fields(share: &StreamShare) -> Vec<Field> {
         let pass = share.password.clone().unwrap_or_default();
         out.push(Field { id: "password", label: "Password", shown: pass.clone(), copied: pass, secret: true });
     }
+    // Play together: a link per player, each signed in by that player's key.
+    const IDS: [(&str, &str); 4] =
+        [("player-1", "Player 1"), ("player-2", "Player 2"), ("player-3", "Player 3"), ("player-4", "Player 4")];
+    for p in &share.players {
+        if let Some((id, label)) = IDS.get(usize::from(p.slot).wrapping_sub(1)) {
+            let link = p.open_link.clone();
+            out.push(Field { id, label, shown: link.clone(), copied: link, secret: true });
+        }
+    }
     out
 }
 
@@ -557,6 +566,7 @@ mod tests {
             link: "https://sample-host.invalid/ws-sample-w/".into(),
             user: Some("sample-viewer".into()),
             password: Some("sample-password-not-a-secret".into()),
+            players: vec![],
         };
         let f = share_fields(&public);
         let names: Vec<&str> = f.iter().map(|x| x.label).collect();
@@ -574,6 +584,7 @@ mod tests {
             link: "https://desk.sample-tailnet.invalid:48300/ws-sample-notes/".into(),
             user: None,
             password: None,
+            players: vec![],
         };
         let f = share_fields(&private);
         assert_eq!(f.len(), 1);

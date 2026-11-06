@@ -59,6 +59,7 @@ fn main() {
         transport,
         dir: &auth,
         origin: None,
+        players: 0,
     };
     let stream = (!opts.contains_key("no-stream")).then_some(&sidecar);
     let mounts = Mounts::new();

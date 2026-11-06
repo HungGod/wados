@@ -95,6 +95,8 @@ pub struct StreamUnit {
     pub origin: Option<String>,
     /// A secure stream's VM; none: the wadspace beside its sidecar.
     pub vm: Option<SecureVm>,
+    /// Play together's players, or 0.
+    pub players: u8,
 }
 
 /// A secure stream's VM: its runtime and size (`wad_gen::units::Vm`).
@@ -115,6 +117,7 @@ impl StreamUnit {
             transport: self.transport,
             dir: &self.dir,
             origin: self.origin.as_deref(),
+            players: self.players,
         }
     }
 }

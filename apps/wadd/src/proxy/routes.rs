@@ -50,6 +50,9 @@ pub struct Route {
     /// the one-tap link's `#token=`, and the `selkies_token` cookie the
     /// sign-in sets. URL- and cookie-safe: `[A-Za-z0-9_-]`, 16 or more.
     pub key: String,
+    /// Play together's other players' keys: each signs in as itself, and
+    /// Selkies knows its slot by it.
+    pub players: Vec<String>,
     /// A public stream's sign-in, as the share sheet shows it (compared in
     /// constant time). Empty for a private one: it has no sign-in card.
     pub user: String,
@@ -329,6 +332,7 @@ mod tests {
         Route {
             web_port: 9,
             key: "k".repeat(32),
+            players: vec![],
             user: "viewer".into(),
             password: "pw".into(),
             name: "Studio".into(),

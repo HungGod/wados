@@ -356,5 +356,6 @@ fn share_of(s: &StreamInfo) -> StreamShare {
         link: s.link.clone(),
         user: public.then(|| USER.into()),
         password: public.then(|| PASSWORD.into()),
+        players: vec![],
     }
 }

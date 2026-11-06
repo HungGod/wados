@@ -100,6 +100,7 @@ fn public(web_port: u16) -> Route {
     Route {
         web_port,
         key: KEY.into(),
+        players: vec![],
         user: USER.into(),
         password: PASSWORD.into(),
         name: "Studio".into(),

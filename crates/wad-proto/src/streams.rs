@@ -37,6 +37,10 @@ pub use wad_model::{StreamMode, StreamStage, Transport};
 
 /// Why a mode can't start, as the person reads it (the button's tooltip).
 pub const PRIVATE_NEEDS_TAILNET: &str = "Join your tailnet first: private streams only open on it";
+/// Why a stream can't be Play together's (the spike's).
+pub const PLAYS_PUBLIC: &str = "Only a gamespace’s public stream can be multiplayer (Dolphin or Steam)";
+pub const MAX_PLAYERS: u8 = 4;
+
 pub const PUBLIC_NEEDS_TUNNEL: &str =
     "Public streams need this machine's Cloudflare tunnel, which the installer stick sets up";
 pub const SECURE_NEEDS_VM: &str = "Secure streams need a VM runtime this machine doesn't have";
@@ -103,6 +107,9 @@ pub struct StreamShare {
     pub user: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub password: Option<String>,
+    /// Play together's links, player 1 first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub players: Vec<PlayerLink>,
 }
 
 // Never the key (the one-tap link) nor the password in a log line.
@@ -125,6 +132,30 @@ pub struct StreamRequest {
     /// stream it, as the person confirmed. Without it, that's a conflict (409).
     #[serde(default)]
     pub takeover: bool,
+    /// Play together: 2 to 4 players, each with a link of their own and a
+    /// gamepad. 0: an ordinary stream. Only a public stream of a wadspace
+    /// with Dolphin or Steam.
+    #[serde(default, skip_serializing_if = "no_players")]
+    pub players: u8,
+}
+
+fn no_players(n: &u8) -> bool {
+    *n == 0
+}
+
+/// A player's link: who opens it plays as that player.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayerLink {
+    pub slot: u8,
+    /// Signed in by that player's own key.
+    pub open_link: String,
+}
+
+impl fmt::Debug for PlayerLink {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PlayerLink").field("slot", &self.slot).finish_non_exhaustive()
+    }
 }
 
 /// Whether one mode can start on this machine.
@@ -280,6 +311,7 @@ mod tests {
             link: "https://h.example/ws-0123/".into(),
             user: Some("viewer".into()),
             password: Some("PASSWORD-not-for-logs".into()),
+            players: vec![],
         };
         let debug = format!("{s:?}");
         assert!(!debug.contains("KEY-not-for-logs") && !debug.contains("PASSWORD-not-for-logs"), "{debug}");
@@ -298,7 +330,7 @@ mod tests {
     #[test]
     fn a_request_takes_it_off_the_screen_only_when_asked() {
         let r: StreamRequest = serde_json::from_value(json!({"mode": "private"})).unwrap();
-        assert_eq!(r, StreamRequest { mode: StreamMode::Private, takeover: false });
+        assert_eq!(r, StreamRequest { mode: StreamMode::Private, takeover: false, players: 0 });
         assert!(serde_json::from_value::<StreamRequest>(json!({"takeover": true})).is_err(), "a mode is needed");
     }
 

@@ -321,6 +321,7 @@ fn public(guid: &str) -> Sidecar<'_> {
         transport: Transport::WebRtc { mux_port: 48201 },
         dir: "/var/lib/wados/streams/retro",
         origin: Some("https://m1.wadspaces.com"),
+        players: 0,
     }
 }
 

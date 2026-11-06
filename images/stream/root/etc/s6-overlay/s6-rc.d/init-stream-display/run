@@ -30,6 +30,12 @@ rm -f "${DIR}"/wayland-* "${DIR}/pulse/native" "${DIR}/pulse/pid"
 mkdir -p "${DIR}/pulse"
 chown abc:abc "${DIR}" "${DIR}/pulse"
 chmod 700 "${DIR}" "${DIR}/pulse"
+# Play together's gamepads: what the wadspace preloads, from here.
+rm -rf "${DIR}/interposer"
+if [[ "${SELKIES_GAMEPAD_ENABLED:-false}" == true ]]; then
+    install -d -o abc -g abc -m 0755 "${DIR}/interposer"
+    install -o abc -g abc -m 0755 /usr/lib/wados-pads/* "${DIR}/interposer/"
+fi
 printf '%s' "${DIR}" > /run/s6/container_environment/XDG_RUNTIME_DIR
 printf '%s' "unix:${DIR}/pulse/native" > /run/s6/container_environment/PULSE_SERVER
 echo "[stream-display] the display and its sound go in ${DIR}; served under ${SELKIES_SUBFOLDER}/"

@@ -69,6 +69,8 @@ pub const SANDBOX_ENGINE: &str = "io.wadspaces";
 pub const STREAM_PORT: u16 = 3000;
 /// Where the sidecar sees wadd's folder for its stream ([`Sidecar::dir`]), read-only.
 pub const SELKIES_DIR: &str = "/run/wadspaces-selkies";
+/// In the display volume: Selkies' Input Interposer and fake-udev (Play together).
+pub const INTERPOSER_DIR: &str = "interposer";
 /// Selkies' token table in it (`SELKIES_TOKENS_FILE`): who may watch.
 pub const TOKENS_FILE: &str = "tokens.json";
 /// The WebRTC ICE servers in it (`SELKIES_RTC_CONFIG_JSON`): a public stream's.
@@ -222,6 +224,8 @@ pub struct Sidecar<'a> {
     /// streaming socket even if what's in front of wadd's proxy rewrites
     /// Host. None: only a page whose origin matches the request's Host.
     pub origin: Option<&'a str>,
+    /// Play together's players, or 0: gamepads are on with 2 to 4.
+    pub players: u8,
 }
 
 /// The SELinux categories a wadspace's containers share: its own and its
@@ -300,7 +304,7 @@ pub fn units(ws: &Wadspace, run: &Run, m: &Machine, stream: Option<&Sidecar>) ->
     let Some(s) = stream else { return vec![(file, wadspace_unit(ws, run, m, Draws::Screen))] };
     let display = display_name(&ws.id);
     vec![
-        (file, wadspace_unit(ws, run, m, Draws::Stream(&display))),
+        (file, with_pads(wadspace_unit(ws, run, m, Draws::Stream(&display)), s.players)),
         (format!("{display}.container"), sidecar_unit(ws, m, s, true)),
         (format!("{display}.volume"), display_volume(&display)),
     ]
@@ -332,8 +336,8 @@ pub fn moving_units(ws: &Wadspace, run: &Run, m: &Machine, stream: Option<&Sidec
         return units(ws, run, m, stream);
     }
     let display = display_name(&ws.id);
-    let mut out =
-        vec![(format!("{}.container", container_name(&ws.id)), wadspace_unit(ws, run, m, Draws::Moves(&display)))];
+    let unit = with_pads(wadspace_unit(ws, run, m, Draws::Moves(&display)), stream.map_or(0, |s| s.players));
+    let mut out = vec![(format!("{}.container", container_name(&ws.id)), unit)];
     if let Some(s) = stream {
         out.push((format!("{display}.container"), sidecar_unit(ws, m, s, false)));
     }
@@ -353,6 +357,47 @@ enum Draws<'a> {
 }
 
 /// The wadspace's unit.
+/// Play together: the wadspace's apps get the sidecar's four pads. Selkies'
+/// Input Interposer and fake-udev are preloaded from the display volume (the
+/// sidecar puts them there), and their sockets are beside them. There's no
+/// kernel device, so `/dev/input` only has to exist. Environment lines stay
+/// in the `[Container]` section, whose end this finds.
+fn with_pads(unit: String, players: u8) -> String {
+    if players == 0 {
+        return unit;
+    }
+    let dir = format!("{STREAM_DIR}/{INTERPOSER_DIR}");
+    let lines = [
+        env_line("SELKIES_JS_SOCKET_PATH", STREAM_DIR),
+        env_line("SELKIES_INTERPOSER", &format!("{dir}/selkies_input_interposer.so")),
+        env_line("LD_PRELOAD", &format!("{dir}/selkies_input_interposer.so:{dir}/libudev.so.1")),
+        env_line(
+            "SDL_JOYSTICK_DEVICE",
+            "/dev/input/event1000:/dev/input/event1001:/dev/input/event1002:/dev/input/event1003",
+        ),
+        "Tmpfs=/dev/input:rw,mode=1777".to_string(),
+    ];
+    let at = unit.find("\n[Service]").or_else(|| unit.find("\n[Install]")).unwrap_or(unit.len());
+    let (head, tail) = unit.split_at(at);
+    format!("{}\n{}\n{tail}", head.trim_end(), lines.join("\n"))
+}
+
+#[cfg(test)]
+mod pad_tests {
+    use super::with_pads;
+
+    #[test]
+    fn only_play_together_preloads_the_interposer() {
+        let unit = "[Container]\nImage=x\n\n[Service]\nRestart=no\n".to_string();
+        assert_eq!(with_pads(unit.clone(), 0), unit);
+        let pads = with_pads(unit, 4);
+        let (container, service) = pads.split_once("[Service]").unwrap();
+        assert!(container.contains("selkies_input_interposer.so:/run/wadspaces-stream/interposer/libudev.so.1"));
+        assert!(container.contains("Tmpfs=/dev/input:rw,mode=1777"));
+        assert!(!service.contains("LD_PRELOAD"));
+    }
+}
+
 fn wadspace_unit(ws: &Wadspace, run: &Run, m: &Machine, draws: Draws) -> String {
     let id = &ws.id;
     let mut lines: Vec<String> = vec![
@@ -575,6 +620,10 @@ fn selkies_env(ws: &Wadspace, s: &Sidecar, software: bool) -> BTreeMap<&'static 
     env.insert("SELKIES_SUBFOLDER", stream_path(s.guid));
     env.insert("SELKIES_PORT", STREAM_PORT.to_string());
     env.insert("SELKIES_TOKENS_FILE", format!("{SELKIES_DIR}/{TOKENS_FILE}"));
+    if s.players > 0 {
+        env.insert("SELKIES_GAMEPAD_ENABLED", "true".into());
+        env.insert("SELKIES_UINPUT_GAMEPAD", "false".into());
+    }
     if let Some(origin) = s.origin {
         env.insert("SELKIES_ALLOWED_ORIGINS", origin.into());
     }

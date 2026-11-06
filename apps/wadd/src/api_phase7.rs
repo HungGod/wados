@@ -100,7 +100,7 @@ pub async fn open(app: &AppState, id: &str, display: SessionDisplay) -> Result<W
         return app.runs.open(id, display);
     }
     app.focus.check_stream(id)?;
-    app.streams.start(id, StreamRequest { mode: StreamMode::Private, takeover: false }).await?;
+    app.streams.start(id, StreamRequest { mode: StreamMode::Private, takeover: false, players: 0 }).await?;
     Ok(app.runs.state(id))
 }
 

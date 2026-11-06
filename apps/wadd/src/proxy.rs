@@ -209,12 +209,12 @@ async fn handle(
         return Ok(sign_in(req, &entry).await);
     }
     if OPEN.contains(&rest) {
-        return Ok(forward_or_502(&table, req, &entry, false).await);
+        return Ok(forward_or_502(&table, req, &entry, false, entry.route.key.clone()).await);
     }
-    if signed_in(req.headers(), req.uri().query(), &entry.route.key) {
+    if let Some(key) = signed_in_as(req.headers(), req.uri().query(), &entry.route) {
         entry.seen.touch();
         let signalling = SIGNALLING.contains(&rest);
-        return Ok(forward_or_502(&table, req, &entry, signalling).await);
+        return Ok(forward_or_502(&table, req, &entry, signalling, key).await);
     }
     if rest == "/" && matches!(*req.method(), Method::GET | Method::HEAD) && navigation(req.headers()) {
         let host = host_of(req.headers());
@@ -225,6 +225,14 @@ async fn handle(
 
 fn card<'a>(e: &'a Entry, host: &'a str, user: &'a str, error: Option<&'a str>) -> pages::Card<'a> {
     pages::Card { guid: &e.guid, name: &e.route.name, host, mode: e.route.mode, user, error }
+}
+
+/// Which of the stream's keys the request carries, if one: each is compared.
+fn signed_in_as(h: &HeaderMap, query: Option<&str>, route: &Route) -> Option<String> {
+    std::iter::once(&route.key).chain(&route.players).fold(None, |found, key| {
+        let right = signed_in(h, query, key);
+        if right && found.is_none() { Some(key.clone()) } else { found }
+    })
 }
 
 /// The request carries the stream's key: its cookie, `?token=`, a Bearer
@@ -297,12 +305,13 @@ async fn sign_in(req: Request<Incoming>, e: &Entry) -> Response<Body> {
     let fields = form(&String::from_utf8_lossy(&body.to_bytes()));
     let field = |k: &str| fields.iter().find(|(name, _)| name == k).map(|(_, v)| v.as_str());
     if let Some(token) = field("token") {
-        if !same_secret(token, &e.route.key) {
+        let key = std::iter::once(&e.route.key).chain(&e.route.players).find(|k| same_secret(token, k)).cloned();
+        let Some(key) = key else {
             return text(StatusCode::FORBIDDEN, "That link's key doesn't open this stream.\n");
-        }
+        };
         e.seen.touch();
         let mut r = text(StatusCode::NO_CONTENT, "");
-        set_cookie(r.headers_mut(), e);
+        set_cookie(r.headers_mut(), e, &key);
         return r;
     }
     let (user, password) = (field("user").unwrap_or_default().trim(), field("password").unwrap_or_default());
@@ -328,11 +337,9 @@ async fn sign_in(req: Request<Incoming>, e: &Entry) -> Response<Body> {
     redirect(StatusCode::SEE_OTHER, &format!("/ws-{}/", e.guid), Some(e))
 }
 
-fn set_cookie(h: &mut HeaderMap, e: &Entry) {
-    let cookie = format!(
-        "{COOKIE}={}; Path=/ws-{}/; Max-Age={COOKIE_MAX_AGE_S}; HttpOnly; Secure; SameSite=Lax",
-        e.route.key, e.guid
-    );
+fn set_cookie(h: &mut HeaderMap, e: &Entry, key: &str) {
+    let cookie =
+        format!("{COOKIE}={key}; Path=/ws-{}/; Max-Age={COOKIE_MAX_AGE_S}; HttpOnly; Secure; SameSite=Lax", e.guid);
     if let Ok(v) = HeaderValue::from_str(&cookie) {
         h.insert(header::SET_COOKIE, v);
     }
@@ -344,7 +351,7 @@ fn redirect(status: StatusCode, to: &str, cookie: Option<&Entry>) -> Response<Bo
         r.headers_mut().insert(header::LOCATION, v);
     }
     if let Some(e) = cookie {
-        set_cookie(r.headers_mut(), e);
+        set_cookie(r.headers_mut(), e, &e.route.key);
     }
     r
 }
@@ -354,10 +361,11 @@ async fn forward_or_502(
     req: Request<Incoming>,
     e: &Entry,
     signalling: bool,
+    key: String,
 ) -> Response<Body> {
     let page = navigation(req.headers())
         && req.headers().get(header::ACCEPT).and_then(|v| v.to_str().ok()).is_some_and(|a| a.contains("text/html"));
-    match forward(table, req, e, signalling).await {
+    match forward(table, req, e, signalling, key).await {
         Ok(r) => r,
         Err(why) => {
             tracing::debug!("stream {}: its sidecar: {why}", e.guid);
@@ -374,18 +382,19 @@ async fn forward(
     mut req: Request<Incoming>,
     e: &Entry,
     signalling: bool,
+    key: String,
 ) -> Result<Response<Body>, String> {
     let upgrade = wants_upgrade(req.headers()).then(|| hyper::upgrade::on(&mut req));
     let (mut parts, body) = req.into_parts();
     strip_hop_by_hop(&mut parts.headers, upgrade.is_some());
     let mut pq = parts.uri.path_and_query().map(|p| p.as_str()).unwrap_or("/").to_string();
     if upgrade.is_some() && !own_key(&parts.headers, parts.uri.query()) {
-        pq = with_key(&pq, &e.route.key);
+        pq = with_key(&pq, &key);
     }
     let hello = (upgrade.is_some() && signalling).then(|| {
         // No permessage-deflate: the HELLO goes plain, to be read.
         parts.headers.remove(header::SEC_WEBSOCKET_EXTENSIONS);
-        e.route.key.clone()
+        key.clone()
     });
     parts.uri = pq.parse().map_err(|e: hyper::http::uri::InvalidUri| e.to_string())?;
     let tcp = tokio::time::timeout(CONNECT, TcpStream::connect(("127.0.0.1", e.route.web_port)))

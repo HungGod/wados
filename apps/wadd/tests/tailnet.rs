@@ -519,7 +519,7 @@ async fn a_wadspace_streams_from_another_machine_of_mine() {
     .await;
 
     // From the laptop: the desk streams it privately, and the laptop has its share.
-    let req = StreamRequest { mode: StreamMode::Private, takeover: false };
+    let req = StreamRequest { mode: StreamMode::Private, takeover: false, players: 0 };
     let share = laptop.w.start_peer_stream("m-desk", &id, &req).await.unwrap();
     assert_eq!((share.mode, share.user.as_deref(), share.password.as_deref()), (StreamMode::Private, None, None));
     assert!(share.link.starts_with("https://desk.ts.test:") && share.link.contains("/ws-"), "{}", share.link);

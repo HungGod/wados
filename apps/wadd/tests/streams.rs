@@ -179,7 +179,7 @@ async fn up(o: Opts) -> T {
 }
 
 fn req(mode: StreamMode) -> StreamRequest {
-    StreamRequest { mode, takeover: false }
+    StreamRequest { mode, takeover: false, players: 0 }
 }
 
 impl T {
@@ -547,7 +547,7 @@ async fn streaming_what_is_on_the_screen_takes_it_off_when_confirmed() {
     assert_eq!(e.code, ErrorCode::Conflict);
     assert!(e.message.contains("takes it off the screen"), "{}", e.message);
     assert!(t.info(&id).await.is_none());
-    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true }).await.unwrap();
+    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true, players: 0 }).await.unwrap();
     assert_eq!(t.rig.finished(&job.job.id).await, JobStatus::Done, "{:?}", t.rig.jobs.info(&job.job.id));
     let calls = t.rig.fake.calls();
     let stop = calls.iter().position(|c| *c == format!("stop wad-{id}.service")).expect("stopped on the screen");
@@ -740,7 +740,7 @@ async fn a_moving_wadspace_goes_to_its_stream_and_back_as_it_runs() {
     assert_eq!(read(&extra.join("display")), "screen\n");
 
     // Streamed, as confirmed: no container stage, and it isn't started again.
-    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true }).await.unwrap();
+    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true, players: 0 }).await.unwrap();
     let ids: Vec<&str> = job.job.stages.iter().map(|s| s.id.as_str()).collect();
     assert_eq!(ids, ["sidecar", "serve"]);
     assert_eq!(t.rig.finished(&job.job.id).await, JobStatus::Done, "{:?}", t.rig.jobs.info(&job.job.id));
@@ -788,7 +788,7 @@ async fn apps_that_wont_close_keep_it_on_the_screen() {
         3,
         r#"{"still_open": [{"app_id": "gedit", "title": "Notes.txt"}]}"#.into(),
     )];
-    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true }).await.unwrap();
+    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true, players: 0 }).await.unwrap();
     assert_eq!(t.rig.finished(&job.job.id).await, JobStatus::Error);
     let err = t.rig.jobs.info(&job.job.id).unwrap().job.error.unwrap();
     assert!(err.contains("Notes.txt didn't close"), "{err}");
@@ -1019,7 +1019,7 @@ async fn stopping_a_stream_that_moved_puts_it_back_on_the_screen() {
     let id = t.wadspace("Studio");
     t.rig.runs.open(&id, SessionDisplay::Window).unwrap();
     t.rig.runs.settled(&id).await;
-    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true }).await.unwrap();
+    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true, players: 0 }).await.unwrap();
     assert_eq!(t.rig.finished(&job.job.id).await, JobStatus::Done);
     assert_eq!(t.rig.runs.state(&id).display, Some(SessionDisplay::Stream));
     // Stopped (the shell's DELETE): back in its window as it runs, never stopped.
@@ -1045,7 +1045,7 @@ async fn after_a_restart_a_stream_that_moved_still_goes_back_on_the_screen() {
     let starts = |t: &T| t.rig.fake.calls().iter().filter(|c| **c == format!("start wad-{id}.service")).count();
     t.rig.runs.open(&id, SessionDisplay::Window).unwrap();
     t.rig.runs.settled(&id).await;
-    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true }).await.unwrap();
+    let job = t.s.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true, players: 0 }).await.unwrap();
     assert_eq!(t.rig.finished(&job.job.id).await, JobStatus::Done);
     assert_eq!(switches(&t), 1);
 
@@ -1071,7 +1071,7 @@ async fn after_a_restart_a_stream_that_moved_still_goes_back_on_the_screen() {
 
     // Again, but adopted before runs takes it on, and its apps won't close
     // to move back: it stops, as before.
-    let job = again.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true }).await.unwrap();
+    let job = again.start(&id, StreamRequest { mode: StreamMode::Private, takeover: true, players: 0 }).await.unwrap();
     assert_eq!(t.rig.finished(&job.job.id).await, JobStatus::Done);
     let runs = runs_again(&t.rig);
     let (third, routes) = streams_with(&t.rig, runs.clone(), &t.o, &t.cli, t.tailnet.clone());

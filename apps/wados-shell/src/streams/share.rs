@@ -143,7 +143,8 @@ impl ShareSheet {
             move |wadd| async move {
                 match peer {
                     Some((p, ws)) => {
-                        wadd.start_peer_stream(&p, &ws, &wad_proto::StreamRequest { mode, takeover: false }).await
+                        wadd.start_peer_stream(&p, &ws, &wad_proto::StreamRequest { mode, takeover: false, players: 0 })
+                            .await
                     }
                     None => wadd.stream_share(&id).await,
                 }
@@ -414,6 +415,10 @@ fn copy_name(id: &str) -> &'static str {
     match id {
         "link" => "copy-link",
         "user" => "copy-user",
+        "player-1" => "copy-player-1",
+        "player-2" => "copy-player-2",
+        "player-3" => "copy-player-3",
+        "player-4" => "copy-player-4",
         _ => "copy-password",
     }
 }

@@ -36,6 +36,8 @@ struct St {
     error: Option<String>,
     /// Its start on its way to wadd.
     busy: bool,
+    /// Play together: how many players, or 0.
+    players: u8,
 }
 
 pub struct StreamSheet {
@@ -223,7 +225,7 @@ impl StreamSheet {
             self.with(|s| s.confirming = true);
             return self.draw();
         }
-        self.start(StreamRequest { mode, takeover: on_screen || st.confirming });
+        self.start(StreamRequest { mode, takeover: on_screen || st.confirming, players: st.players });
     }
 
     fn start(&self, req: StreamRequest) {
@@ -266,10 +268,36 @@ impl StreamSheet {
             s.job = None;
             s.error = None;
         });
-        self.start(StreamRequest { mode: Self::mode(&st), takeover: st.confirming || self.on_screen(&st.ws) });
+        self.start(StreamRequest {
+            mode: Self::mode(&st),
+            takeover: st.confirming || self.on_screen(&st.ws),
+            players: st.players,
+        });
     }
 
     // ------------------------------------------------------------ drawing
+
+    /// Play together: nobody, or 2 to 4 players, each with a link of their own.
+    fn players_row(&self, st: &St) -> gtk::Box {
+        let row = gtk::Box::builder().spacing(6).build();
+        let label = kit::label("Play together", &["st-what"]);
+        label.set_hexpand(true);
+        label.set_tooltip_text(Some("A link per player: their controller is the game’s, for their player"));
+        row.append(&label);
+        for (n, word) in [(0u8, "Off"), (2, "2"), (3, "3"), (4, "4")] {
+            let v = if st.players == n { Variant::Primary } else { Variant::Quiet };
+            let b = kit::button(word, v, None, true);
+            let w = self.me.clone();
+            b.connect_clicked(move |_| {
+                if let Some(m) = w.upgrade() {
+                    m.with(|s| s.players = n);
+                    m.draw();
+                }
+            });
+            row.append(&b);
+        }
+        row
+    }
 
     fn draw(&self) {
         let (Some(st), Some(f)) = (self.st.borrow().clone(), self.frame.borrow().clone()) else { return };
@@ -291,6 +319,10 @@ impl StreamSheet {
             f.body.append(&kit::label(model::what_text(st.public), &["st-what"]));
             if model::secure_shown(avail.as_ref()) {
                 f.body.append(&self.secure_row(&st, avail.as_ref()));
+            }
+            let games = store.wadspace(&st.ws).is_some_and(|w| wad_model::games::plays_together(&w));
+            if games && st.public && !st.secure {
+                f.body.append(&self.players_row(&st));
             }
             if let Some(w) = &why {
                 f.body.append(&note("circle-alert", w, "blocked"));
