@@ -39,6 +39,10 @@ pub fn run(shell: &Rc<Shell>, verb: &str, args: &[String]) {
             }
             crate::peers::open_app(shell, &argv);
         }
+        "app.open" if matches!(first, "agents" | "sandbox") => {
+            let id = args.get(1).map(String::as_str).unwrap_or_default();
+            crate::peers::open_app(shell, &["wados-agents", "--open", id]);
+        }
         "app.open" => {
             let argv = app_argv(first);
             if argv.is_empty() {

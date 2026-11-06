@@ -87,6 +87,7 @@
 //!   desktop entries. Whether a wadspace is this machine's to edit is the
 //!   caller's to decide (the spike doesn't check either).
 
+pub mod agents;
 pub mod catalog;
 pub mod check;
 pub mod chips;

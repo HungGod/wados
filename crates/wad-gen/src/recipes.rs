@@ -124,13 +124,13 @@ pub static TOOLS: [(&str, Recipe); 9] = [
     // wrappers on PATH: v1's script as it was (it needs a C toolchain).
     ("rust", feature("rust", &["cpp"], "rustc --version")),
     ("android", Recipe::Todo("Java, Gradle, adb and the Android SDK's command-line tools, as v1's feature")),
-    ("claude-code", Recipe::Todo("npm's @anthropic-ai/claude-code, as v1's feature (needs nodejs)")),
+    ("claude-code", feature("claude-code", &["nodejs"], "claude --version")),
     ("hplip", Recipe::Todo("Fedora's hplip and cups-client (a feature)")),
 ];
 
 /// Features in the order they stack: what others need first, the big,
 /// common ones low. (Each one once: a test checks.)
-pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "dolphin", "steam", "vscode"];
+pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "claude-code", "dolphin", "steam", "vscode"];
 
 /// An app's recipe (every app has one, if only a `Todo`).
 pub fn app(id: AppId) -> &'static Recipe {
@@ -195,7 +195,7 @@ mod tests {
             .filter(|t| !matches!(tool(&t.id), Some(Recipe::Feature(_) | Recipe::Rpm(_))))
             .map(|t| t.id.as_str())
             .collect();
-        assert_eq!(tools, ["firebase", "gcloud", "android", "claude-code", "hplip"]);
+        assert_eq!(tools, ["firebase", "gcloud", "android", "hplip"]);
         // Every VS Code extension the catalog offers is a package.
         for e in wad_model::catalog::extensions() {
             assert!(crate::packages::of_extension(&e.id).is_some(), "{}", e.id);

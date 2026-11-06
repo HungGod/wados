@@ -121,7 +121,7 @@ build_bins() {
     podman build -q -t "${BUILDER}" "${HERE}/builder" > /dev/null
     mkdir -p "${BUILD}/cargo/registry" "${BUILD}/cargo/git" "${BUILD}/target"
     rm -rf "${BUILD}/bin" "${BUILD}/debug" "${BUILD}/share" && mkdir -p "${BUILD}/bin" "${BUILD}/debug"
-    log "building wadd, wados-shell, wadsctl, wadspaces-clipboard, wadbrowser, wados-settings, wados-files and wados-installer (cargo -j${JOBS}, in the builder)"
+    log "building wadd, wados-shell, wadsctl, wadspaces-clipboard, wadbrowser, wados-settings, wados-files, wados-installer and wados-agents (cargo -j${JOBS}, in the builder)"
     podman run --rm --security-opt label=disable \
         -v "${ROOT}:/src:ro" \
         --tmpfs /src/host/secrets:notmpcopyup \
@@ -132,8 +132,8 @@ build_bins() {
         -w /src "${BUILDER}" \
         bash -c 'set -eo pipefail
             cargo build --release --locked -j "$0" -p wadd -p wados-shell -p wadsctl -p wad-clip -p wadbrowser \
-                -p wados-settings -p wados-files -p wados-installer
-            for b in wadd wados-shell wadsctl wadspaces-clipboard wadbrowser wados-settings wados-files wados-installer; do
+                -p wados-settings -p wados-files -p wados-installer -p wados-agents
+            for b in wadd wados-shell wadsctl wadspaces-clipboard wadbrowser wados-settings wados-files wados-installer wados-agents; do
                 objcopy --only-keep-debug "/target/release/${b}" "/debug/${b}.debug"
                 install -s -m 755 "/target/release/${b}" "/out/${b}"
             done' "${JOBS}"
@@ -141,7 +141,7 @@ build_bins() {
     local data="${ROOT}/apps/wadbrowser/data"
     install -Dm644 "${data}/io.wados.Browser.desktop" "${BUILD}/share/applications/io.wados.Browser.desktop"
     install -Dm644 "${data}/icons/io.wados.Browser.svg" "${BUILD}/share/icons/hicolor/scalable/apps/io.wados.Browser.svg"
-    for app in Settings Files; do
+    for app in Settings Files Agents; do
         install -Dm644 "${ROOT}/apps/wados-${app,,}/data/io.wados.${app}.desktop" \
             "${BUILD}/share/applications/io.wados.${app}.desktop"
     done

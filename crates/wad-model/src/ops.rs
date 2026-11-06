@@ -276,6 +276,7 @@ pub fn blank(id: &str, name: &str, machine: &str, now: i64, order: i64) -> Wadsp
         updated_at: now,
         deleted_at: None,
         agents: false,
+        sealed: false,
         last_launched: None,
         starter: false,
         category: None,

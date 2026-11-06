@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Agents
+Comment=Claude Code at work in your wadspaces
+Exec=wados-agents
+Icon=utilities-terminal
+Terminal=false
+Categories=Development;
+StartupWMClass=io.wados.Agents
+Keywords=AI;Claude;Claude Code;

@@ -123,6 +123,8 @@ pub struct Machine {
     pub state_dir: String,
     /// Keys' folders: `<signins_dir>/<key id>`.
     pub signins_dir: String,
+    /// The MCP sockets' folders: `<agents_dir>/<wadspace id>`.
+    pub agents_dir: String,
     /// Its time zone (empty: UTC).
     pub tz: String,
     /// Podman secrets every wadspace gets, by name (github_token, when the machine has one).
@@ -542,6 +544,10 @@ fn home_volumes(ws: &Wadspace, run: &Run, m: &Machine, lines: &mut Vec<String>) 
         lines.push(format!("Volume={}/{}:{SIGNINS_ROOT}/{}:rw,z", esc(&m.signins_dir), s.key.id, s.key.id));
     }
     lines.push(format!("Volume={}:{}:ro,z", esc(&extras::dir(&m.state_dir, id)), extras::DIR));
+    // The `wadspaces` MCP server's socket, only with its Agents switch on.
+    if ws.agents {
+        lines.push(format!("Volume={}/{id}:/run/wadspaces-agents:ro,rslave", esc(&m.agents_dir)));
+    }
     // Dolphin's games: the machine's discs (wadd's discs.rs).
     if ws.has_app(wad_model::AppId::Dolphin) {
         lines.push(format!("Volume={}/discs:/config/Games:ro,z", esc(&m.state_dir)));

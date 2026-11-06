@@ -33,6 +33,8 @@ use wad_proto::{
 pub enum Change {
     /// Focus started or ended.
     Focus,
+    /// An agent or a sandbox changed.
+    Agents,
     /// Connected to wadd, or lost it (it's followed again by itself).
     Connected(bool),
     Machine,
@@ -126,6 +128,7 @@ pub struct Store {
     jobs: RefCell<IndexMap<String, JobInfo>>,
     screen: RefCell<Option<ScreenInfo>>,
     focus: RefCell<Option<wad_model::Focus>>,
+    agents: RefCell<wad_proto::Agents>,
     tailnet: RefCell<Option<Tailnet>>,
     peers: RefCell<Vec<PeerInfo>>,
     signins: RefCell<IndexMap<SignInProvider, SignIn>>,
@@ -233,6 +236,10 @@ impl Store {
             }
             // The shell shows no account: Settings does.
             Event::Github { .. } => Change::Github,
+            Event::Agents(a) => {
+                *self.agents.borrow_mut() = *a;
+                Change::Agents
+            }
             Event::Focus { focus } => {
                 *self.focus.borrow_mut() = focus;
                 Change::Focus
@@ -308,6 +315,10 @@ impl Store {
 
     pub fn job(&self, id: &str) -> Option<JobInfo> {
         self.jobs.borrow().get(id).cloned()
+    }
+
+    pub fn agents(&self) -> wad_proto::Agents {
+        self.agents.borrow().clone()
     }
 
     pub fn focus(&self) -> Option<wad_model::Focus> {

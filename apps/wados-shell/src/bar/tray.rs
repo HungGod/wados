@@ -56,6 +56,20 @@ pub fn updates_sub(u: Option<&wad_proto::Updates>) -> &'static str {
 pub const UPDATES_TIP: &str = "Updates: check for one, or restart into it";
 
 /// A tailnet state as Settings words it (`panels/tailnet.ts`).
+/// The Agents icon's tooltip, and how many need you.
+pub fn agents_tip(a: &wad_proto::Agents) -> (String, usize) {
+    let need = a.agents.iter().filter(|x| x.needs_you()).count();
+    let work = a.agents.iter().filter(|x| x.status == wad_model::agents::AgentStatus::Working).count();
+    let tip = if need > 0 {
+        format!("AI agents: {need} need{} you", if need == 1 { "s" } else { "" })
+    } else if work > 0 {
+        format!("AI agents: {work} working")
+    } else {
+        "AI agents: the last runs".to_string()
+    };
+    (tip, need)
+}
+
 pub fn state_word(s: TailnetState) -> &'static str {
     match s {
         TailnetState::Off => "Off",
@@ -204,7 +218,33 @@ impl Tray {
         me.add("brightness", Icon::new("sun-medium", 17).upcast(), "Brightness and night light");
         me.add("volume", me.vol_icon.clone().upcast(), "Sound");
         me.add("network", me.net_icon.clone().upcast(), "Network");
-        me.add("agents", Icon::new("bot", 17).upcast(), "AI agents: the last runs");
+        let bot = gtk::Overlay::new();
+        let bot_icon = Icon::new("bot", 17);
+        bot_icon.set_size_request(18, 36);
+        bot.set_child(Some(&bot_icon));
+        let count = gtk::Label::builder()
+            .css_classes(["wb-badge"])
+            .halign(gtk::Align::End)
+            .valign(gtk::Align::Start)
+            .visible(false)
+            .build();
+        bot.add_overlay(&count);
+        me.add("agents", bot.upcast(), "AI agents: the last runs");
+        let (w, c) = (Rc::downgrade(&me), count.clone());
+        shell.store.watch(move |change| {
+            if !matches!(change, crate::store::Change::Agents) {
+                return;
+            }
+            let Some(m) = w.upgrade() else { return };
+            let a = m.shell.store.agents();
+            let (tip, need) = agents_tip(&a);
+            c.set_label(&need.to_string());
+            c.set_visible(need > 0);
+            if let Some(b) = m.button("agents") {
+                b.set_tooltip_text(Some(&tip));
+            }
+            m.refill_open("agents");
+        });
         let bell = gtk::Overlay::new();
         let bell_icon = Icon::new("bell", 17);
         bell_icon.set_size_request(18, 36);
@@ -514,10 +554,7 @@ impl Tray {
                 col.append(&later("What you copy, kept here (the last 25), comes in phase 8."));
             }
             "agents" => {
-                col.append(&head("AI agents", None));
-                col.append(&later(
-                    "Agents (Claude Code at work in your wadspaces, and what wants you) come in phase 11.",
-                ));
+                self.agents_content(&col);
             }
             "jobs" => self.jobs_content(&col),
             "streams" => self.streams_content(&col),
@@ -656,6 +693,41 @@ impl Tray {
             rows.append(&r);
         }
         col.append(&rows);
+    }
+
+    /// The last runs: what needs you first, with Review.
+    fn agents_content(self: &Rc<Self>, col: &gtk::Box) {
+        let a = self.shell.store.agents();
+        col.append(&head("AI agents", None));
+        let mut runs: Vec<_> = a.agents.iter().collect();
+        runs.sort_by_key(|x| !x.needs_you());
+        if runs.is_empty() {
+            let l = label(
+                "No runs yet. Send a bug, a feature or an update to a wadspace's Claude Code from Agents.",
+                &["wb-muted"],
+            );
+            l.set_wrap(true);
+            col.append(&l);
+        }
+        for r in runs.iter().take(6) {
+            let b = gtk::Button::builder().css_classes(["wb-ghost"]).build();
+            let c = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
+            c.append(&label(&r.task, &[]));
+            let s = a.sandboxes.iter().find(|s| Some(&s.id) == r.sandbox.as_ref());
+            let line = wad_model::agents::wants(r, s).unwrap_or_else(|| r.now.clone());
+            c.append(&label(&line, &["wb-muted"]));
+            b.set_child(Some(&c));
+            let (sh, id) = (self.shell.clone(), r.id.clone());
+            b.connect_clicked(move |_| crate::peers::open_app(&sh, &["wados-agents", "--open", &id]));
+            col.append(&b);
+        }
+        if runs.len() > 6 {
+            col.append(&label(&format!("{} more in Agents", runs.len() - 6), &["wb-muted"]));
+        }
+        let open = gtk::Button::builder().label("Open Agents").css_classes(["wb-ghost"]).build();
+        let sh = self.shell.clone();
+        open.connect_clicked(move |_| crate::peers::open_app(&sh, &["wados-agents"]));
+        col.append(&open);
     }
 
     fn notices_content(self: &Rc<Self>, col: &gtk::Box) {

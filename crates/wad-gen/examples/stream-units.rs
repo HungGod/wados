@@ -40,6 +40,7 @@ fn main() {
     ws.look.wallpaper = Wallpaper::color(get("wallpaper"));
     let machine = Machine {
         signins_dir: format!("{state_dir}/keys"),
+        agents_dir: "/run/wados/agents".into(),
         state_dir: state_dir.clone(),
         tz: "Etc/UTC".into(),
         rootless_uid: Some(1000),

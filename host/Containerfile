@@ -185,9 +185,9 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs crun
 COPY etc/ /etc/
 COPY usr/ /usr/
 COPY --from=cursors /out/WadOS /usr/share/icons/WadOS
-COPY --from=bin --chmod=755 wadd wados-shell wadsctl wadbrowser wados-settings wados-files wados-installer /usr/bin/
+COPY --from=bin --chmod=755 wadd wados-shell wadsctl wadbrowser wados-settings wados-files wados-installer wados-agents /usr/bin/
 COPY --from=bin --chmod=755 wadspaces-clipboard /usr/libexec/wados/
-COPY --from=share --chmod=644 applications/io.wados.Browser.desktop applications/io.wados.Settings.desktop \
+COPY --from=share --chmod=644 applications/io.wados.Browser.desktop applications/io.wados.Settings.desktop applications/io.wados.Agents.desktop \
      applications/io.wados.Files.desktop /usr/share/applications/
 COPY --from=share --chmod=644 icons/hicolor/scalable/apps/io.wados.Browser.svg /usr/share/icons/hicolor/scalable/apps/
 COPY --from=assets / /usr/share/wados/assets/
@@ -243,7 +243,7 @@ RUN systemctl enable greetd.service podman.socket wadd.socket wadd.service wados
 # for a machine with its person and one without.
 RUN set -e; \
     for b in /usr/bin/wadd /usr/bin/wados-shell /usr/bin/wadsctl /usr/libexec/wados/wadspaces-clipboard \
-             /usr/bin/wadbrowser /usr/bin/wados-settings /usr/bin/wados-files /usr/bin/wados-installer /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \
+             /usr/bin/wadbrowser /usr/bin/wados-settings /usr/bin/wados-files /usr/bin/wados-installer /usr/bin/wados-agents /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \
         out="$(ldd -r "${b}" 2>&1)"; \
         if grep -E 'not found|undefined symbol' <<< "${out}"; then echo "${b} doesn't load" >&2; exit 1; fi; \
     done; \
@@ -251,7 +251,7 @@ RUN set -e; \
     wadsctl --help 2>&1 | grep -q usage; \
     wadbrowser --version; \
     grep -qx 'Exec=wadbrowser --default %U' /usr/share/applications/io.wados.Browser.desktop; \
-    wados-settings --version; wados-files --version; wados-installer --version; \
+    wados-settings --version; wados-files --version; wados-installer --version; wados-agents --version; \
     grep -qx 'Exec=wados-settings' /usr/share/applications/io.wados.Settings.desktop; \
     grep -qx 'Exec=wados-files --machines' /usr/share/applications/io.wados.Files.desktop; \
     test -s /usr/share/icons/hicolor/scalable/apps/io.wados.Browser.svg; \
@@ -303,7 +303,7 @@ for top in ("etc", "usr"):
     for d, _, fs in os.walk(os.path.join("/ctx", top)):
         ours += ["/" + os.path.relpath(os.path.join(d, f), "/ctx") for f in fs]
 ours += ["/usr/bin/wadd", "/usr/bin/wados-shell", "/usr/bin/wadsctl", "/usr/bin/wadbrowser",
-         "/usr/bin/wados-settings", "/usr/bin/wados-files", "/usr/bin/wados-installer",
+         "/usr/bin/wados-settings", "/usr/bin/wados-files", "/usr/bin/wados-installer", "/usr/bin/wados-agents",
          "/usr/share/applications/io.wados.Browser.desktop",
          "/usr/share/applications/io.wados.Settings.desktop", "/usr/share/applications/io.wados.Files.desktop",
          "/usr/share/icons/hicolor/scalable/apps/io.wados.Browser.svg"]

@@ -39,6 +39,8 @@
 #
 #   tools/vm.sh modes-check      focus, a second display and unplugging it, and server
 #                                mode, on the machine (tools/vm/check-modes.sh)
+#   tools/vm.sh agents-check     the agents demo in a real wadspace: a fake claude on
+#                                the real MCP socket (tools/vm/check-agents.sh)
 #   tools/vm.sh stick            .build/vm/stick.qcow2: the disk, made an installer
 #                                stick, with fake keys and a mock of Cloudflare
 #   tools/vm.sh installer-check [--plain] [--no-secrets]
@@ -457,6 +459,7 @@ cmd="${1:-}"
 [[ $# -gt 0 ]] && shift
 case "${cmd}" in
     disk) disk "$@" ;;
+    agents-check) [[ -z "${VM_NAME}" ]] || die "agents-check is the unnamed VM's"; . "${HERE}/check.sh"; . "${HERE}/check-agents.sh"; agents_check ;;
     modes-check) [[ -z "${VM_NAME}" ]] || die "modes-check is the unnamed VM's"; . "${HERE}/check.sh"; . "${HERE}/check-modes.sh"; modes_check ;;
     stick) STICK=stick STICK_API=http://10.0.2.2:18555 VM_TARGET_IMGREF=ghcr.io/hunggod/wados-host:latest disk "$@" ;;
     installer-check) [[ -z "${VM_NAME}" ]] || die "installer-check is the unnamed VM's"; . "${HERE}/check-install.sh"; install_check "$@" ;;

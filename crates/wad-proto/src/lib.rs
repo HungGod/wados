@@ -78,6 +78,46 @@ pub struct MachineInfo {
     pub profile: Profile,
 }
 
+/// `GET /v1/agents`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Agents {
+    pub agents: Vec<wad_model::agents::Agent>,
+    pub sandboxes: Vec<wad_model::agents::Sandbox>,
+}
+
+/// `POST /v1/agents`, and a word to one: `.../say`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSend {
+    #[serde(default)]
+    pub ws: String,
+    /// None for the actions (`{}`): only `say` has any.
+    #[serde(default)]
+    pub text: String,
+}
+
+#[cfg(test)]
+mod agent_wire {
+    use super::AgentSend;
+
+    #[test]
+    fn an_action_is_an_empty_body() {
+        let a: AgentSend = serde_json::from_str("{}").expect("Allow, Stop and Ship send {}");
+        assert_eq!((a.ws.as_str(), a.text.as_str()), ("", ""));
+    }
+}
+
+/// A verdict on a checklist's item.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ItemMark {
+    pub item: String,
+    pub verdict: Option<wad_model::agents::Verdict>,
+    #[serde(default)]
+    pub note: String,
+}
+
 /// `GET|POST /v1/server`: server mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -238,6 +278,8 @@ pub enum Event {
     Updates(Box<Updates>),
     /// The disk, as `GET /v1/storage` has it.
     Storage(Box<Storage>),
+    /// Every agent and sandbox, as `GET /v1/agents` has them.
+    Agents(Box<Agents>),
     /// Server mode on or off.
     Server {
         on: bool,
@@ -269,6 +311,7 @@ impl Event {
             Event::Storage(_) => Some("storage".into()),
             Event::Focus { .. } => Some("focus".into()),
             Event::Server { .. } => Some("server".into()),
+            Event::Agents(_) => Some("agents".into()),
             Event::Library(_)
             | Event::Wadspace(_)
             | Event::WadspaceGone { .. }

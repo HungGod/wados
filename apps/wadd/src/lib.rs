@@ -24,6 +24,7 @@
 //! keys' sign-in flows, devices, the network, install, server mode and focus.
 
 pub mod access;
+pub mod agents;
 pub mod api;
 pub mod api_phase6;
 pub mod api_phase7;
@@ -390,6 +391,15 @@ impl Server {
             jobs.clone(),
             bus.clone(),
         );
+        let agents_dir = agents::sockets_dir(&d.state_dir, profile == Profile::System);
+        let agents = agents::MachineAgents::new(
+            &d.state_dir,
+            &agents_dir,
+            Arc::new(agents::Exec),
+            Arc::new(agents::RealHands { docs: docs.clone(), builds: builds.clone(), runs: runs.clone() }),
+            docs.clone(),
+            bus.clone(),
+        );
         let server = server::ServerMode::new(&server_dir, runs.clone(), focus.clone(), seat, bus.clone());
         let state = Arc::new(AppState {
             machine,
@@ -416,6 +426,7 @@ impl Server {
             server,
             discs,
             steam,
+            agents,
         });
         Ok(Self {
             listener,
@@ -451,6 +462,7 @@ impl Server {
             tokio::spawn(watch_machine(app.clone(), self.reconcile_every)),
             tokio::spawn(watch_screen(app.clone())),
             tokio::spawn(app.focus.clone().run()),
+            tokio::spawn(app.agents.clone().run()),
         ];
         if let Some(t) = &self.tailnet {
             loops.extend(t.start(app.clone()));
@@ -597,6 +609,8 @@ fn person_of(screen: Arc<screen::Screen>, profile: Profile, projects_uid: u32) -
 /// something changes (a wadspace starting or stopping, the shell's session).
 async fn watch_screen(app: Arc<AppState>) {
     loop {
+        let lib = app.docs.snapshot();
+        app.screen.seal(lib.wadspaces.iter().filter(|w| w.sealed).map(|w| w.id.clone()).collect());
         app.screen.tick(app.runs.on_screen()).await;
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_secs(3)) => {}

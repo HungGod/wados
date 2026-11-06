@@ -345,7 +345,7 @@ impl Start {
                     b.present();
                 }
             }
-            "agents" => s.toast(wad_proto::Level::Info, "Agents come in phase 11", None),
+            "agents" => crate::peers::open_app(s, &["wados-agents"]),
             // Settings' System ▸ Updates.
             "updates" => crate::peers::open_app(s, &["wados-settings", "--page", "updates"]),
             _ => {}

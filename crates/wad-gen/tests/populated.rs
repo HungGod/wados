@@ -21,6 +21,7 @@ fn machine() -> Machine {
     Machine {
         state_dir: "/var/lib/wados".into(),
         signins_dir: "/var/lib/wados/keys".into(),
+        agents_dir: "/run/wados/agents".into(),
         tz: "Australia/Melbourne".into(),
         secrets: vec!["github_token".into()],
         userns_base: Some(units::USERNS_BASE),
@@ -62,14 +63,14 @@ fn what_each_wadspace_is_made_of() {
     let lib = library();
     let pk = |id: &str| packages::packages_of(ws(&lib, id));
     let un = |id: &str| packages::unpackaged(ws(&lib, id));
-    assert_eq!(pk("wadspaces"), ["cpp", "rust", "vscode", "ext-anthropic.claude-code"]);
+    assert_eq!(pk("wadspaces"), ["cpp", "nodejs", "rust", "claude-code", "vscode", "ext-anthropic.claude-code"]);
     assert!(un("wadspaces").is_empty());
     assert_eq!(
         pk("intelligencequest"),
-        ["cpp", "rust", "vscode", "ext-anthropic.claude-code", "ext-rust-lang.rust-analyzer"]
+        ["cpp", "nodejs", "rust", "claude-code", "vscode", "ext-anthropic.claude-code", "ext-rust-lang.rust-analyzer"]
     );
     assert_eq!(un("intelligencequest"), ["app:libresprite", "app:tiled"]);
-    assert_eq!(pk("vanua-academy"), ["vscode", "ext-anthropic.claude-code"]);
+    assert_eq!(pk("vanua-academy"), ["nodejs", "claude-code", "vscode", "ext-anthropic.claude-code"]);
     assert_eq!(un("vanua-academy"), ["terminal:firebase"]);
     assert!(pk("cosmic-bodybuilding").is_empty());
     assert_eq!(un("cosmic-bodybuilding"), ["app:obsidian"]);
@@ -276,6 +277,7 @@ fn rootless_on_a_laptop() {
     let m = Machine {
         state_dir: "/home/sam/.local/state/wados".into(),
         signins_dir: "/home/sam/.local/state/wados/keys".into(),
+        agents_dir: "/run/wados/agents".into(),
         rootless_uid: Some(1000),
         screen_dir: Some("/run/user/1000/wados/screen".into()),
         pulse_dir: Some("/run/user/1000/pulse".into()),

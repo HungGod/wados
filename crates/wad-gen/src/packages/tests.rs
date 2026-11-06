@@ -45,7 +45,7 @@ fn closure_adds_what_packages_need_in_order() {
     assert_eq!(closure(&["ext-b.b", "ext-a.a"]), s(&["vscode", "ext-a.a", "ext-b.b"]));
     assert_eq!(closure(&["python", "python"]), s(&["python"]));
     assert_eq!(closure::<&str>(&[]), Vec::<String>::new());
-    assert_eq!(needs("ext-anthropic.claude-code"), ["vscode"]);
+    assert_eq!(needs("ext-anthropic.claude-code"), ["vscode", "claude-code"]);
     assert_eq!(needs("rust"), ["cpp"]);
     assert!(needs("rpm-krita").is_empty());
 }
@@ -179,6 +179,7 @@ fn ci_builds_the_catalog_in_waves() {
             "python",
             "nodejs",
             "rust",
+            "claude-code",
             "dolphin",
             "steam",
             "vscode",
@@ -198,8 +199,10 @@ fn ci_builds_the_catalog_in_waves() {
     assert_eq!(wave_of("vscode"), Some(0));
     assert_eq!(wave_of("rpm-krita"), Some(0));
     assert_eq!(wave_of("rust"), Some(1));
-    assert_eq!(wave_of("ext-anthropic.claude-code"), Some(1));
-    assert_eq!(waves.len(), 2);
+    assert_eq!(wave_of("claude-code"), Some(1));
+    // It stands on the command line, so it's a wave later than other extensions.
+    assert_eq!(wave_of("ext-anthropic.claude-code"), Some(2));
+    assert_eq!(waves.len(), 3);
     assert_eq!(waves.iter().map(Vec::len).sum::<usize>(), all.len());
     // Asked for by id, what it needs comes too.
     assert_eq!(super::waves(&["rust", "python"]), [s(&["cpp", "python"]), s(&["rust"])]);

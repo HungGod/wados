@@ -92,6 +92,8 @@ struct State {
     served: HashMap<String, Served>,
     /// Wadspaces whose PulseAudio folder is bound in: which one.
     pulse: HashMap<String, u64>,
+    /// What gets no clipboard bridge.
+    sealed: HashSet<String>,
     bridges: HashMap<String, Box<dyn Running>>,
     /// The last error each had, said once.
     said: HashMap<String, String>,
@@ -354,13 +356,20 @@ impl Screen {
         }
     }
 
+    /// What gets no clipboard bridge (sandboxes).
+    pub fn seal(&self, ids: HashSet<String>) {
+        self.state.lock().unwrap().sealed = ids;
+    }
+
     /// Clipboard bridges for what's served with its desktop up; ended ones
     /// started again once it is.
     async fn bridges(&self, want: &[(String, bool)]) {
         let start: Vec<String> = {
             let mut s = self.state.lock().unwrap();
             let served: HashSet<String> = s.served.keys().cloned().collect();
-            let up: HashSet<&String> = want.iter().filter(|(_, up)| *up).map(|(id, _)| id).collect();
+            let sealed = &s.sealed;
+            let up: HashSet<&String> =
+                want.iter().filter(|(id, up)| *up && !sealed.contains(id)).map(|(id, _)| id).collect();
             s.bridges.retain(|id, b| served.contains(id) && up.contains(id) && b.alive());
             up.into_iter().filter(|id| served.contains(*id) && !s.bridges.contains_key(*id)).cloned().collect()
         };

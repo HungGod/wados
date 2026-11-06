@@ -3765,6 +3765,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "wados-agents"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "gtk4",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wad-gtk",
+ "wad-model",
+ "wad-proto",
+ "wad-wadd-client",
+]
+
+[[package]]
 name = "wados-files"
 version = "0.1.0"
 dependencies = [

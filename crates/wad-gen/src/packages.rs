@@ -125,10 +125,15 @@ pub fn uses_github(id: &str) -> bool {
 /// The packages `id` needs under it.
 pub fn needs(id: &str) -> Vec<&'static str> {
     if id.starts_with("ext-") {
-        return match recipes::app(AppId::Vscode) {
+        let mut under = match recipes::app(AppId::Vscode) {
             Recipe::Feature(f) => vec![f.name],
             _ => vec![],
         };
+        // The Agents app runs its command line, not the extension.
+        if id == "ext-anthropic.claude-code" {
+            under.push("claude-code");
+        }
+        return under;
     }
     recipes::feature_named(id).map(|f| f.needs.to_vec()).unwrap_or_default()
 }

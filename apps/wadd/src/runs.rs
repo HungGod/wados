@@ -184,6 +184,9 @@ impl Settings {
         let machine = Machine {
             state_dir: d.state_dir.to_string_lossy().into_owned(),
             signins_dir: d.signins_dir.to_string_lossy().into_owned(),
+            agents_dir: crate::agents::sockets_dir(&d.state_dir, profile == wad_config::Profile::System)
+                .to_string_lossy()
+                .into_owned(),
             tz: time_zone(),
             secrets: vec![],
             // Rootless podman: you're abc (1000) inside.
@@ -1034,6 +1037,13 @@ impl Runs {
             true => ("stream", 1),
             false => ("screen", self.settings.machine.screens.max(1)),
         };
+        // Its agents' way to the desktop: the folder its socket's bound in.
+        if ws.agents {
+            let _ = std::fs::create_dir_all(self.settings.machine.agents_dir.clone() + "/" + &ws.id);
+            files.push(("mcp.json".into(), Some(crate::agents::mcp_config())));
+        } else {
+            files.push(("mcp.json".into(), None));
+        }
         // Its games' launchers (init-wadspaces-workspace).
         let list = game_launchers(ws, &self.docs.snapshot());
         if ws.has_app(wad_model::AppId::Dolphin) {

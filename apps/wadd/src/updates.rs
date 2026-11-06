@@ -186,7 +186,9 @@ impl SystemBootc {
         let mut child = tokio::process::Command::new("systemd-run")
             .args(["--quiet", "--wait", "--collect", "--service-type=exec"])
             .arg(format!("--unit={unit}"))
-            .arg("--property=Description=WadOS updates (wadd)")
+            .arg("--property=Description=WadOS, outside wadd's sandbox")
+            // What it prints stays root's.
+            .arg("--property=UMask=0077")
             .arg(format!("--property=StandardOutput=truncate:{}", out_file.display()))
             .arg(format!("--property=StandardError=truncate:{}", err_file.display()))
             .arg("--")
@@ -214,6 +216,41 @@ impl SystemBootc {
             let _ = e.read_to_string(&mut said).await;
         }
         if status.success() { Ok(follow.all) } else { Err(failure(prog, &said, status.code())) }
+    }
+}
+
+/// The podman command line, outside wadd's sandbox: ProtectSystem=strict
+/// keeps it from podman's storage, so inside it only fails. Each line of its
+/// output to `on_line`; all of it, at the end. One runner, so units never share a name.
+pub async fn podman(args: &[String], on_line: &mut (dyn FnMut(&str) + Send)) -> Res<String> {
+    let mut argv: Vec<&str> = vec!["podman"];
+    argv.extend(args.iter().map(String::as_str));
+    outside(&argv, on_line).await
+}
+
+/// `argv`, outside wadd's sandbox.
+pub async fn outside(argv: &[&str], on_line: &mut (dyn FnMut(&str) + Send)) -> Res<String> {
+    static RUNNER: std::sync::OnceLock<SystemBootc> = std::sync::OnceLock::new();
+    let out = RUNNER.get_or_init(SystemBootc::new);
+    // Its lines come here (the runner's callback lasts for ever, this one doesn't).
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    let mut lines: OnLine = Box::new(move |l: &str| {
+        let _ = tx.send(l.to_string());
+    });
+    let run = async {
+        if out.through_systemd { out.unit(argv, &mut lines).await } else { out.child(argv, &mut lines).await }
+    };
+    tokio::pin!(run);
+    loop {
+        tokio::select! {
+            r = &mut run => {
+                while let Ok(l) = rx.try_recv() {
+                    on_line(&l);
+                }
+                return r;
+            }
+            Some(l) = rx.recv() => on_line(&l),
+        }
     }
 }
 

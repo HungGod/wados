@@ -473,6 +473,10 @@ pub struct Wadspace {
     /// Agents in it may message this desktop and ask for sandboxes (the wadspaces MCP server).
     #[serde(default, skip_serializing_if = "is_false")]
     pub agents: bool,
+    /// A sandbox: code an agent just wrote runs in it, so it gets nothing of
+    /// the machine's, not its clipboard either.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sealed: bool,
     /// When it was last launched (opened here, or streamed here from its machine): the launcher's Recent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_launched: Option<i64>,

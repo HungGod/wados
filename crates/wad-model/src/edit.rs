@@ -425,6 +425,9 @@ pub enum Op {
     #[serde(rename = "space.forApp")]
     ForApp { app: AppId },
     /// A disc (an .iso or .rvz file) already in the account's packages, as one of its Dolphin games (one that isn't: upload it first, then this). Created: its variant's id.
+    /// A sandbox's wadspace: there's no way back (wadd's agents.rs).
+    #[serde(rename = "builder.seal")]
+    Seal { ws: String },
     /// What a Steam account has, as its client's files say (wadd's steam.rs).
     #[serde(rename = "steam.library")]
     SteamLibrary { key: String, library: SteamLibrary },
@@ -788,6 +791,10 @@ impl Tx<'_> {
                     if matches!(app, AppId::Steam | AppId::Dolphin) { Category::Gaming } else { Category::Work };
                 let id = self.create(Some(app_name(app)), Some(category), None)?;
                 self.must_add(&id, Section::Apps, app.as_str(), None).map(drop)
+            }
+            Op::Seal { ws } => {
+                self.ws(&ws)?.sealed = true;
+                Ok(())
             }
             Op::SteamLibrary { key, library } => {
                 self.lib.steam.insert(key, library);

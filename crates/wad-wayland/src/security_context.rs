@@ -117,7 +117,7 @@ pub fn listen(
 }
 
 /// The listening socket, labelled (when SELinux is on) as it's made.
-fn bind(path: &Path, labels: &Labels) -> Result<UnixListener, String> {
+pub fn bind(path: &Path, labels: &Labels) -> Result<UnixListener, String> {
     match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

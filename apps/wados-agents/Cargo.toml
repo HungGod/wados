@@ -1,0 +1,18 @@
+[package]
+name = "wados-agents"
+description = "Claude Code at work in your wadspaces: what it wants from you, where it's up to, and its sandboxes"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+async-channel.workspace = true
+gtk.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+wad-gtk.workspace = true
+wad-model.workspace = true
+wad-proto.workspace = true
+wad-wadd-client.workspace = true

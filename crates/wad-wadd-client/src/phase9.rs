@@ -56,6 +56,44 @@ impl Wadd {
         self.post("/v1/steam/push", &wad_proto::SteamPush { account: account.into(), games }).await
     }
 
+    /// Every agent and sandbox (`GET /v1/agents`).
+    pub async fn agents(&self) -> Result<wad_proto::Agents, Failure> {
+        self.get("/v1/agents").await
+    }
+
+    /// A job for a wadspace's Claude Code (`POST /v1/agents`).
+    pub async fn agent_send(&self, ws: &str, text: &str) -> Result<wad_model::agents::Agent, Failure> {
+        self.post("/v1/agents", &wad_proto::AgentSend { ws: ws.into(), text: text.into() }).await
+    }
+
+    /// `stop`, `allow`, `deny` or `ship`.
+    pub async fn agent_act(&self, id: &str, what: &str) -> Result<(), Failure> {
+        self.post(&format!("/v1/agents/{id}/{what}"), &json!({})).await
+    }
+
+    /// A word to a job, between its turns.
+    pub async fn agent_say(&self, id: &str, text: &str) -> Result<(), Failure> {
+        let body = wad_proto::AgentSend { ws: String::new(), text: text.into() };
+        self.post(&format!("/v1/agents/{id}/say"), &body).await
+    }
+
+    /// A verdict on a checklist's item.
+    pub async fn sandbox_mark(
+        &self,
+        id: &str,
+        item: &str,
+        verdict: Option<wad_model::agents::Verdict>,
+        note: &str,
+    ) -> Result<(), Failure> {
+        let body = wad_proto::ItemMark { item: item.into(), verdict, note: note.into() };
+        self.post(&format!("/v1/sandboxes/{id}/mark"), &body).await
+    }
+
+    /// `send` or `close`.
+    pub async fn sandbox_act(&self, id: &str, what: &str) -> Result<(), Failure> {
+        self.post(&format!("/v1/sandboxes/{id}/{what}"), &json!({})).await
+    }
+
     /// Server mode (`GET /v1/server`).
     pub async fn server(&self) -> Result<wad_proto::Server, Failure> {
         self.get("/v1/server").await

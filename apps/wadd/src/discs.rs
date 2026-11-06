@@ -193,12 +193,7 @@ impl Drop for AuthFile {
 }
 
 async fn podman(args: &[String]) -> Result<String, String> {
-    let out = tokio::process::Command::new("podman").args(args).output().await.map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
-    } else {
-        Err(format!("podman: {}", String::from_utf8_lossy(&out.stderr).trim()))
-    }
+    crate::updates::podman(args, &mut |_| {}).await.map(|o| o.trim().to_string())
 }
 
 /// `FROM scratch`, with `paths` kept where they are.

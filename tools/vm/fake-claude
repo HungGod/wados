@@ -1,0 +1,78 @@
+#!/usr/bin/python3
+"""check-agents.sh's stand-in for `claude -p`: it prints Claude Code's
+documented stream, and calls the wadspaces MCP server the way the real one
+does, through `wadspaces-mcp` (what mcp.json names). No model, no account.
+It picks what to do from the prompt, and keeps its arguments for the check."""
+import json
+import subprocess
+import sys
+
+args = sys.argv[1:]
+prompt = args[args.index("-p") + 1]
+with open("/tmp/claude-args", "a") as f:
+    f.write(json.dumps(args) + "\n")
+
+
+def out(v):
+    print(json.dumps(v), flush=True)
+
+
+def say(text):
+    out({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [{"type": "text", "text": text}]}})
+
+
+def tool(name, input):
+    out({"type": "assistant", "parent_tool_use_id": None,
+         "message": {"content": [{"type": "tool_use", "name": name, "input": input}]}})
+
+
+mcp = subprocess.Popen(["wadspaces-mcp"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+n = 0
+
+
+def rpc(method, params):
+    global n
+    n += 1
+    mcp.stdin.write(json.dumps({"jsonrpc": "2.0", "id": n, "method": method, "params": params}) + "\n")
+    mcp.stdin.flush()
+    return json.loads(mcp.stdout.readline())
+
+
+def call(name, **a):
+    r = rpc("tools/call", {"name": name, "arguments": a})
+    if r["result"].get("isError"):
+        print(f"tool refused: {r}", file=sys.stderr)
+    return r
+
+
+rpc("initialize", {})
+out({"type": "system", "subtype": "init", "session_id": "fake-session", "mcp_servers": [{"name": "wadspaces", "status": "connected"}]})
+if "sandbox is" in prompt:
+    call("set_checklist", items=[
+        {"id": "menu", "label": "It's in the menu", "how": "Right-click it", "done": 4},
+        {"id": "once", "label": "It pins only once", "how": "Pin it twice", "done": 3},
+    ])
+    subprocess.run("mkdir -p /config/out && echo build1 > /config/out/build.txt", shell=True, check=True)
+    call("update_sandbox", build=1, path="out", run="cat build.txt > /tmp/ran.txt")
+    say("Build 1 is in your sandbox.")
+elif "From the sandbox" in prompt:
+    call("set_checklist", items=[
+        {"id": "menu", "label": "It's in the menu", "how": "Right-click it", "done": 4},
+        {"id": "once", "label": "It pins only once", "how": "Pin it twice", "done": 4},
+    ])
+    subprocess.run("echo build2 > /config/out/build.txt", shell=True, check=True)
+    call("update_sandbox", build=2, path="out", run="cat build.txt > /tmp/ran.txt")
+    say("Build 2 is in your sandbox.")
+elif "commit, push" in prompt:
+    tool("Bash", {"command": "git push && gh pr create --fill"})
+    subprocess.run("touch /tmp/pushed", shell=True)
+    say("Pull request #1 is open.")
+else:
+    call("progress", step="plan", state="done", now="Planned it")
+    tool("Read", {"file_path": "src/main.rs"})
+    tool("Edit", {"file_path": "src/pins.rs"})
+    tool("Bash", {"command": "cargo test"})
+    call("progress", step="check", state="done", now="The checks pass")
+    call("request_sandbox", title="Pins", why="It's easier to judge by using it")
+    say("I'd like you to try it.")
+out({"type": "result", "subtype": "success", "is_error": False, "result": "That's this turn.", "session_id": "fake-session"})

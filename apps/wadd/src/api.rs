@@ -92,6 +92,7 @@ pub struct AppState {
     pub server: Arc<crate::server::ServerMode>,
     pub discs: Arc<crate::discs::MachineDiscs>,
     pub steam: Arc<crate::steam::MachineSteam>,
+    pub agents: Arc<crate::agents::MachineAgents>,
 }
 
 /// An ApiError as an HTTP response.
@@ -167,6 +168,10 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/focus", get(focus).post(focus_start))
         .route("/v1/server", get(server).post(server_set))
         .route("/v1/discs", post(disc_add))
+        .route("/v1/agents", get(agents).post(agent_send))
+        .route("/v1/agents/{id}/{action}", post(agent_act))
+        .route("/v1/sandboxes/{id}/mark", post(sandbox_mark))
+        .route("/v1/sandboxes/{id}/{action}", post(sandbox_act))
         .route("/v1/steam", get(steam))
         .route("/v1/steam/signin", post(steam_signin))
         .route("/v1/steam/push", post(steam_push))
@@ -260,6 +265,55 @@ async fn open(
 async fn stop(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<WadspaceRun>, Failure> {
     app.focus.check_stop(&id)?;
     Ok(Json(app.runs.stop(&id).await?))
+}
+
+async fn agents(State(app): State<Arc<AppState>>) -> Json<wad_proto::Agents> {
+    let s = app.agents.state();
+    Json(wad_proto::Agents { agents: s.agents, sandboxes: s.sandboxes })
+}
+
+async fn agent_send(
+    State(app): State<Arc<AppState>>,
+    Json(req): Json<wad_proto::AgentSend>,
+) -> Result<Json<wad_model::agents::Agent>, Failure> {
+    Ok(Json(app.agents.send(&req.ws, &req.text).await?))
+}
+
+async fn agent_act(
+    State(app): State<Arc<AppState>>,
+    Path((id, action)): Path<(String, String)>,
+    body: Option<Json<wad_proto::AgentSend>>,
+) -> Result<Json<()>, Failure> {
+    match action.as_str() {
+        "say" => app.agents.say(&id, &body.map(|b| b.0.text).unwrap_or_default())?,
+        "stop" => app.agents.stop(&id).await?,
+        "allow" => app.agents.allow(&id).await?,
+        "deny" => app.agents.deny(&id)?,
+        "ship" => app.agents.ship(&id).await?,
+        other => return Err(ApiError::not_found(format!("no action {other}")).into()),
+    }
+    Ok(Json(()))
+}
+
+async fn sandbox_mark(
+    State(app): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<wad_proto::ItemMark>,
+) -> Result<Json<()>, Failure> {
+    app.agents.mark(&id, &req.item, req.verdict, &req.note)?;
+    Ok(Json(()))
+}
+
+async fn sandbox_act(
+    State(app): State<Arc<AppState>>,
+    Path((id, action)): Path<(String, String)>,
+) -> Result<Json<()>, Failure> {
+    match action.as_str() {
+        "send" => app.agents.send_back(&id)?,
+        "close" => app.agents.close(&id).await?,
+        other => return Err(ApiError::not_found(format!("no action {other}")).into()),
+    }
+    Ok(Json(()))
 }
 
 /// Steam runs one client per account: a second wadspace on it has to wait.
