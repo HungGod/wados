@@ -1,7 +1,9 @@
 #!/bin/bash
 # The machine's session: greetd's initial_session, as the machine's person
 # (/usr/libexec/wados/greetd-config). labwc with the shell, which locks
-# before anything else shows (unless WADOS_NO_LOCK is set: never here).
+# before anything else shows (unless WADOS_NO_LOCK is set: never here). On
+# the installer stick (/etc/wados/live) it's WadSpaces Live: no lock, since
+# its person has no password, and the installer opens.
 # labwc's config is /etc/xdg/labwc (rc.xml: every keybind runs wadsctl), the
 # person's own ~/.config/labwc merged over it.
 #
@@ -9,7 +11,7 @@
 # labwc is started again if it ends (the shell locks again as it starts),
 # unless it keeps ending at once: then this ends, and greetd shows the login
 # prompt on tty1.
-export WADOS_SESSION=machine
+if [[ -e /etc/wados/live ]]; then export WADOS_SESSION=live; else export WADOS_SESSION=machine; fi
 export XDG_SESSION_TYPE=wayland
 export XCURSOR_THEME=WadOS
 export XCURSOR_SIZE=24

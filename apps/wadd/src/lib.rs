@@ -28,6 +28,7 @@ pub mod api;
 pub mod api_phase6;
 pub mod api_phase7;
 pub mod api_phase8;
+pub mod api_phase9;
 pub mod backend;
 pub mod bluetooth;
 pub mod builds;
@@ -39,6 +40,7 @@ pub mod fake_phase6;
 pub mod fake_phase7;
 pub mod fake_phase8;
 pub mod github;
+pub mod install;
 pub mod jobs;
 pub mod keys;
 pub mod library;
@@ -53,6 +55,7 @@ pub mod remote;
 pub mod runs;
 pub mod screen;
 pub mod selinux;
+pub mod setup;
 pub mod storage;
 pub mod store;
 pub mod streams;
@@ -175,7 +178,11 @@ impl Server {
         };
         let d = &config.daemon;
         let bus = Bus::new(machine.clone());
-        let docs = Arc::new(Docs::open(Store::new(&d.state_dir)?, bus.clone(), &machine.id)?);
+        // A machine the installer made is offered WadOS by Set up; a stick has no wadspaces.
+        let installer_made = setup::read(&d.state_dir) != wad_proto::SetupStep::Done;
+        let stick = d.state_dir.join("installer/installer.toml").exists();
+        let starter = !installer_made && !stick;
+        let docs = Arc::new(Docs::open_with(Store::new(&d.state_dir)?, bus.clone(), &machine.id, starter)?);
         let policy = Policy {
             own_uid: nix::unistd::getuid().as_raw(),
             users: d.allow_users.clone(),
@@ -335,6 +342,17 @@ impl Server {
                 s
             }
         };
+        let install: Arc<dyn api_phase9::Installer> = match parts.sample {
+            Some(step) => Arc::new(install::MachineInstall::sample(&d.state_dir.join("install"), step, jobs.clone())),
+            None => {
+                let hands = Arc::new(install::SystemHands { script: install::SCRIPT.into() });
+                match install::MachineInstall::open(&d.state_dir, install::JOBS_DIR.as_ref(), hands, jobs.clone()) {
+                    Some(i) => Arc::new(i),
+                    None => Arc::new(api_phase9::NotAStick),
+                }
+            }
+        };
+        let setup = setup::SetupState::new(&d.state_dir, docs.clone(), system.updates.clone());
         let state = Arc::new(AppState {
             machine,
             profile,
@@ -354,6 +372,8 @@ impl Server {
             bluetooth: system.bluetooth,
             updates: system.updates,
             storage: system.storage,
+            install,
+            setup,
         });
         Ok(Self {
             listener,

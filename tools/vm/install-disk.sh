@@ -9,7 +9,7 @@
 # IMAGE, BASE: names in it; TARGET_IMGREF: what the installed system says it
 # follows (bootc status); KEY: the public key root's SSH takes, on this disk
 # only; EXTRA: more images for root's podman storage, as BASE (the stream
-# sidecar, wados-stream:44).
+# sidecar, wados-stream:44). With /root/stick-files there, the disk is made a stick.
 set -euo pipefail
 REG="$1" IMAGE="$2" TARGET="$3" BASE="$4" KEY="$5"
 shift 5
@@ -81,6 +81,14 @@ unshare --mount --propagation private bash -euo pipefail -c '
     # Labelled as the machine labels its own (container_var_lib_t, container_ro_file_t…).
     restorecon -R /var/lib/containers
 ' _ "${VAR}" "${REG}" "${BASE}" "${EXTRA[@]}"
+
+# tools/vm.sh stick: this disk is the installer stick, as host/build.sh makes
+# one (a mock's address for Cloudflare, and fake keys).
+if [[ -f /root/stick-files ]]; then
+    step "the stick's files"
+    python3 --version > /dev/null
+    bash /root/stick-files "${VAR}" "${TARGET}" /root/stick-keys.toml "${STICK_API:-}"
+fi
 
 step "root's SSH, on this disk only"
 # The image's sshd says PermitRootLogin no (etc/ssh/sshd_config.d/40-wados.conf).

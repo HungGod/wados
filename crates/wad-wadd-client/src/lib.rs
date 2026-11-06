@@ -15,6 +15,7 @@ mod open_with;
 mod phase6;
 mod phase7;
 mod phase8;
+mod phase9;
 mod sse;
 pub use reqwest::Method;
 pub use sse::SseParser;

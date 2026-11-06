@@ -1,0 +1,84 @@
+#!/bin/bash
+# First boot (wados-provision.service): what the installer left in
+# /var/lib/wados/provision, put in place. /etc survives bootc's updates, so
+# this happens once. Each file goes only where none is yet, and is deleted
+# once it's there; what fails stays, and is tried again at the next start.
+#
+#   hostname         /etc/hostname
+#   account          line 1 the person's name, line 2 their password's hash:
+#                    uid 1000, in wheel and wados
+#   wadd.toml        /etc/wados/wadd.toml ([machine] id, [streaming] host)
+#   cloudflared-token  /etc/cloudflared/token
+#   turn.toml        /etc/wados/turn.toml
+#   nm/*.nmconnection  Wi-Fi the stick knew
+#   setup.json       /var/lib/wados/setup.json (Set up WadSpaces hasn't run)
+#   live             /etc/wados/live (the stick itself: WadSpaces Live)
+set -uo pipefail
+FROM=/var/lib/wados/provision
+failed=0
+
+put() {
+    local name="$1" dest="$2" mode="$3"
+    [[ -e "${FROM}/${name}" ]] || return 0
+    if [[ -e "${dest}" ]]; then
+        echo "${dest} is there already: left as it is"
+    elif ! install -D -m "${mode}" -o root -g root "${FROM}/${name}" "${dest}"; then
+        echo "${name}: couldn't put it at ${dest}" >&2
+        failed=1
+        return 0
+    fi
+    restorecon -F "${dest}" 2> /dev/null || true
+    rm -f "${FROM:?}/${name:?}"
+}
+
+if [[ -e "${FROM}/hostname" ]]; then
+    name="$(head -1 "${FROM}/hostname")"
+    if [[ "${name}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+        echo "${name}" > /etc/hostname
+        restorecon -F /etc/hostname 2> /dev/null || true
+        # PID 1 read /etc/hostname before this ran.
+        hostname "${name}"
+        rm -f /var/lib/wados/provision/hostname
+    else
+        echo "hostname: not a name" >&2
+        failed=1
+    fi
+fi
+
+if [[ -e "${FROM}/account" ]]; then
+    person="$(sed -n 1p "${FROM}/account")"
+    hash="$(sed -n 2p "${FROM}/account")"
+    if getent passwd 1000 > /dev/null; then
+        echo "uid 1000 is there already"
+        rm -f /var/lib/wados/provision/account
+    elif [[ ! "${person}" =~ ^[a-z_][a-z0-9_-]{0,31}$ ]]; then
+        echo "account: not a name" >&2
+        failed=1
+    elif useradd --create-home --uid 1000 --user-group --groups wheel,wados --shell /bin/bash \
+        --comment "${person^}" --password "${hash}" "${person}"; then
+        rm -f /var/lib/wados/provision/account
+    else
+        echo "account: useradd failed" >&2
+        failed=1
+    fi
+    unset hash
+fi
+
+put wadd.toml /etc/wados/wadd.toml 0644
+put cloudflared-token /etc/cloudflared/token 0600
+put turn.toml /etc/wados/turn.toml 0600
+put setup.json /var/lib/wados/setup.json 0600
+put live /etc/wados/live 0644
+
+if [[ -d "${FROM}/nm" ]]; then
+    for f in "${FROM}"/nm/*.nmconnection; do
+        [[ -e "${f}" ]] || continue
+        put "nm/${f##*/}" "/etc/NetworkManager/system-connections/${f##*/}" 0600
+    done
+    rmdir "${FROM}/nm" 2> /dev/null || true
+fi
+
+rmdir "${FROM}" 2> /dev/null || {
+    echo "left in ${FROM}: $(ls -A "${FROM}" | tr '\n' ' ')" >&2
+}
+exit "${failed}"

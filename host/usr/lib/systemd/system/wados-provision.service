@@ -1,0 +1,18 @@
+# First boot: what the installer left, put in place (the machine's name, its
+# person, its address and keys). Nothing left, it doesn't run.
+[Unit]
+Description=WadOS first boot
+DefaultDependencies=no
+ConditionDirectoryNotEmpty=/var/lib/wados/provision
+After=local-fs.target systemd-tmpfiles-setup.service systemd-sysusers.service
+Before=NetworkManager.service cloudflared.service tailscaled.service wadd.service wadd.socket greetd.service sysinit.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/wados/provision
+
+[Install]
+WantedBy=sysinit.target

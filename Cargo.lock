@@ -3438,6 +3438,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wad-cloudflare"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "toml",
+ "wiremock",
+]
+
+[[package]]
 name = "wad-config"
 version = "0.1.0"
 dependencies = [
@@ -3733,6 +3746,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "wad-bt",
+ "wad-cloudflare",
  "wad-config",
  "wad-gen",
  "wad-git",
@@ -3758,6 +3772,21 @@ dependencies = [
  "gtk4",
  "indexmap",
  "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "wad-gtk",
+ "wad-model",
+ "wad-proto",
+ "wad-wadd-client",
+]
+
+[[package]]
+name = "wados-installer"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "gtk4",
  "tokio",
  "tracing",
  "tracing-subscriber",

@@ -207,6 +207,10 @@ impl Lock {
 
     /// Locks the screen (nothing if it's locked already).
     pub fn lock(self: &Rc<Self>, app: &gtk::Application) -> Result<(), String> {
+        // WadSpaces Live's person has no password: a lock there couldn't open.
+        if crate::session::is_live() {
+            return Ok(());
+        }
         if self.current.borrow().is_some() {
             return Ok(());
         }

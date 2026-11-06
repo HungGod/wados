@@ -5,6 +5,7 @@
 //! names) is `nav.rs`'s; what it's given is `panel.rs`'s `Ctx`.
 //!
 //!     wados-settings [--page <panel or another name for it>] [--dump]
+//!     wados-settings --setup            Set up WadSpaces (setup.rs)
 //!
 //! One window: a second start (the tray's Tailscale tile, the desktop's
 //! Tailscale settings) brings it up at the page it names (`--page updates`
@@ -16,6 +17,7 @@ mod nav;
 mod panel;
 mod panels;
 mod parts;
+mod setup;
 
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
@@ -55,6 +57,7 @@ button.set-item.on wad-icon { color: var(--accent); }
 struct Args {
     page: Option<String>,
     dump: bool,
+    setup: bool,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -64,6 +67,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
         match x.as_str() {
             "--page" => a.page = Some(it.next().ok_or("--page needs a page (accounts, updates, …)")?.clone()),
             "--dump" => a.dump = true,
+            "--setup" => a.setup = true,
             other => return Err(format!("unknown argument {other:?}")),
         }
     }
@@ -112,6 +116,7 @@ fn main() -> glib::ExitCode {
     let app = gtk::Application::builder().application_id(APP_ID).flags(flags(&argv)).build();
     let ui: Rc<OnceCell<Rc<Ui>>> = Rc::default();
     let u = ui.clone();
+    let setup_window: RefCell<Option<gtk::ApplicationWindow>> = RefCell::default();
     app.connect_command_line(move |app, cmd| {
         let args: Vec<String> = cmd.arguments().iter().map(|a| a.to_string_lossy().into_owned()).collect();
         let a = match parse(&args) {
@@ -121,6 +126,10 @@ fn main() -> glib::ExitCode {
                 return glib::ExitCode::FAILURE;
             }
         };
+        if a.setup {
+            setup::present(app, &setup_window);
+            return glib::ExitCode::SUCCESS;
+        }
         let fresh = u.get().is_none();
         let ui = u.get_or_init(|| Ui::new(app));
         match a.page.as_deref() {

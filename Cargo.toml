@@ -23,6 +23,7 @@ wad-systemd = { path = "crates/wad-systemd" }
 wad-tailscale = { path = "crates/wad-tailscale" }
 wad-github = { path = "crates/wad-github" }
 wad-git = { path = "crates/wad-git" }
+wad-cloudflare = { path = "crates/wad-cloudflare" }
 wad-net = { path = "crates/wad-net" }
 wad-bt = { path = "crates/wad-bt" }
 wad-desk = { path = "crates/wad-desk" }

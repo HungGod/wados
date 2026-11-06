@@ -37,6 +37,14 @@
 #                                apply it, staged again, restarted into, rolled back
 #                                (tools/vm/check-update.sh; the disk from host/build.sh image)
 #
+#   tools/vm.sh stick            .build/vm/stick.qcow2: the disk, made an installer
+#                                stick, with fake keys and a mock of Cloudflare
+#   tools/vm.sh installer-check [--plain] [--no-secrets]
+#                                the stick installs onto a blank NVMe disk (encrypted;
+#                                --plain: not; --no-secrets: no address), which then
+#                                boots alone: its password, its account, first boot,
+#                                Set up (tools/vm/check-install.sh)
+#
 # VM_NAME=a (or --name a, before the command): a second VM of the same disk,
 # with its own layer, firmware variables, ports, QMP and serial log, in
 # .build/vm/a/. Without it, the VM is the one check uses, as before.
@@ -298,7 +306,13 @@ disk() {
     t=$(now)
     ssh_to "${BUILDER_PORT}" root 'cat > /root/wados-vm.pub' < "${KEY}.pub"
     ssh_to "${BUILDER_PORT}" root 'cat > /root/install-disk.sh' < "${HERE}/install-disk.sh"
-    ssh_to "${BUILDER_PORT}" root bash /root/install-disk.sh "10.0.2.2:${reg}" wados-host:latest "${target}" \
+    if [[ -n "${STICK:-}" ]]; then
+        ssh_to "${BUILDER_PORT}" root 'cat > /root/stick-files' < "${ROOT}/host/stick-files"
+        ssh_to "${BUILDER_PORT}" root 'cat > /root/stick-keys.toml' < "${HERE}/stick-keys.toml"
+    else
+        ssh_to "${BUILDER_PORT}" root 'rm -f /root/stick-files /root/stick-keys.toml'
+    fi
+    ssh_to "${BUILDER_PORT}" root env "STICK_API=${STICK_API:-}" bash /root/install-disk.sh "10.0.2.2:${reg}" wados-host:latest "${target}" \
         "${BASE_IMAGE#localhost/}" /root/wados-vm.pub "${extra[@]#localhost/}" < /dev/null
     echo "   ($(($(now) - t)) s)"
 
@@ -308,11 +322,12 @@ disk() {
     registry_stop
     trap - EXIT
     rm -f "${VM}/run.qcow2" "${VM}/vars.fd" "${VM}"/*/run.qcow2 "${VM}"/*/vars.fd
-    mv -f "${VM}/wados-new.qcow2" "${VM}/wados.qcow2"
+    mv -f "${VM}/wados-new.qcow2" "${VM}/${STICK:-wados}.qcow2"
     echo "   ($(($(now) - t)) s)"
     echo
-    echo "${VM}/wados.qcow2: $(du -h "${VM}/wados.qcow2" | cut -f1) on disk, from ${image} ($(($(now) - t0)) s in all)"
-    echo "next: tools/vm.sh boot, or tools/vm.sh check"
+    local made="${VM}/${STICK:-wados}.qcow2"
+    echo "${made}: $(du -h "${made}" | cut -f1) on disk, from ${image} ($(($(now) - t0)) s in all)"
+    echo "next: tools/vm.sh $([[ -n "${STICK:-}" ]] && echo installer-check || echo "boot, or tools/vm.sh check")"
 }
 
 # ------------------------------------------------------------------ boot
@@ -346,8 +361,16 @@ boot() {
     args+=(
         -drive "if=pflash,format=raw,unit=0,readonly=on,file=${CODE}"
         -drive "if=pflash,format=raw,unit=1,file=${RUN}/vars.fd"
-        -drive "if=none,id=disk,format=qcow2,file=${RUN}/run.qcow2,discard=unmap"
+        -drive "if=none,id=disk,format=qcow2,file=${VM_DISK:-${RUN}/run.qcow2},discard=unmap"
         -device virtio-blk-pci,drive=disk,bootindex=1
+    )
+    # VM_DISK=FILE: boots that disk instead of the layer. VM_TARGET=FILE: a second disk, NVMe, for an install to go on
+    # (installer-check, tools/vm/check-install.sh).
+    [[ -n "${VM_TARGET:-}" ]] && args+=(
+        -drive "if=none,id=target,format=qcow2,file=${VM_TARGET},discard=unmap"
+        -device nvme,drive=target,serial=WADVM0001
+    )
+    args+=(
         # A virtio GPU (KMS, no 3D): labwc and the shell draw in software.
         -device "virtio-vga,xres=${xres},yres=${yres}"
         -display none
@@ -432,6 +455,8 @@ cmd="${1:-}"
 [[ $# -gt 0 ]] && shift
 case "${cmd}" in
     disk) disk "$@" ;;
+    stick) STICK=stick STICK_API=http://10.0.2.2:18555 VM_TARGET_IMGREF=ghcr.io/hunggod/wados-host:latest disk "$@" ;;
+    installer-check) [[ -z "${VM_NAME}" ]] || die "installer-check is the unnamed VM's"; . "${HERE}/check-install.sh"; install_check "$@" ;;
     boot) boot "$@" ;;
     ssh) vm_ssh "$@" ;;
     shot) [[ $# -eq 1 ]] || die "shot FILE"; qmp shot "$1" ;;

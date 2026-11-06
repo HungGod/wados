@@ -85,6 +85,9 @@ pub struct AppState {
     pub bluetooth: Arc<dyn crate::api_phase8::Bluetooth>,
     pub updates: Arc<dyn crate::api_phase8::Updates>,
     pub storage: Arc<dyn crate::api_phase8::Storage>,
+    /// The installer stick's install, and Set up WadSpaces ([`crate::api_phase9`]).
+    pub install: Arc<dyn crate::api_phase9::Installer>,
+    pub setup: Arc<crate::setup::SetupState>,
 }
 
 /// An ApiError as an HTTP response.
@@ -160,6 +163,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(crate::api_phase6::routes())
         .merge(crate::api_phase7::routes())
         .merge(crate::api_phase8::routes())
+        .merge(crate::api_phase9::routes())
         .layer(middleware::from_fn_with_state(app.clone(), check_peer))
         .with_state(app)
 }

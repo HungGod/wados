@@ -10,8 +10,11 @@
 #   host/build.sh push               the images built, to ghcr.io/hunggod/wados-host[-nvidia]
 #                                    (:latest and a dated tag). Log in first:
 #                                    podman login ghcr.io
-#   host/build.sh install | update | installer
-#                                    phase 9 (the installer stick)
+#   host/build.sh installer /dev/sdX | --image FILE
+#                                    the installer stick (sudo): the image installed
+#                                    on it, with the secrets folder's cloudflare.toml
+#                                    on it and nowhere else. Without that file,
+#                                    machines it installs have no public address
 #
 #   --variant host|nvidia[,...]      which image (host unless told); qcow2, iso
 #                                    and raw take one
@@ -36,7 +39,8 @@
 # key, from ${WADOS_SECRETS:-~/.config/wados/secrets}/mok/ (wadspaces.priv and
 # wadspaces.der, or one .priv and one .der): it's handed to podman as build
 # secrets, which only the stage that signs the modules sees. Without it the
-# nvidia variant is skipped. Nothing else here reads that folder.
+# nvidia variant is skipped. The stick's `installer` reads cloudflare.toml
+# from the same folder, onto the stick only. Nothing else here reads that folder.
 #
 # The image's version (org.opencontainers.image.version, which bootc and the
 # Updates page show): 44.<the day, UTC>.<hour and minute>, or WADOS_VERSION.
@@ -66,6 +70,11 @@ TARGET="${1:-}"
 shift
 VARIANTS=host
 TEST_KEY=false
+STICK_ARGS=()
+if [[ "${TARGET}" == installer ]]; then
+    STICK_ARGS=("$@")
+    set --
+fi
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --variant) VARIANTS="${2:?--variant takes host or nvidia}"; shift 2 ;;
@@ -104,7 +113,7 @@ build_bins() {
     podman build -q -t "${BUILDER}" "${HERE}/builder" > /dev/null
     mkdir -p "${BUILD}/cargo/registry" "${BUILD}/cargo/git" "${BUILD}/target"
     rm -rf "${BUILD}/bin" "${BUILD}/debug" "${BUILD}/share" && mkdir -p "${BUILD}/bin" "${BUILD}/debug"
-    log "building wadd, wados-shell, wadsctl, wadspaces-clipboard, wadbrowser, wados-settings and wados-files (cargo -j${JOBS}, in the builder)"
+    log "building wadd, wados-shell, wadsctl, wadspaces-clipboard, wadbrowser, wados-settings, wados-files and wados-installer (cargo -j${JOBS}, in the builder)"
     podman run --rm --security-opt label=disable \
         -v "${ROOT}:/src:ro" \
         -v "${BUILD}/cargo/registry:/usr/local/cargo/registry" \
@@ -114,8 +123,8 @@ build_bins() {
         -w /src "${BUILDER}" \
         bash -c 'set -eo pipefail
             cargo build --release --locked -j "$0" -p wadd -p wados-shell -p wadsctl -p wad-clip -p wadbrowser \
-                -p wados-settings -p wados-files
-            for b in wadd wados-shell wadsctl wadspaces-clipboard wadbrowser wados-settings wados-files; do
+                -p wados-settings -p wados-files -p wados-installer
+            for b in wadd wados-shell wadsctl wadspaces-clipboard wadbrowser wados-settings wados-files wados-installer; do
                 objcopy --only-keep-debug "/target/release/${b}" "/debug/${b}.debug"
                 install -s -m 755 "/target/release/${b}" "/out/${b}"
             done' "${JOBS}"
@@ -331,6 +340,56 @@ push() {
     done
 }
 
+# ------------------------------------------------------------ the stick
+# The image installed on the stick with bootc (a stick is a machine that
+# boots to WadSpaces Live), then host/stick-files. No ISO: an install copies
+# the stick's own system to the disk.
+installer() {
+    local where="${1:-}" file="${2:-}" image="${IMAGE_BASE}:latest" dev
+    local target="ghcr.io/hunggod/wados-host:latest"
+    podman image exists "${image}" || die "${image} isn't built: host/build.sh image"
+    case "${where}" in
+        --image) [[ -n "${file}" ]] || die "--image FILE" 2 ;;
+        /dev/*) [[ -b "${where}" ]] || die "${where} isn't a disk" 2 ;;
+        *) die "installer /dev/sdX | --image FILE" 2 ;;
+    esac
+    local keys="${SECRETS}/cloudflare.toml"
+    if [[ -f "${keys}" ]]; then
+        log "machines will get a public address: ${keys} goes on the stick"
+    else
+        log "no ${keys}: machines this installs have no public address"
+        keys=""
+    fi
+    sudo -v
+    log "copying ${image} into root's container storage"
+    podman image scp "${USER}@localhost::${image}" root@localhost::
+    local bootc=(sudo podman run --rm --privileged --pid=host --security-opt label=type:unconfined_t
+        -v /dev:/dev -v /var/lib/containers:/var/lib/containers)
+    local args=(--wipe --generic-image --skip-fetch-check --target-imgref "${target}")
+    if [[ "${where}" == --image ]]; then
+        truncate -s 32G "${file}"
+        file="$(realpath "${file}")"
+        dev="$(sudo losetup -fP --show "${file}")"
+        trap 'sudo losetup -d "${dev}" 2> /dev/null || true' EXIT
+    else
+        dev="${where}"
+        log "${dev} is erased: $(lsblk -ndo SIZE,MODEL "${dev}")"
+    fi
+    "${bootc[@]}" "${image}" bootc install to-disk "${args[@]}" "${dev}"
+    sudo udevadm settle
+    local mnt root var
+    mnt="$(mktemp -d)"
+    root="$(lsblk -nrpo NAME,PARTLABEL,LABEL "${dev}" | awk '$2 == "root" || $3 == "root" { print $1; exit }')"
+    [[ -n "${root}" ]] || die "no root partition on ${dev}"
+    sudo mount "${root}" "${mnt}"
+    var="$(sudo find "${mnt}/ostree/deploy" -mindepth 2 -maxdepth 2 -name var -type d | head -1)"
+    sudo "${HERE}/stick-files" "${var}" "${target}" "${keys}"
+    sudo umount "${mnt}"
+    rmdir "${mnt}"
+    sync
+    log "the stick is ready"
+}
+
 case "${TARGET}" in
     bins) build_bins ;;
     image)
@@ -346,7 +405,6 @@ case "${TARGET}" in
         disk_image
         ;;
     push) push ;;
-    install|update|installer)
-        die "${TARGET} comes with the installer stick (phase 9). For a VM: host/build.sh qcow2" 2 ;;
+    installer) installer "${STICK_ARGS[@]}" ;;
     *) usage; exit 2 ;;
 esac

@@ -46,8 +46,25 @@ enum Cmd {
         #[arg(long)]
         sample: bool,
     },
+    /// A machine's public address, on the build computer, with the secrets.
+    Tunnel {
+        #[command(subcommand)]
+        cmd: TunnelCmd,
+    },
     /// Print the version.
     Version,
+}
+
+#[derive(Subcommand)]
+enum TunnelCmd {
+    /// Retires a machine: its DNS record and tunnel go.
+    Remove {
+        /// The machine's id (`<id>.wadspaces.com`).
+        id: String,
+        /// The secrets folder's cloudflare.toml.
+        #[arg(long)]
+        secrets: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
@@ -57,6 +74,36 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Cmd::Serve { user, config, socket, state_dir, sample } => serve(user, config, socket, state_dir, sample),
+        Cmd::Tunnel { cmd: TunnelCmd::Remove { id, secrets } } => tunnel_remove(&id, &secrets),
+    }
+}
+
+fn tunnel_remove(id: &str, secrets: &std::path::Path) -> ExitCode {
+    let keys = std::fs::read_to_string(secrets)
+        .map_err(|e| format!("{}: {e}", secrets.display()))
+        .and_then(|t| wad_cloudflare::Keys::parse(&t).map_err(|e| e.to_string()));
+    let keys = match keys {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("wadd: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let rt = tokio::runtime::Builder::new_current_thread().enable_all().build();
+    let cf = wad_cloudflare::Cloudflare::new(wad_cloudflare::API, "wadspaces.com", &keys);
+    match rt.map_err(|e| e.to_string()).and_then(|rt| rt.block_on(cf.remove(id)).map_err(|e| e.to_string())) {
+        Ok(true) => {
+            println!("{id}: its record and tunnel are gone");
+            ExitCode::SUCCESS
+        }
+        Ok(false) => {
+            println!("{id}: it has no tunnel (its record, if it had one, is gone)");
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("wadd: {e}");
+            ExitCode::FAILURE
+        }
     }
 }
 

@@ -28,11 +28,21 @@ const NAME_W: i32 = ICON_W as i32 - 8;
 /// What an icon shows.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Item {
-    Space { ws: Box<Wadspace>, state: TileState },
-    Folder { tag: Tag, spaces: Vec<Wadspace> },
+    Space {
+        ws: Box<Wadspace>,
+        state: TileState,
+    },
+    Folder {
+        tag: Tag,
+        spaces: Vec<Wadspace>,
+    },
     File(Entry),
     Machines,
-    Trash { full: bool },
+    /// WadSpaces Live's: opens the installer.
+    Install,
+    Trash {
+        full: bool,
+    },
 }
 
 impl Item {
@@ -42,6 +52,7 @@ impl Item {
             Item::Folder { tag, .. } => tag.name.clone(),
             Item::File(e) => e.display.clone(),
             Item::Machines => "Machines".into(),
+            Item::Install => "Install".into(),
             Item::Trash { .. } => "Trash".into(),
         }
     }
@@ -141,6 +152,10 @@ impl Cell {
             Item::Machines => {
                 self.root.add_css_class("tile");
                 self.face.append(&sys_tile("machines", "server", 0.56, false));
+            }
+            Item::Install => {
+                self.root.add_css_class("tile");
+                self.face.append(&sys_tile("machines", "hard-drive", 0.56, false));
             }
             Item::Trash { full } => {
                 self.root.add_css_class("tile");

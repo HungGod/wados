@@ -1,0 +1,138 @@
+//! The installer stick and first boot (phase 9).
+//!
+//! | Route | |
+//! |---|---|
+//! | `GET /v1/install` | [`Install`]; 404 on anything but a stick |
+//! | `POST /v1/install` | [`InstallRequest`] → an Install job |
+//! | `GET /v1/setup` | [`Setup`] |
+//! | `PUT /v1/setup` | [`Setup`] → [`Setup`] |
+//! | `POST /v1/setup/design` | [`SetupDesign`] → [`Setup`] (done) |
+
+use std::fmt;
+
+use serde::{Deserialize, Serialize};
+
+/// What an install does, in order: the stage ids and their words. The
+/// first is only there when the stick has Cloudflare's keys ([`PROVISION`]).
+pub const STAGES: [(&str, &str); 7] = [
+    ("checking", "Checking the disk"),
+    ("image", "Preparing the system image"),
+    ("disk", "Erasing the disk"),
+    ("install", "Installing WadSpaces (a few minutes)"),
+    ("settings", "Writing this computer's settings and your account"),
+    ("wifi", "Copying the stick's Wi-Fi networks"),
+    ("finish", "Finishing"),
+];
+pub const PROVISION: (&str, &str) = ("address", "Setting up this computer's address");
+/// The disk's stage, encrypting.
+pub const ENCRYPTING: &str = "Erasing the disk and encrypting it";
+
+/// A disk this could install on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallDisk {
+    /// `/dev/disk/by-id/…`, which stays that disk.
+    pub by_id: String,
+    /// `nvme0n1`.
+    pub name: String,
+    pub model: String,
+    pub serial: String,
+    /// Bytes.
+    pub size: u64,
+    /// A USB disk: the machine would need it plugged in.
+    pub removable: bool,
+    /// What's on it now, or nothing.
+    pub holds: Option<String>,
+}
+
+/// `GET /v1/install`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Install {
+    pub disks: Vec<InstallDisk>,
+    /// The stick has Cloudflare's keys: this machine gets a public address.
+    pub public: bool,
+    /// The install under way, or the last.
+    pub job: Option<String>,
+}
+
+/// `POST /v1/install`. Its passwords never go in a log: they're not shown by `Debug`.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallRequest {
+    /// The computer's name, and its hostname and id.
+    pub name: String,
+    pub username: String,
+    pub password: String,
+    pub by_id: String,
+    pub size: u64,
+    pub serial: String,
+    /// The disk's password; none leaves it unencrypted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk_password: Option<String>,
+}
+
+impl fmt::Debug for InstallRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InstallRequest")
+            .field("name", &self.name)
+            .field("username", &self.username)
+            .field("by_id", &self.by_id)
+            .field("encrypted", &self.disk_password.is_some())
+            .finish_non_exhaustive()
+    }
+}
+
+/// Where Set up WadSpaces is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SetupStep {
+    Welcome,
+    Wifi,
+    Accounts,
+    Design,
+    /// Nothing to do: every machine the installer didn't make, too.
+    #[default]
+    Done,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Setup {
+    pub step: SetupStep,
+}
+
+/// `POST /v1/setup/design`: the last step's Install or Skip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetupDesign {
+    /// Add the WadOS wadspace.
+    pub starter: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_requests_passwords_never_show_in_debug() {
+        let r = InstallRequest {
+            name: "studio".into(),
+            username: "sam".into(),
+            password: "the-account-password".into(),
+            by_id: "/dev/disk/by-id/x".into(),
+            size: 1,
+            serial: "s".into(),
+            disk_password: Some("the-disk-password".into()),
+        };
+        let s = format!("{r:?}");
+        assert!(!s.contains("password\":") && !s.contains("the-account-password") && !s.contains("the-disk-password"));
+        assert!(s.contains("encrypted: true"));
+    }
+
+    #[test]
+    fn the_wire_names_are_the_routes() {
+        assert_eq!(serde_json::to_string(&Setup { step: SetupStep::Wifi }).unwrap(), r#"{"step":"wifi"}"#);
+        assert_eq!(serde_json::from_str::<Setup>(r#"{"step":"design"}"#).unwrap().step, SetupStep::Design);
+    }
+}

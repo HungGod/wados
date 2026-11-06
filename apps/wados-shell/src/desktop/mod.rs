@@ -308,6 +308,9 @@ impl Desktop {
         for f in &s.files {
             out.push((format!("file:{}", f.name), Item::File(f.clone())));
         }
+        if crate::session::is_live() {
+            out.push(("install".into(), Item::Install));
+        }
         out.push(("machines".into(), Item::Machines));
         out.push(("trash".into(), Item::Trash { full: s.trash_files > 0 || trashed }));
         out
@@ -1380,6 +1383,8 @@ impl Desktop {
             }
         } else if key == "trash" {
             crate::peers::open_app(&self.shell, &["wados-files", "--trash"]);
+        } else if key == "install" {
+            crate::peers::open_app(&self.shell, &["wados-installer"]);
         } else if key == "machines" {
             // Files, at Machines: my other machines on the tailnet, their homes and wadspaces.
             crate::peers::open_app(&self.shell, &["wados-files", "--machines"]);

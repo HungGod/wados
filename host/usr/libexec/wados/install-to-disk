@@ -1,0 +1,162 @@
+#!/bin/bash
+# WadOS onto a disk: the installer stick's install, run by wadd as a unit of
+# its own (apps/wadd/src/install.rs), outside wadd's sandbox.
+#
+#   install-to-disk JOB
+#
+# JOB (0700, on tmpfs):
+#   request     KEY=VALUE lines: DISK (a /dev/disk/by-id link), SIZE (bytes),
+#               SERIAL, TARGET (the image the machine follows), ENCRYPT (0|1)
+#   passphrase  the disk password, with no newline (ENCRYPT=1): deleted as
+#               soon as the disk has it
+#   provision/  what first boot puts in place (host/usr/libexec/wados/provision)
+#   log         what happened: `STEP n/N: …` lines are the job's stages
+#   result      `ok`, or `failed: why`
+#
+# Why not `bootc install to-disk`: its encryption is TPM only, and a disk
+# password is typed at each start. So this partitions the disk itself, as
+# to-disk would (BIOS boot, EFI, /boot, root), encrypts root with LUKS2, and
+# calls `bootc install to-filesystem`. With ENCRYPT=0 only the LUKS step goes.
+# The disk's own firmware boot entry is written (no --generic-image).
+set -euo pipefail
+
+JOB="${1:?install-to-disk JOB}"
+[[ -d "${JOB}" ]] || { echo "no job folder ${JOB}" >&2; exit 2; }
+exec > >(tee -a "${JOB}/log") 2>&1
+
+MNT=/run/wados/install-target
+IMAGE=localhost/wados-install:latest
+MAPPER=""
+STEPS=7
+n=0
+
+step() {
+    n=$((n + 1))
+    echo "STEP ${n}/${STEPS}: $*"
+}
+
+request() { sed -n "s/^$1=//p" "${JOB}/request" | head -1; }
+
+finish() {
+    local code=$?
+    trap - EXIT
+    rm -f "${JOB:?}/passphrase"
+    umount -R "${MNT}" 2> /dev/null || true
+    [[ -n "${MAPPER}" ]] && cryptsetup close "${MAPPER}" 2> /dev/null || true
+    # The tunnel's token, the TURN key and the password's hash are on the disk now.
+    rm -rf "${JOB:?}/provision"
+    if [[ "${code}" == 0 ]]; then
+        echo ok > "${JOB}/result"
+    elif [[ ! -s "${JOB}/result" ]]; then
+        echo "failed: the install stopped at step ${n} of ${STEPS}" > "${JOB}/result"
+    fi
+    exit "${code}"
+}
+trap finish EXIT
+
+fail() {
+    echo "failed: $*" | tee "${JOB}/result"
+    exit 1
+}
+
+# The partition with this number, on the disk.
+partition() {
+    local p
+    for p in "/sys/class/block/${DEV##*/}"/*/partition; do
+        [[ "$(cat "${p}")" == "$1" ]] && { p="${p%/partition}"; echo "/dev/${p##*/}"; return 0; }
+    done
+    return 1
+}
+
+step "Checking the disk"
+LINK="$(request DISK)" SIZE="$(request SIZE)" SERIAL="$(request SERIAL)"
+TARGET="$(request TARGET)" ENCRYPT="$(request ENCRYPT)"
+[[ -n "${TARGET}" ]] || fail "the request has no image to follow"
+[[ "${LINK}" == /dev/disk/by-id/* ]] || fail "the disk isn't named by its id"
+DEV="$(readlink -f "${LINK}")"
+[[ -b "${DEV}" && "$(lsblk -ndo TYPE "${DEV}")" == disk ]] || fail "${LINK} isn't a disk"
+STICK="$(lsblk -ndo PKNAME "$(findmnt -no SOURCE /sysroot)" 2> /dev/null || true)"
+[[ "${DEV##*/}" != "${STICK}" ]] || fail "that's the stick itself"
+[[ "$(lsblk -bndo SIZE "${DEV}")" == "${SIZE}" ]] || fail "that disk changed: its size isn't the one chosen"
+[[ "$(lsblk -ndo SERIAL "${DEV}" | sed 's/ *$//')" == "${SERIAL}" ]] || fail "that disk changed: its serial isn't the one chosen"
+if [[ "${ENCRYPT}" == 1 ]]; then
+    [[ -s "${JOB}/passphrase" ]] || fail "there's no disk password"
+fi
+# Nothing of it may be in use.
+swapoff --all 2> /dev/null || true
+vgchange -an 2> /dev/null || true
+for md in /dev/md[0-9]* /dev/md/*; do [[ -b "${md}" ]] && mdadm --stop "${md}" 2> /dev/null || true; done
+if lsblk -nrpo MOUNTPOINTS "${DEV}" | grep -q .; then
+    fail "something on that disk is mounted"
+fi
+echo "${DEV}: $(numfmt --to=iec "${SIZE}")"
+
+step "Preparing the system image"
+bootc image copy-to-storage --target "${IMAGE}"
+
+step "Erasing the disk$([[ "${ENCRYPT}" == 1 ]] && echo " and encrypting it")"
+wipefs -a "${DEV}"
+sfdisk --quiet --wipe always --wipe-partitions always "${DEV}" << 'TABLE'
+label: gpt
+size=1MiB, type=21686148-6449-6E6F-744E-656564454649, name="BIOS-BOOT"
+size=512MiB, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="EFI-SYSTEM"
+size=1GiB, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="boot"
+type=4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709, name="root"
+TABLE
+partprobe "${DEV}" 2> /dev/null || blockdev --rereadpt "${DEV}" || true
+udevadm settle
+EFI="$(partition 2)" BOOT="$(partition 3)" ROOT="$(partition 4)"
+ROOTFS="${ROOT}"
+# The boot's messages off the screen, so the disk's password prompt stands alone.
+KARGS=(--karg quiet --karg loglevel=3 --karg rd.udev.log_level=3)
+if [[ "${ENCRYPT}" == 1 ]]; then
+    cryptsetup luksFormat --batch-mode --type luks2 --key-file "${JOB}/passphrase" "${ROOT}"
+    LUKS="$(cryptsetup luksUUID "${ROOT}")"
+    MAPPER=wadspaces-install
+    cryptsetup open --key-file "${JOB}/passphrase" "${ROOT}" "${MAPPER}"
+    rm -f "${JOB:?}/passphrase"
+    ROOTFS="/dev/mapper/${MAPPER}"
+    # Named, so the boot's prompt reads "disk root (wadspaces)", not a UUID.
+    KARGS+=(--karg "rd.luks.name=${LUKS}=wadspaces")
+fi
+mkfs.vfat -F 32 -n EFI-SYSTEM "${EFI}" > /dev/null
+mkfs.xfs -q -f -L boot "${BOOT}"
+mkfs.xfs -q -f -L root "${ROOTFS}"
+mkdir -p "${MNT}"
+mount "${ROOTFS}" "${MNT}"
+mkdir -p "${MNT}/boot"
+mount "${BOOT}" "${MNT}/boot"
+mkdir -p "${MNT}/boot/efi"
+mount "${EFI}" "${MNT}/boot/efi"
+
+step "Installing WadSpaces (a few minutes)"
+podman run --rm --privileged --pid=host --security-opt label=type:unconfined_t \
+    -v /dev:/dev -v /var/lib/containers:/var/lib/containers \
+    -v /sys/firmware/efi/efivars:/sys/firmware/efi/efivars \
+    -v "${MNT}:/target" \
+    "${IMAGE}" bootc install to-filesystem --skip-fetch-check --target-imgref "${TARGET}" \
+    --root-mount-spec "UUID=$(blkid -s UUID -o value "${ROOTFS}")" \
+    --boot-mount-spec "UUID=$(blkid -s UUID -o value "${BOOT}")" \
+    "${KARGS[@]}" /target
+
+step "Writing this computer's settings and your account"
+# bootc leaves it read-only: mounted again, to write.
+umount -R "${MNT}"
+mount "${ROOTFS}" "${MNT}"
+VAR="$(find "${MNT}/ostree/deploy" -mindepth 2 -maxdepth 2 -name var -type d | head -1)"
+[[ -n "${VAR}" ]] || fail "the install left no /var"
+install -d -m 0711 "${VAR}/lib/wados"
+install -d -m 0700 "${VAR}/lib/wados/provision"
+cp -a "${JOB}/provision/." "${VAR}/lib/wados/provision/"
+
+step "Copying the stick's Wi-Fi networks"
+shopt -s nullglob
+for f in /etc/NetworkManager/system-connections/*.nmconnection; do
+    install -D -m 0600 "${f}" "${VAR}/lib/wados/provision/nm/${f##*/}"
+done
+shopt -u nullglob
+
+step "Finishing"
+sync
+podman rmi -f "${IMAGE}" > /dev/null 2>&1 || true
+echo "WadSpaces is installed"

@@ -162,13 +162,12 @@ always wins: opening a streamed wadspace on the screen ends its stream.
   no key in any log); the lifecycle on the fake backend (start, move, idle, the person at the machine, adoption,
   teardown, TURN against a mock, peers, secure).
 - **`images/stream/try-stream.sh`:** the sidecar and a wadspace on the laptop, including a move both ways.
-- **Real TURN isn't tested yet.** The user chose to skip it for now; the checks run with `--no-turn`. The relay
-  path, and the phone test on mobile data (`tools/vm.sh stream-phone`), wait for the user's go-ahead to move the TURN
-  pair into a test VM.
+- **Real TURN has no test of its own.** The user decided it doesn't need one; the checks run with `--no-turn`. The
+  phone test comes after the Android app is installed on the phone (phase 13).
 
 ## Not yet
 
-- **Real TURN:** the relay path and the phone test.
+- **The phone test:** after the Android app is installed (phase 13).
 - **Private streams over the real tailnet's HTTPS** (`tailscale serve --https` with Tailscale's certificates).
 - **Secure streams:** public, GPU, and the machine's clipboard.
 - **GPU encoding:** H.264 falls back to x264 in software. Fedora's Intel media driver lacks the encoder (RPM Fusion's

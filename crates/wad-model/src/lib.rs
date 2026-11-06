@@ -95,6 +95,7 @@ pub mod edit;
 pub mod folders;
 pub mod games;
 pub mod groups;
+pub mod install_names;
 pub mod look;
 pub mod names;
 pub mod open_with;

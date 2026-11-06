@@ -23,7 +23,7 @@ StateDirectoryMode=0711
 # Kept when wadd restarts: the wadspaces running have them mounted.
 # /run/wados/bootc: what bootc says, written there by the units wadd has
 # systemd run it in (apps/wadd/src/updates.rs).
-RuntimeDirectory=wados/screen wados/bootc
+RuntimeDirectory=wados/screen wados/bootc wados/install
 RuntimeDirectoryMode=0755
 RuntimeDirectoryPreserve=yes
 # Everything else read-only. wadd writes the wadspaces' units in

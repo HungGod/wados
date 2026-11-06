@@ -1,0 +1,48 @@
+#!/bin/bash
+# What makes an installed host image a stick, written into its /var:
+#
+#   host/stick-files VAR TARGET [CLOUDFLARE_TOML [API]]
+#
+# VAR: the stick's /var. TARGET: the image machines follow. CLOUDFLARE_TOML:
+# the keys, the stick's alone (without it, machines have no public address).
+# API: a mock of Cloudflare's API, for tests. Used by host/build.sh installer
+# and tools/vm.sh stick, as root.
+set -euo pipefail
+VAR="${1:?stick-files VAR TARGET [CLOUDFLARE_TOML [API]]}"
+TARGET="${2:?a target image}"
+KEYS="${3:-}"
+API="${4:-}"
+
+install -d -m 0711 "${VAR}/lib/wados"
+install -d -m 0700 "${VAR}/lib/wados/installer" "${VAR}/lib/wados/provision"
+{
+    echo '[installer]'
+    echo "target = \"${TARGET}\""
+    [[ -n "${API}" ]] && echo "api = \"${API}\""
+} > "${VAR}/lib/wados/installer/installer.toml"
+chmod 0600 "${VAR}/lib/wados/installer/installer.toml"
+if [[ -n "${KEYS}" ]]; then
+    # Only the two sections machines need: never the file as it is.
+    python3 - "${KEYS}" > "${VAR}/lib/wados/installer/cloudflare.toml.new" << 'PY'
+import json, sys, tomllib
+with open(sys.argv[1], "rb") as f:
+    cf = tomllib.load(f)["cloudflare"]
+tunnel = cf["tunnel"]
+print("[cloudflare.tunnel]")
+for k in ("dns_edit_api_token", "tunnel_creator_api_token"):
+    print(f"{k} = {json.dumps(tunnel[k])}")
+turn = cf.get("turn")
+if turn:
+    print("[cloudflare.turn]")
+    for k in ("token_id", "api_token"):
+        print(f"{k} = {json.dumps(turn[k])}")
+PY
+    chmod 0600 "${VAR}/lib/wados/installer/cloudflare.toml.new"
+    mv "${VAR}/lib/wados/installer/cloudflare.toml.new" "${VAR}/lib/wados/installer/cloudflare.toml"
+fi
+# WadSpaces Live: its first boot makes `live` (locked: nobody signs in as it)
+# and says it's the stick. wados-provision.service does the rest, as on a machine.
+echo wadspaces-live > "${VAR}/lib/wados/provision/hostname"
+printf 'live\n!\n' > "${VAR}/lib/wados/provision/account"
+: > "${VAR}/lib/wados/provision/live"
+chmod 0600 "${VAR}/lib/wados/provision/account"

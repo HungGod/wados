@@ -75,7 +75,18 @@ pub fn is_machine() -> bool {
 }
 
 fn machine_from(v: Option<&str>) -> bool {
-    v == Some("machine")
+    matches!(v, Some("machine" | "live"))
+}
+
+/// The installer stick's session, WadSpaces Live: there's no lock (its
+/// person has no password), the installer opens, and the desktop has its tile.
+pub fn is_live() -> bool {
+    static LIVE: OnceLock<bool> = OnceLock::new();
+    *LIVE.get_or_init(|| live_from(std::env::var("WADOS_SESSION").ok().as_deref()))
+}
+
+fn live_from(v: Option<&str>) -> bool {
+    v == Some("live")
 }
 
 /// What a power item's tooltip says outside the machine's session.

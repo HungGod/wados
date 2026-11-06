@@ -48,8 +48,14 @@ impl Docs {
     /// The library as saved; the first time (none yet), the WadOS wadspace
     /// every machine starts with.
     pub fn open(store: Store, bus: Bus, machine: &str) -> std::io::Result<Self> {
+        Self::open_with(store, bus, machine, true)
+    }
+
+    /// As [`Self::open`]; `starter: false` leaves a new library empty (Set
+    /// up offers WadOS instead, and the installer stick has no wadspaces).
+    pub fn open_with(store: Store, bus: Bus, machine: &str, starter: bool) -> std::io::Result<Self> {
         let mut lib = store.load()?;
-        if lib.wadspaces.is_empty() && lib.seq == 0 {
+        if starter && lib.wadspaces.is_empty() && lib.seq == 0 {
             let w = wad_model::starter::starter_wadspace(machine, now_ms());
             store.save_wadspace(&w)?;
             lib.wadspaces.push(w);
@@ -57,6 +63,17 @@ impl Docs {
             tracing::info!("a new library, with WadOS in it");
         }
         Ok(Self { lib: Mutex::new(lib), undos: Mutex::default(), store, bus, machine: machine.to_string() })
+    }
+
+    /// Set up's WadOS wadspace, if this machine hasn't one.
+    pub fn add_starter(&self) -> Result<(), ApiError> {
+        let mut lib = self.lib.lock().unwrap();
+        let mut next = lib.clone();
+        if wad_model::starter::add_starter(&mut next, &Ctx::new(now_ms(), self.machine.clone())) {
+            let id = wad_model::starter::STARTER_ID.to_string();
+            self.commit(&mut lib, next, std::slice::from_ref(&id))?;
+        }
+        Ok(())
     }
 
     pub fn snapshot(&self) -> Library {

@@ -128,6 +128,7 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     peers::start(&shell);
     signin::start(&shell);
     let session = session::Session::new(&shell, &lock);
+    first_run(&shell, &lock);
     // The lock screen's notifications: the unread ones, unless Settings turned them off.
     let s = shell.clone();
     lock.set_notes(move || {
@@ -259,4 +260,35 @@ fn handle_wm(shell: &Rc<Shell>, words: &[&str]) -> String {
     };
     wm.send(cmd);
     "ok".into()
+}
+
+/// What opens by itself: on WadSpaces Live, the installer; on a new machine,
+/// once it's unlocked, Set up WadSpaces, until that's done.
+fn first_run(shell: &Rc<Shell>, lock: &Rc<lock::Lock>) {
+    if session::is_live() {
+        // Once the desktop's surfaces have settled: mapped after the window,
+        // they'd take the keyboard from it.
+        let s = shell.clone();
+        glib::timeout_add_seconds_local_once(2, move || peers::open_app(&s, &["wados-installer"]));
+        return;
+    }
+    if !session::is_machine() {
+        return;
+    }
+    let (s, lock) = (shell.clone(), lock.clone());
+    glib::timeout_add_seconds_local(1, move || {
+        if lock.is_locked() {
+            return glib::ControlFlow::Continue;
+        }
+        let shell = s.clone();
+        s.link.call(
+            |w| async move { w.setup().await },
+            move |r| {
+                if r.is_ok_and(|x| x.step != wad_proto::SetupStep::Done) {
+                    peers::open_app(&shell, &["wados-settings", "--setup"]);
+                }
+            },
+        );
+        glib::ControlFlow::Break
+    });
 }

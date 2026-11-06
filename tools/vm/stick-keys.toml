@@ -1,0 +1,9 @@
+# The test stick's Cloudflare keys: fake, for tools/vm/cloudflare-mock.py.
+# check-install.sh looks for them on the installed disk.
+[cloudflare.tunnel]
+dns_edit_api_token = "fake-dns-key"
+tunnel_creator_api_token = "fake-tunnel-key"
+
+[cloudflare.turn]
+token_id = "fake-turn-id"
+api_token = "fake-turn-key"
