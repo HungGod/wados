@@ -63,6 +63,11 @@ jobs:
     steps:
       - name: Tools
         run: dnf -y -q install git-core skopeo tar gawk
+      # Kernel overlay, not this image's fuse-overlayfs, which can't rename
+      # SELinux's store: semodule fails, in the Containerfile and in RPMs'
+      # scriptlets. The job is privileged, and /mnt is a real filesystem.
+      - name: Storage
+        run: sed -i -e '/^mount_program/d' -e '/^mountopt/d' /etc/containers/storage.conf
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
