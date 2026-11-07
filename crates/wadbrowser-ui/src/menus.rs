@@ -5,7 +5,7 @@
 
 use std::rc::Rc;
 
-use crate::data::{MODES, Mode, Profile, WebKey, bare_host, is_cactus, mode_id};
+use crate::data::{MODES, Mode, Profile, WebKey, bare_host, is_own_page, mode_id};
 
 pub type Run = Rc<dyn Fn()>;
 
@@ -164,7 +164,7 @@ impl Default for PageActions {
 /// Right-click on a page.
 pub fn page_menu(m: &PageMenu, a: &PageActions) -> Vec<Entry> {
     let host = bare_host(&m.url);
-    let not_web = is_cactus(&m.url);
+    let not_web = is_own_page(&m.url);
     let keys: Vec<Entry> = m
         .web_keys
         .iter()
@@ -242,7 +242,7 @@ pub struct MainActions {
     pub new_profile: Run,
     pub set_mode: Rc<dyn Fn(Mode)>,
     pub set_block_social: Rc<dyn Fn(bool)>,
-    /// Opens one of the browser's pages (`cactus://history`).
+    /// Opens one of the browser's pages (`wadbrowser://history`).
     pub open: Rc<dyn Fn(&str)>,
 }
 
@@ -292,9 +292,9 @@ pub fn main_menu(m: &MainMenu, a: &MainActions) -> Vec<Entry> {
             .entry(),
         Item::new("menu-block-social", "Block all social media", "shield-ban", social).checked(m.block_social).entry(),
         Entry::Sep,
-        Item::new("menu-history", "History", "clock", open("cactus://history")).entry(),
-        Item::new("menu-privacy", "Privacy", "shield-check", open("cactus://privacy")).entry(),
-        Item::new("menu-settings", "Settings", "settings", open("cactus://settings")).entry(),
+        Item::new("menu-history", "History", "clock", open("wadbrowser://history")).entry(),
+        Item::new("menu-privacy", "Privacy", "shield-check", open("wadbrowser://privacy")).entry(),
+        Item::new("menu-settings", "Settings", "settings", open("wadbrowser://settings")).entry(),
     ]
 }
 
@@ -435,7 +435,7 @@ mod tests {
 
     #[test]
     fn cactuss_own_pages_cant_become_apps_or_keep_sign_ins() {
-        let items = page("cactus://privacy", keys());
+        let items = page("wadbrowser://privacy", keys());
         assert_eq!(find(&items, "page-create-app").unwrap().disabled.as_deref(), Some("Only on web pages"));
         assert_eq!(find(&items, "page-signins").unwrap().disabled.as_deref(), Some("Only on web pages"));
         assert!(find(&items, "page-reload").unwrap().enabled());
@@ -460,7 +460,7 @@ mod tests {
             assert_eq!(find(signins, id).unwrap().disabled.as_deref(), Some("Sign-ins change on the machine"), "{id}");
         }
         // A page of the browser's own says that first.
-        let own = page_menu(&PageMenu { url: "cactus://newtab".into(), ..m }, &PageActions::default());
+        let own = page_menu(&PageMenu { url: "wadbrowser://newtab".into(), ..m }, &PageActions::default());
         assert_eq!(find(&own, "page-create-app").unwrap().disabled.as_deref(), Some("Only on web pages"));
     }
 
@@ -519,7 +519,7 @@ mod tests {
         for id in ["menu-history", "menu-privacy", "menu-settings"] {
             (find(&items, id).unwrap().run.as_ref().unwrap())();
         }
-        assert_eq!(*opened.borrow(), ["cactus://history", "cactus://privacy", "cactus://settings"]);
+        assert_eq!(*opened.borrow(), ["wadbrowser://history", "wadbrowser://privacy", "wadbrowser://settings"]);
     }
 
     #[test]

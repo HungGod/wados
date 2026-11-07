@@ -314,6 +314,20 @@ fn its_own_wallpaper_and_title_bars() {
     assert_eq!(extras::wallpaper_file(&colour), None);
 }
 
+#[test]
+fn only_steam_may_nest_containers() {
+    let lib = library();
+    let mut w = lib.wadspaces.iter().find(|x| !x.apps.is_empty()).expect("one with apps").clone();
+    let run = Run { image: BASE_IMAGE, mounts: &Mounts::new(), wallpaper: None };
+    let plain = &units::units(&w, &run, &machine(), None)[0].1;
+    assert!(!plain.contains("container_engine_t") && !plain.contains("Unmask="), "{plain}");
+    w.apps[0].app = wad_model::AppId::Steam;
+    let steam = &units::units(&w, &run, &machine(), None)[0].1;
+    assert_lines(steam, &["SecurityLabelType=container_engine_t", "Unmask=/proc/*"]);
+    // Its categories stay: it's still kept apart from the other wadspaces.
+    assert!(steam.contains("SecurityLabelLevel="), "{steam}");
+}
+
 /// A public stream's sidecar, on the sample machine.
 fn public(guid: &str) -> Sidecar<'_> {
     Sidecar {

@@ -1,5 +1,5 @@
 //! WadBrowser's core: preferences, the SQLite store, the omnibox, the
-//! internal `cactus://` pages and bookmarks import/export.
+//! internal `wadbrowser://` pages and bookmarks import/export.
 //!
 //! Forked from Cactus (github.com/yohannes-mesay/cactus-browser, commit
 //! 8ae5a66, MPL-2.0).
@@ -40,7 +40,7 @@ pub use url_util::normalize_navigation_input;
 pub const APP_ID: &str = "io.wados.Browser";
 pub const APP_NAME: &str = "WadBrowser";
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
-pub const NEW_TAB_URI: &str = "cactus://newtab";
-pub const HOME_URI: &str = "cactus://newtab";
+pub const NEW_TAB_URI: &str = "wadbrowser://newtab";
+pub const HOME_URI: &str = "wadbrowser://newtab";
 
 pub use project::{CACTUS_COMMIT, CACTUS_LICENSE, CACTUS_REPO, CACTUS_VERSION};

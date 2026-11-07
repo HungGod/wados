@@ -1,7 +1,7 @@
 //! The engine's side of a window (wadbrowser-webkit): starting it, what it
 //! asks of windows (a popup's tab, a page closing itself, a tab moving into
-//! a key's session, a permission prompt, a `cactus://` page's message), the
-//! `cactus://` pages, download toasts, and tab sleeping.
+//! a key's session, a permission prompt, a `wadbrowser://` page's message), the
+//! `wadbrowser://` pages, download toasts, and tab sleeping.
 //!
 //! A child of `window`, so it reaches the window's state; `window.rs`'s
 //! `create_tab`, `wire_webview`, `open_in_view`, `render_internal` and
@@ -137,7 +137,7 @@ pub(super) fn new_view(ctx: &WindowCtx, session: &SessionBundle) -> WebView {
 /// place); anything else once the content filter's in (or soon after).
 pub(super) fn open(ctx: &Rc<WindowCtx>, view: &WebView, uri: &str) {
     let uri = internal::map_about(uri).map(str::to_string).unwrap_or_else(|| uri.to_string());
-    if !ctx.url_entry.has_focus() || uri.starts_with("cactus://") {
+    if !ctx.url_entry.has_focus() || uri.starts_with("wadbrowser://") {
         ctx.url_entry.set_text(&uri);
     }
     if internal::is_internal(&uri) {
@@ -227,7 +227,7 @@ fn move_view(ctx: &Rc<WindowCtx>, view: &WebView, session: &SessionBundle, uri: 
     filters::when_ready(move || navigate(&fresh, &uri));
 }
 
-/// What a `cactus://` page asked for.
+/// What a `wadbrowser://` page asked for.
 fn page_action(view: &WebView, json: &str) {
     let uri = view.uri().map(String::from).unwrap_or_default();
     let Some(action) = PageAction::from_page(&uri, json) else {
@@ -247,12 +247,12 @@ fn page_action(view: &WebView, json: &str) {
             shield::set_site_allowed(&site, !on);
             // The blocked page's "let it through": back to the page it stopped.
             if !on
-                && uri.starts_with("cactus://blocked")
+                && uri.starts_with("wadbrowser://blocked")
                 && let Some(back) = scheme::query_value(&uri, "uri")
                 && let Some(ctx) = window_of(view)
             {
                 open(&ctx, view, &back);
-            } else if uri.starts_with("cactus://privacy") {
+            } else if uri.starts_with("wadbrowser://privacy") {
                 view.reload();
             }
         }
@@ -312,16 +312,16 @@ fn sleep_tabs() {
 
 // ------------------------------------------------------------ the pages
 
-/// `cactus://` pages, for the scheme: drawn for the view's window.
+/// `wadbrowser://` pages, for the scheme: drawn for the view's window.
 fn page_source(req: &PageRequest) -> Option<Page> {
     let ctx = req.view.and_then(window_of).or_else(any_window)?;
     Some(Page::html(render(&ctx, req.uri)))
 }
 
-/// A `cactus://` page's HTML (window.rs's `render_internal`).
+/// A `wadbrowser://` page's HTML (window.rs's `render_internal`).
 pub(super) fn render(ctx: &Rc<WindowCtx>, uri: &str) -> String {
     let prefs = ctx.state.prefs.borrow().clone();
-    let page = uri.strip_prefix("cactus://").unwrap_or(uri);
+    let page = uri.strip_prefix("wadbrowser://").unwrap_or(uri);
     let name = page.split(['?', '#', '/']).next().unwrap_or_default();
     let q = |k: &str| scheme::query_value(uri, k).unwrap_or_default();
     let private = ctx.private;
@@ -359,7 +359,7 @@ pub(super) fn render(ctx: &Rc<WindowCtx>, uri: &str) -> String {
     }
 }
 
-/// What `cactus://privacy` shows for this window.
+/// What `wadbrowser://privacy` shows for this window.
 fn privacy(ctx: &WindowCtx) -> internal::Privacy {
     let prefs = ctx.state.prefs.borrow();
     let mut sites: Vec<SiteCount> = vec![];

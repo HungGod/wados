@@ -130,7 +130,7 @@ pub(crate) fn build_window_as(
             }),
             open_dashboard: Rc::new(move || {
                 if let Some(ctx) = c.borrow().upgrade() {
-                    open_page(&ctx, "cactus://privacy");
+                    open_page(&ctx, "wadbrowser://privacy");
                 }
             }),
         }
@@ -590,7 +590,7 @@ fn wire_webview(ctx: &Rc<WindowCtx>, view: &WebView, page: &TabPage) {
 
 /// A tab's title before its page has one.
 fn tab_title_for(uri: &str) -> String {
-    match uri.strip_prefix("cactus://").map(|p| p.split(['/', '?', '#']).next().unwrap_or("")) {
+    match uri.strip_prefix("wadbrowser://").map(|p| p.split(['/', '?', '#']).next().unwrap_or("")) {
         Some("newtab") | Some("home") | Some("") => "New tab".into(),
         Some("privacy") => "Privacy".into(),
         Some("settings") => "Settings".into(),
@@ -620,11 +620,15 @@ fn open_in_view(ctx: &Rc<WindowCtx>, view: &WebView, uri: &str) {
     views::open(ctx, view, uri);
 }
 
-/// A `cactus://` page's HTML (the scheme's callback: views.rs's `page_source`).
+/// A `wadbrowser://` page's HTML (the scheme's callback: views.rs's `page_source`).
 #[allow(dead_code)]
 fn render_internal(ctx: &Rc<WindowCtx>, uri: &str) -> String {
     views::render(ctx, uri)
 }
+
+/// GDK's numbers for a mouse's side buttons.
+const MOUSE_BACK: u32 = 8;
+const MOUSE_FORWARD: u32 = 9;
 
 fn current_webview(ctx: &WindowCtx) -> Option<WebView> {
     ctx.tab_view.selected_page().and_then(|p| p.child().downcast::<WebView>().ok())
@@ -641,7 +645,10 @@ fn edit_address(ctx: &Rc<WindowCtx>) {
 }
 
 fn is_newtab(uri: &str) -> bool {
-    uri.is_empty() || uri.starts_with("about:blank") || uri.starts_with(NEW_TAB_URI) || uri.starts_with("cactus://home")
+    uri.is_empty()
+        || uri.starts_with("about:blank")
+        || uri.starts_with(NEW_TAB_URI)
+        || uri.starts_with("wadbrowser://home")
 }
 
 /// The header bar for the page shown: its address, back and forward.
@@ -686,11 +693,11 @@ fn setup_actions(ctx: &Rc<WindowCtx>) {
             }
         });
     };
-    page("history", "cactus://history");
-    page("privacy", "cactus://privacy");
-    page("settings", "cactus://settings");
-    page("downloads", "cactus://downloads");
-    page("about", "cactus://about");
+    page("history", "wadbrowser://history");
+    page("privacy", "wadbrowser://privacy");
+    page("settings", "wadbrowser://settings");
+    page("downloads", "wadbrowser://downloads");
+    page("about", "wadbrowser://about");
     let zoom = |name: &'static str, f: fn(&WebView)| {
         let ctx = Rc::downgrade(ctx);
         add_action(win, name, move |_, _| {
@@ -759,15 +766,15 @@ fn setup_shortcuts(ctx: &Rc<WindowCtx>) {
                 return glib::Propagation::Stop;
             }
             if ctrl && !shift && key == Key::h {
-                open_page(&ctx, "cactus://history");
+                open_page(&ctx, "wadbrowser://history");
                 return glib::Propagation::Stop;
             }
             if ctrl && !shift && key == Key::j {
-                open_page(&ctx, "cactus://downloads");
+                open_page(&ctx, "wadbrowser://downloads");
                 return glib::Propagation::Stop;
             }
             if ctrl && shift && key.to_lower() == Key::p {
-                open_page(&ctx, "cactus://privacy");
+                open_page(&ctx, "wadbrowser://privacy");
                 return glib::Propagation::Stop;
             }
             if ctrl && !shift && key == Key::f {
@@ -822,6 +829,28 @@ fn setup_shortcuts(ctx: &Rc<WindowCtx>) {
         }
     ));
     ctx.window.add_controller(controller);
+
+    // The mouse's back and forward buttons, wherever it is in the window
+    // (taken before the page, which does nothing with them).
+    let side = gtk::GestureClick::builder().button(0).propagation_phase(gtk::PropagationPhase::Capture).build();
+    side.connect_pressed(clone!(
+        #[weak]
+        ctx,
+        move |g, _, _, _| {
+            let button = g.current_button();
+            if !matches!(button, MOUSE_BACK | MOUSE_FORWARD) {
+                return;
+            }
+            g.set_state(gtk::EventSequenceState::Claimed);
+            let Some(v) = current_webview(&ctx) else { return };
+            if button == MOUSE_BACK && v.can_go_back() {
+                v.go_back();
+            } else if button == MOUSE_FORWARD && v.can_go_forward() {
+                v.go_forward();
+            }
+        }
+    ));
+    ctx.window.add_controller(side);
 }
 
 fn save_session_from(ctx: &WindowCtx) {
@@ -1183,18 +1212,18 @@ mod tests {
 
     #[test]
     fn a_tab_is_named_before_its_page_says() {
-        assert_eq!(tab_title_for("cactus://newtab"), "New tab");
-        assert_eq!(tab_title_for("cactus://privacy?x=1"), "Privacy");
-        assert_eq!(tab_title_for("cactus://settings"), "Settings");
+        assert_eq!(tab_title_for("wadbrowser://newtab"), "New tab");
+        assert_eq!(tab_title_for("wadbrowser://privacy?x=1"), "Privacy");
+        assert_eq!(tab_title_for("wadbrowser://settings"), "Settings");
         assert_eq!(tab_title_for("https://www.GitHub.com/x"), "github.com");
     }
 
     #[test]
     fn the_new_tab_is_the_placeholder() {
-        for u in ["", "about:blank", "cactus://newtab", "cactus://home"] {
+        for u in ["", "about:blank", "wadbrowser://newtab", "wadbrowser://home"] {
             assert!(is_newtab(u), "{u}");
         }
-        assert!(!is_newtab("cactus://settings"));
+        assert!(!is_newtab("wadbrowser://settings"));
         assert!(!is_newtab("https://example.com/"));
     }
 

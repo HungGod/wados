@@ -585,3 +585,14 @@ async fn the_bases_listed_and_refreshed() {
     // No token: pulled without a login.
     assert_eq!(up.images.pulls.lock().unwrap()[0], ("ghcr.io/hunggod/wados-base:44".into(), false));
 }
+
+#[test]
+fn the_nvidia_image_is_beside_the_plain_one() {
+    assert_eq!(
+        nvidia_image("ghcr.io/hunggod/wados-host:latest").as_deref(),
+        Some("ghcr.io/hunggod/wados-host-nvidia:latest")
+    );
+    // On it already, or not one of ours: nothing to move to.
+    assert_eq!(nvidia_image("ghcr.io/hunggod/wados-host-nvidia:latest"), None);
+    assert_eq!(nvidia_image("quay.io/fedora/fedora-bootc:44"), None);
+}

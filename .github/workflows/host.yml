@@ -15,9 +15,7 @@ on:
     branches: [main]
     paths:
       - host/**
-      - apps/wadd/**
-      - apps/wados-shell/**
-      - apps/wadsctl/**
+      - apps/**
       - crates/**
       - assets/**
       - Cargo.toml
@@ -27,9 +25,7 @@ on:
   pull_request:
     paths:
       - host/**
-      - apps/wadd/**
-      - apps/wados-shell/**
-      - apps/wadsctl/**
+      - apps/**
       - crates/**
       - assets/**
       - Cargo.toml

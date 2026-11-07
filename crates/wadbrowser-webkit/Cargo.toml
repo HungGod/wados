@@ -1,6 +1,6 @@
 [package]
 name = "wadbrowser-webkit"
-description = "WadBrowser's WebKitGTK layer (forked from Cactus): profiles' network sessions, web views, content filters and the shield, the cactus:// scheme, permissions, zoom, downloads, tab sleeping"
+description = "WadBrowser's WebKitGTK layer (forked from Cactus): profiles' network sessions, web views, content filters and the shield, the wadbrowser:// scheme, permissions, zoom, downloads, tab sleeping"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

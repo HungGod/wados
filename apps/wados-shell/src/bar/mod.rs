@@ -10,7 +10,6 @@
 //! - `Middle::new(shell)`: what's between the halves on the desktop (sized
 //!   by machine.rs to the room between them); `widget`.
 //!
-//! And overlays.rs: `Displays::new(shell)`, every other display's own bar.
 //!
 //! - **The logo's half** (`Panel.svelte`): the logo (its menu: `start.rs`),
 //!   the way between the pages, search (Alt+Space's), and on the dock a
@@ -23,7 +22,6 @@
 //! at the same place and the hand-off between the surfaces is seamless.
 
 mod apps;
-mod display;
 mod levels;
 mod notices;
 mod running;
@@ -41,7 +39,6 @@ use std::rc::Rc;
 use gtk::{glib, prelude::*};
 use wad_gtk::{Icon, Svg};
 
-pub use display::Displays;
 pub use notices::{level_class, level_icon};
 pub use system::Volume;
 pub use tasks::in_front;

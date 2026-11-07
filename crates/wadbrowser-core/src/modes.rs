@@ -351,7 +351,7 @@ mod tests {
         assert_eq!(spec.app.as_ref().unwrap().icon.as_deref(), Some("/i/c.png"));
         assert!(urls.is_empty());
         assert!(!spec.has_urlbar() && spec.autohide_tabs() && !spec.saved_in_session());
-        assert_eq!(spec.home("cactus://newtab"), "https://claude.ai");
+        assert_eq!(spec.home("wadbrowser://newtab"), "https://claude.ai");
         // Open already: its window, with any pages as tabs.
         let open = [(1, full()), (4, claude())];
         assert_eq!(plan(&r, &cx(&open)), Plan::Tabs { window: 4, urls: vec![] });
@@ -373,7 +373,7 @@ mod tests {
         let c = claude();
         assert!(!c.offsite("https://claude.ai/chat"));
         assert!(c.offsite("https://github.com/x"));
-        assert!(!c.offsite("cactus://newtab"));
+        assert!(!c.offsite("wadbrowser://newtab"));
         assert!(!full().offsite("https://github.com/x"));
         let s = WindowSpec::sign_in(Provider::Tailscale, "https://login.tailscale.com/a/1", None);
         assert!(!s.offsite("https://accounts.google.com/o/oauth2"));

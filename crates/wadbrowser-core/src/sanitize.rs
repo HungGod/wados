@@ -30,7 +30,7 @@ pub fn is_persistable_url(url: &str) -> bool {
     if lower.is_empty() {
         return false;
     }
-    if lower.starts_with("cactus://")
+    if lower.starts_with("wadbrowser://")
         || lower.starts_with("about:")
         || lower.starts_with("data:")
         || lower.starts_with("blob:")
@@ -53,7 +53,7 @@ mod tests {
     #[test]
     fn persistable_http_only() {
         assert!(is_persistable_url("https://example.com"));
-        assert!(!is_persistable_url("cactus://newtab"));
+        assert!(!is_persistable_url("wadbrowser://newtab"));
         assert!(!is_persistable_url("javascript:alert(1)"));
     }
 }

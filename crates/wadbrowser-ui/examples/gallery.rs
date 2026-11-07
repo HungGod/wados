@@ -1,4 +1,4 @@
-//! WadBrowser's v2 widgets and `cactus://` pages, one per run, with the
+//! WadBrowser's v2 widgets and `wadbrowser://` pages, one per run, with the
 //! spike's sample data (its "populated" world), for a look and for
 //! screenshots:
 //!
@@ -9,8 +9,8 @@
 //!
 //! A mock header bar (the shield, the profile chip, ⋮) holds the widgets;
 //! pages show in a WebView with the `cactus` scheme served as the browser
-//! will: `cactus://res/<file>` from `internal::resource`, the page itself
-//! from its function. What a page asks (its "cactus" message handler) is
+//! will: `wadbrowser://res/<file>` from `internal::resource`, the page itself
+//! from its function. What a page asks (its "wadbrowser" message handler) is
 //! printed. It prints `ready` once there's something to see. Popovers are
 //! opened without autohide: there's no click for them to grab with.
 
@@ -36,21 +36,21 @@ use wadbrowser_ui::shield::{Shield, ShieldActions, ShieldInfo};
 use webkit6::prelude::*;
 
 const NAMES: &[(&str, &str)] = &[
-    ("newtab", "cactus://newtab: the catalog's web apps and one of yours"),
-    ("newtab-menu", "cactus://newtab: a tile of yours, right-clicked"),
-    ("newtab-search", "cactus://newtab: a search typed and sent (prints what it asks)"),
-    ("newtab-plain", "cactus://newtab with no apps of your own, searching with Startpage"),
-    ("privacy", "cactus://privacy after a few sites"),
-    ("privacy-private", "cactus://privacy in a private window, with a site allowed"),
-    ("privacy-clicks", "cactus://privacy: its toggle and Block again clicked (prints what they ask)"),
-    ("settings", "cactus://settings"),
-    ("history", "cactus://history"),
-    ("history-private", "cactus://history in a private window"),
-    ("about", "cactus://about"),
+    ("newtab", "wadbrowser://newtab: the catalog's web apps and one of yours"),
+    ("newtab-menu", "wadbrowser://newtab: a tile of yours, right-clicked"),
+    ("newtab-search", "wadbrowser://newtab: a search typed and sent (prints what it asks)"),
+    ("newtab-plain", "wadbrowser://newtab with no apps of your own, searching with Startpage"),
+    ("privacy", "wadbrowser://privacy after a few sites"),
+    ("privacy-private", "wadbrowser://privacy in a private window, with a site allowed"),
+    ("privacy-clicks", "wadbrowser://privacy: its toggle and Block again clicked (prints what they ask)"),
+    ("settings", "wadbrowser://settings"),
+    ("history", "wadbrowser://history"),
+    ("history-private", "wadbrowser://history in a private window"),
+    ("about", "wadbrowser://about"),
     ("error", "a page that didn't load"),
     ("blocked", "a social site, blocked"),
-    ("missing", "a cactus:// page that doesn't exist"),
-    ("bookmarks", "cactus://bookmarks (Cactus's, unlinked)"),
+    ("missing", "a wadbrowser:// page that doesn't exist"),
+    ("bookmarks", "wadbrowser://bookmarks (Cactus's, unlinked)"),
     ("page-menu", "right-clicking a web page"),
     ("page-menu-signins", "right-clicking a web page: Saved sign-ins"),
     ("page-menu-cactus", "right-clicking one of the browser's own pages"),
@@ -167,13 +167,15 @@ fn page(name: &str) -> Option<(&'static str, String)> {
         SiteCount { site: "docs.rs".into(), url: "https://docs.rs".into(), pages: 1, blocked: 0 },
     ];
     Some(match name {
-        "newtab" | "newtab-menu" | "newtab-search" => ("cactus://newtab", internal::newtab_page(&prefs, &tiles(true))),
+        "newtab" | "newtab-menu" | "newtab-search" => {
+            ("wadbrowser://newtab", internal::newtab_page(&prefs, &tiles(true)))
+        }
         "newtab-plain" => {
             let prefs = Preferences { search_engine: wadbrowser_core::SearchEngine::Startpage, ..prefs };
-            ("cactus://newtab", internal::newtab_page(&prefs, &tiles(false)))
+            ("wadbrowser://newtab", internal::newtab_page(&prefs, &tiles(false)))
         }
         "privacy" => (
-            "cactus://privacy",
+            "wadbrowser://privacy",
             internal::privacy_page(&Privacy {
                 blocked: 1291,
                 blocked_here: 7,
@@ -183,7 +185,7 @@ fn page(name: &str) -> Option<(&'static str, String)> {
             }),
         ),
         "privacy-private" | "privacy-clicks" => (
-            "cactus://privacy",
+            "wadbrowser://privacy",
             internal::privacy_page(&Privacy {
                 blocked: 1291,
                 private: true,
@@ -194,7 +196,7 @@ fn page(name: &str) -> Option<(&'static str, String)> {
             }),
         ),
         "settings" => (
-            "cactus://settings",
+            "wadbrowser://settings",
             internal::settings_page(
                 &prefs,
                 &Settings {
@@ -209,7 +211,7 @@ fn page(name: &str) -> Option<(&'static str, String)> {
             ),
         ),
         "history" => (
-            "cactus://history",
+            "wadbrowser://history",
             internal::history_page(
                 &[
                     visit("Docs.rs", "https://docs.rs", 5),
@@ -223,19 +225,19 @@ fn page(name: &str) -> Option<(&'static str, String)> {
                 Utc::now(),
             ),
         ),
-        "history-private" => ("cactus://history", internal::history_page(&[], true, Utc::now())),
-        "about" => ("cactus://about", internal::about_html(&webkit_version())),
+        "history-private" => ("wadbrowser://history", internal::history_page(&[], true, Utc::now())),
+        "about" => ("wadbrowser://about", internal::about_html(&webkit_version())),
         "error" => (
-            "cactus://error",
+            "wadbrowser://error",
             internal::error_html(
                 "This page didn’t load",
                 "Couldn’t find the server: check the address, or your connection.",
                 "https://nowhere.invalid/some/page",
             ),
         ),
-        "blocked" => ("cactus://blocked?site=x.com", internal::blocked_html("x.com")),
-        "missing" => ("cactus://nowhere", internal::missing_html("cactus://nowhere")),
-        "bookmarks" => ("cactus://bookmarks", internal::bookmarks_html(&[])),
+        "blocked" => ("wadbrowser://blocked?site=x.com", internal::blocked_html("x.com")),
+        "missing" => ("wadbrowser://nowhere", internal::missing_html("wadbrowser://nowhere")),
+        "bookmarks" => ("wadbrowser://bookmarks", internal::bookmarks_html(&[])),
         _ => return None,
     })
 }
@@ -349,7 +351,7 @@ fn widget(c: &Chrome, name: &str) {
             });
         }
         "page-menu-cactus" => {
-            page_menu_at("cactus://privacy");
+            page_menu_at("wadbrowser://privacy");
         }
         "main-menu" => {
             let a = MainActions { set_mode: Rc::new(|m| println!("set_mode {m:?}")), ..MainActions::default() };
@@ -401,7 +403,11 @@ fn widget(c: &Chrome, name: &str) {
         "create-app" | "create-app-done" | "create-app-error" => {
             let info = CreateAppInfo {
                 title: "GitHub".into(),
-                url: if name == "create-app-error" { "cactus://newtab".into() } else { "https://github.com".into() },
+                url: if name == "create-app-error" {
+                    "wadbrowser://newtab".into()
+                } else {
+                    "https://github.com".into()
+                },
                 profiles: profiles(),
                 profile: "default".into(),
             };
@@ -474,12 +480,12 @@ fn script(name: &str) -> Option<&'static str> {
 fn show_page(c: &Chrome, uri: &'static str, html: String, script: Option<&'static str>) {
     let context = webkit6::WebContext::default().expect("WebKit's context");
     if let Some(security) = context.security_manager() {
-        // Pages, their stylesheet and their fonts are all cactus://, on different hosts.
-        security.register_uri_scheme_as_cors_enabled("cactus");
-        security.register_uri_scheme_as_secure("cactus");
+        // Pages, their stylesheet and their fonts are all wadbrowser://, on different hosts.
+        security.register_uri_scheme_as_cors_enabled("wadbrowser");
+        security.register_uri_scheme_as_secure("wadbrowser");
     }
     let html = Rc::new(html);
-    context.register_uri_scheme("cactus", move |req| {
+    context.register_uri_scheme("wadbrowser", move |req| {
         let uri = req.uri().map(|u| u.to_string()).unwrap_or_default();
         let (bytes, mime): (glib::Bytes, &str) = match internal::resource(&uri) {
             Some((b, m)) => (glib::Bytes::from_static(b), m),
@@ -495,7 +501,7 @@ fn show_page(c: &Chrome, uri: &'static str, html: String, script: Option<&'stati
         req.finish(&stream, len, Some(mime));
     });
     let content = webkit6::UserContentManager::new();
-    content.register_script_message_handler("cactus", None);
+    content.register_script_message_handler("wadbrowser", None);
     let settings = webkit6::Settings::new();
     // The pages' console, on the gallery's stdout.
     settings.set_enable_write_console_messages_to_stdout(true);
@@ -507,7 +513,7 @@ fn show_page(c: &Chrome, uri: &'static str, html: String, script: Option<&'stati
         .vexpand(true)
         .build();
     let v = view.downgrade();
-    content.connect_script_message_received(Some("cactus"), move |_, value| {
+    content.connect_script_message_received(Some("wadbrowser"), move |_, value| {
         let page = v.upgrade().and_then(|v| v.uri()).unwrap_or_default();
         println!("page asks: {:?}", PageAction::from_page(&page, &value.to_str()));
     });

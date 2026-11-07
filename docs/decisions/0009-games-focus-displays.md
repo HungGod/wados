@@ -81,7 +81,8 @@ Phase 10. Steam is built, but hasn't met a real account or client (see "Not yet"
 
 ## Not yet
 
-- **Steam has only met fixtures.** Its package installs on the base, and everything around the client is tested with
+- **Steam's client has reached its sign-in window** in a container with a wadspace's flags (0011), with no account.
+  Past that, **Steam has only met fixtures.** Its package installs on the base, and everything around the client is tested with
   files shaped like the client's, on a fake registry. No real sign-in, library, download, game, gamescope or Proton
   has run, and which of an account's games `localconfig.vdf` really lists is unknown.
 - **The Play and Get ready job stages** of the spike aren't there; Steam shows its own download.

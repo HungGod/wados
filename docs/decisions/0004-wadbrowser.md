@@ -9,9 +9,9 @@ v1's Tauri WadBrowser on the machine and in every wadspace, and draws the v2 spi
 
 | Crate | What |
 |---|---|
-| `crates/wadbrowser-core` | The pure parts: the command line (`cli.rs`), `wadbrowser.conf` (`conf.rs`), instances, sites and modes (`site.rs`, `modes.rs`), sign-in windows (`signin.rs`), profiles and keys (`profiles.rs`), per-site zoom, Cactus's store and prefs, a small wadd client (`wadd.rs`), and the `cactus://` pages (`internal.rs`, with `res/` for their CSS, script, fonts and site icons). |
+| `crates/wadbrowser-core` | The pure parts: the command line (`cli.rs`), `wadbrowser.conf` (`conf.rs`), instances, sites and modes (`site.rs`, `modes.rs`), sign-in windows (`signin.rs`), profiles and keys (`profiles.rs`), per-site zoom, Cactus's store and prefs, a small wadd client (`wadd.rs`), and the `wadbrowser://` pages (`internal.rs`, with `res/` for their CSS, script, fonts and site icons). |
 | `crates/wadbrowser-privacy` | The ad blocker: EasyList and EasyPrivacy, turned into WebKit's content-filter rules (`content.rs`), the social blocker, the per-site allowlist, the counts. |
-| `crates/wadbrowser-webkit` | WebKit: a session per profile, views (one UserContentManager each), the filters' store, the `cactus://` scheme, the shield's state, permissions, downloads, zoom, tab sleeping. |
+| `crates/wadbrowser-webkit` | WebKit: a session per profile, views (one UserContentManager each), the filters' store, the `wadbrowser://` scheme, the shield's state, permissions, downloads, zoom, tab sleeping. |
 | `crates/wadbrowser-ui` | The window (`window.rs`, `window/chrome.rs` the tab bar and header, `window/wire.rs` what the widgets do, `window/views.rs` the views' glue), the menus, shield, profile chip and dialogs, and `examples/gallery.rs` (each widget and page with sample data, for screenshots). |
 | `apps/wadbrowser` | The program; `data/` has `io.wados.Browser.desktop` and its icon. |
 
@@ -80,12 +80,12 @@ wadbrowser --instance <id> [--ephemeral] [...]
   - **Per site:** each view has its own UserContentManager, so a site the shield allows simply hasn't the filters.
   - **Counting:** the shield counts once per page and address. `WADBROWSER_FILTER_LISTS=a.txt:b.txt` gives other
     lists, for tests.
-- **`cactus://`** is a registered scheme (secure, local, CORS-enabled, since the pages, their stylesheet and its
+- **`wadbrowser://`** is a registered scheme (secure, local, CORS-enabled, since the pages, their stylesheet and its
   fonts are on different hosts).
   - Its pages: `newtab`, `privacy`, `settings`, `history`, `about`, `blocked`, and the error page.
-  - **Assets:** `cactus://res/` serves the pages' CSS, script, fonts and icons.
+  - **Assets:** `wadbrowser://res/` serves the pages' CSS, script, fonts and icons.
   - **Page actions:** a page asks the browser through the `cactus` script message handler (`PageAction`), which
-    only `cactus://` pages have.
+    only `wadbrowser://` pages have.
 - **v1's other parts:**
   - permission prompts, remembered per site (never in a private window);
   - downloads, under WebKit's suggested name, one handler per session;

@@ -161,7 +161,7 @@ impl Store {
     }
 
     pub fn record_history(&self, title: &str, url: &str) -> Result<()> {
-        if url.starts_with("cactus://") || url.starts_with("about:") || url == "about:blank" {
+        if url.starts_with("wadbrowser://") || url.starts_with("about:") || url == "about:blank" {
             return Ok(());
         }
         let now = Utc::now().to_rfc3339();

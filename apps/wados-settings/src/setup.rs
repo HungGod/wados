@@ -1,8 +1,8 @@
 //! Set up WadSpaces (`wados-settings --setup`, the spike's `apps/setup`):
 //! opened by the shell at the first sign-in on a new machine. Welcome,
-//! Wi-Fi, Accounts, WadOS, Done. wadd keeps where it's got to, so closed
-//! early it opens again where it was. Wi-Fi and Accounts are Settings' own panels.
-//! Steam is on the Accounts page, Settings' own.
+//! Wi-Fi, Accounts, WadOS (and NVIDIA's host image, if it's wanted), Done. wadd keeps where it's got to, so closed
+//! early it opens again where it was. Wi-Fi and Accounts are Settings' own
+//! panels, Accounts without Steam (signing in to it is for Settings).
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -17,6 +17,7 @@ use crate::panel::{Ctx, Panel};
 use crate::panels;
 
 const CSS: &str = r#"
+window.set-window { background-color: var(--surface); }
 .setup-steps { padding: 14px 24px; border-bottom: 1px solid var(--line); }
 .setup-step { font-size: 12.5px; color: var(--faint); }
 .setup-step.on { color: var(--fg); font-weight: 600; }
@@ -62,6 +63,7 @@ struct Setup {
     is_online: std::cell::Cell<bool>,
     panels: RefCell<Vec<Rc<dyn Panel>>>,
     starter: wad_gtk::form::Toggle,
+    nvidia: wad_gtk::form::Toggle,
 }
 
 fn title_page(title: &str, body: &str) -> gtk::Box {
@@ -142,7 +144,7 @@ impl Setup {
         stack.add_named(&welcome, Some("Welcome"));
 
         let wifi_panel = panels::wifi::make(&ctx);
-        let accounts_panel = panels::accounts::make(&ctx);
+        let accounts_panel = panels::accounts::make_for_setup(&ctx);
         let wifi = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).build();
         let wifi_said = kit::label("", &["setup-body"]);
         wifi_said.set_margin_start(40);
@@ -171,6 +173,19 @@ impl Setup {
         let starter = wad_gtk::form::Toggle::new(true, |_| {});
         row.append(&starter.root);
         design.append(&row);
+        let row = gtk::Box::builder().spacing(12).build();
+        let col = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).hexpand(true).build();
+        col.append(&kit::label("NVIDIA graphics", &["setup-title"]));
+        let about = kit::label(
+            "The host image with NVIDIA's own drivers, for a machine with an NVIDIA card. It downloads now and starts at the next restart.",
+            &["setup-body"],
+        );
+        about.set_wrap(true);
+        col.append(&about);
+        row.append(&col);
+        let nvidia = wad_gtk::form::Toggle::new(false, |_| {});
+        row.append(&nvidia.root);
+        design.append(&row);
         stack.add_named(&design, Some("WadOS"));
 
         let done = title_page("All done", "Enjoy WadSpaces!");
@@ -189,6 +204,7 @@ impl Setup {
             is_online: std::cell::Cell::new(false),
             panels: RefCell::new(vec![wifi_panel, accounts_panel]),
             starter,
+            nvidia,
         });
         let m = Rc::downgrade(&s);
         s.next.connect_clicked(move |_| {
@@ -221,6 +237,9 @@ impl Setup {
             |w| async move { w.setup().await },
             move |r| {
                 let Some(m) = m.upgrade() else { return };
+                if let Ok(s) = &r {
+                    m.nvidia.set(s.nvidia_card);
+                }
                 m.show(r.map_or(SetupStep::Welcome, |s| s.step));
             },
         );
@@ -289,9 +308,10 @@ impl Setup {
             SetupStep::Done => self.window.close(),
             SetupStep::Design => {
                 let starter = yes && self.starter.is_on();
+                let nvidia = yes && self.nvidia.is_on();
                 let m = Rc::downgrade(self);
                 self.ctx.link.call(
-                    move |w| async move { w.setup_design(starter).await },
+                    move |w| async move { w.setup_design(starter, nvidia).await },
                     move |r| {
                         if let (Some(m), Ok(s)) = (m.upgrade(), r) {
                             m.show(s.step);

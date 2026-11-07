@@ -216,7 +216,7 @@ mod tests {
         assert_eq!(web_address("https://mail.google.com/mail").as_deref(), Some("https://mail.google.com/mail"));
         assert_eq!(web_address("localhost:5199").as_deref(), Some("http://localhost:5199"));
         assert_eq!(web_address("192.168.1.4:8080").as_deref(), Some("http://192.168.1.4:8080"));
-        assert_eq!(web_address("cactus://newtab"), None);
+        assert_eq!(web_address("wadbrowser://newtab"), None);
         assert_eq!(web_address("about:blank"), None);
         assert_eq!(web_address("rust gtk"), None);
         assert_eq!(web_address("hello"), None);

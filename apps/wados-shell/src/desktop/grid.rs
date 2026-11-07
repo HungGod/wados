@@ -52,6 +52,12 @@ pub fn rows_for(height: f64) -> u32 {
     (((height - PAD_Y - 16.0) / CH).floor() as i64).max(1) as u32
 }
 
+/// The `n`th spot on from `from`, down each column.
+pub fn after(from: Spot, n: u64, rows: u32) -> Spot {
+    let rows = rows.max(1);
+    Spot::at(from.index(rows) + n, rows)
+}
+
 /// The spot under a point (the desktop's pixels), the rows it has.
 pub fn spot_at(x: f64, y: f64, rows: u32) -> Spot {
     let c = ((x - PAD_X) / CW).floor().max(0.0) as u32;
@@ -181,6 +187,13 @@ fn cols(spots: &Spots) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_spots_after_one_run_down_each_column() {
+        assert_eq!(after(Spot::new(0, 1), 0, 4), Spot::new(0, 1));
+        assert_eq!(after(Spot::new(0, 3), 1, 4), Spot::new(1, 0));
+        assert_eq!(after(Spot::new(2, 2), 3, 4), Spot::new(3, 1));
+    }
 
     fn keys(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()

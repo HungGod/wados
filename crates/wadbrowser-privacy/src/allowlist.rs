@@ -15,7 +15,7 @@ pub fn site_key(url_or_host: &str) -> Option<String> {
     let s = url_or_host.trim();
     let host = match s.split_once("://") {
         Some((scheme, rest)) => {
-            if scheme.eq_ignore_ascii_case("cactus") || scheme.eq_ignore_ascii_case("about") {
+            if scheme.eq_ignore_ascii_case("wadbrowser") || scheme.eq_ignore_ascii_case("about") {
                 return None;
             }
             let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
@@ -90,7 +90,7 @@ mod tests {
         assert!(list.contains_url("https://shop.example.com:8443/"));
         assert!(!list.contains_url("https://notexample.com/"));
         assert!(!list.contains_url("https://tracker.test/x"));
-        assert!(!list.contains_url("cactus://privacy"));
+        assert!(!list.contains_url("wadbrowser://privacy"));
         assert_eq!(list.covering("https://a.example.com/").as_deref(), Some("example.com"));
         list.remove("example.com");
         assert!(list.list().is_empty());

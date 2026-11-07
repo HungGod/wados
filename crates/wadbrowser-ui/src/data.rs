@@ -56,8 +56,8 @@ pub fn bare_host(url: &str) -> String {
     host.strip_prefix("www.").map(str::to_string).unwrap_or(host)
 }
 
-/// One of the browser's own pages (cactus://, about:).
-pub fn is_cactus(url: &str) -> bool {
+/// One of the browser's own pages (wadbrowser://, about:).
+pub fn is_own_page(url: &str) -> bool {
     wadbrowser_core::internal::is_internal(url)
 }
 
@@ -101,7 +101,7 @@ mod tests {
         assert_eq!(bare_host("https://www.GitHub.com:443/HungGod?x#y"), "github.com");
         assert_eq!(bare_host("http://user:pw@old.reddit.com/r"), "old.reddit.com");
         assert_eq!(bare_host("github.com/x"), "github.com");
-        assert_eq!(bare_host("cactus://newtab"), "newtab");
+        assert_eq!(bare_host("wadbrowser://newtab"), "newtab");
         assert_eq!(bare_host("http://[::1]:8080/"), "[::1]");
     }
 

@@ -128,15 +128,18 @@ pub fn slot_after(stacks: &[String], held: &Held) -> Option<String> {
     beside.filter(|b| stacks.iter().any(|s| s == b)).map(str::to_string).or_else(|| stacks.last().cloned())
 }
 
-/// A stack's width: half the board's viewport (two side by side), less its padding and the gap between them.
+/// A stack's width: half the board's viewport (two side by side), less its
+/// padding and the gap between them, up to what the Builder's window opens
+/// with: a bigger window shows more stacks, not wider ones.
 pub fn column(viewport: i32) -> i32 {
-    ((viewport - 2 * BOARD_PAD - GAP) / 2).max(MIN_COLUMN)
+    ((viewport - 2 * BOARD_PAD - GAP) / 2).clamp(MIN_COLUMN, MAX_COLUMN)
 }
 
 /// The board's padding and the gap between stacks (board.css has them too).
 pub const BOARD_PAD: i32 = 12;
 pub const GAP: i32 = 12;
 const MIN_COLUMN: i32 = 240;
+const MAX_COLUMN: i32 = 420;
 
 // ------------------------------------------------------------ a piece's menu
 
@@ -448,6 +451,7 @@ mod tests {
         // The spike's 636 px board: 300 px stacks.
         assert_eq!(column(636), 300);
         assert_eq!(column(100), MIN_COLUMN);
+        assert_eq!(column(2600), MAX_COLUMN);
     }
 
     #[test]

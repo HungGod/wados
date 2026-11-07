@@ -19,6 +19,12 @@ pub fn path() -> PathBuf {
     gtk::glib::user_config_dir().join("wados").join("desk.json")
 }
 
+/// Another display's: `~/.config/wados/desk.<connector>.json`. What's in it
+/// is on that display; unplugged, those icons are on the primary until it's back.
+pub fn path_on(connector: &str) -> PathBuf {
+    gtk::glib::user_config_dir().join("wados").join(format!("desk.{connector}.json"))
+}
+
 /// The spots in `text` (bad entries are skipped; a bad file is none).
 pub fn decode(text: &str) -> Spots {
     let Ok(Value::Object(m)) = serde_json::from_str::<Value>(text) else { return Spots::new() };

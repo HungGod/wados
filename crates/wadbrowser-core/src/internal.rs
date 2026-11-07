@@ -1,14 +1,14 @@
-//! The browser's own `cactus://` pages, as the v2 design draws them (the
+//! The browser's own `wadbrowser://` pages, as the v2 design draws them (the
 //! spike's `src/apps/browser/pages/`): the new tab, Privacy, Settings,
 //! History and About, and the pages that say why there's no page (a load
-//! that failed, a social site blocked, a `cactus://` page that doesn't
+//! that failed, a social site blocked, a `wadbrowser://` page that doesn't
 //! exist).
 //!
 //! Each page is a function of the plain data it shows, and links the files
-//! the pages share, served at `cactus://res/<file>` ([`resource`]): the
+//! the pages share, served at `wadbrowser://res/<file>` ([`resource`]): the
 //! stylesheet, its script, the fonts and the catalog's site icons. What a
 //! page asks of the browser (a toggle, "Remove") comes back through the
-//! page's "cactus" script message handler as a [`PageAction`].
+//! page's "wadbrowser" script message handler as a [`PageAction`].
 
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
@@ -18,32 +18,36 @@ use crate::project::{CACTUS_COMMIT, CACTUS_LICENSE, CACTUS_REPO, CACTUS_VERSION}
 use crate::store::{Bookmark, DownloadRecord, HistoryEntry};
 
 pub fn is_internal(uri: &str) -> bool {
-    uri.starts_with("cactus://") || uri.starts_with("about:")
+    uri.starts_with("wadbrowser://") || uri.starts_with("about:")
 }
 
 pub fn map_about(uri: &str) -> Option<&'static str> {
     match uri {
-        "about:blank" => Some("cactus://newtab"),
-        "about:home" => Some("cactus://newtab"),
-        "about:preferences" | "about:settings" => Some("cactus://settings"),
+        "about:blank" => Some("wadbrowser://newtab"),
+        "about:home" => Some("wadbrowser://newtab"),
+        "about:preferences" | "about:settings" => Some("wadbrowser://settings"),
         _ => None,
     }
 }
 
 // ------------------------------------------------------------ the shared files
 
-/// Where the shared files are: `cactus://res/<file>`.
-pub const RES: &str = "cactus://res/";
+/// Where the shared files are: `wadbrowser://res/<file>`.
+pub const RES: &str = "wadbrowser://res/";
 
-/// A shared file's address (`"pages.css"` → `cactus://res/pages.css`).
+/// A shared file's address (`"pages.css"` → `wadbrowser://res/pages.css`).
 pub fn res_url(path: &str) -> String {
     format!("{RES}{}", path.trim_start_matches('/'))
 }
 
-/// The pages' shared files: (path under `cactus://res/`, bytes, MIME type).
+/// WadBrowser's logo, among the shared files.
+const LOGO: &str = "brand/wadbrowser-icon.svg";
+
+/// The pages' shared files: (path under `wadbrowser://res/`, bytes, MIME type).
 static RESOURCES: &[(&str, &[u8], &str)] = &[
     ("pages.css", include_bytes!("../res/pages.css"), "text/css"),
     ("pages.js", include_bytes!("../res/pages.js"), "text/javascript"),
+    (LOGO, include_bytes!("../../../assets/brand/wadbrowser-icon-dark.svg"), "image/svg+xml"),
     ("fonts/Inter-Variable.ttf", include_bytes!("../../../assets/fonts/Inter-Variable.ttf"), "font/ttf"),
     ("fonts/SpaceGrotesk-Variable.ttf", include_bytes!("../../../assets/fonts/SpaceGrotesk-Variable.ttf"), "font/ttf"),
     ("icons/web/calendar.png", include_bytes!("../../../assets/icons/web/calendar.png"), "image/png"),
@@ -62,7 +66,7 @@ static RESOURCES: &[(&str, &[u8], &str)] = &[
 ];
 
 /// A shared file, for the `cactus` scheme to serve: its bytes and MIME type.
-/// `path` is what follows `cactus://res/` (a leading `/`, or the whole
+/// `path` is what follows `wadbrowser://res/` (a leading `/`, or the whole
 /// address, is fine too); a query or fragment is ignored.
 pub fn resource(path: &str) -> Option<(&'static [u8], &'static str)> {
     let path = path.strip_prefix(RES).unwrap_or(path);
@@ -72,8 +76,8 @@ pub fn resource(path: &str) -> Option<(&'static [u8], &'static str)> {
 
 // ------------------------------------------------------------ what a page asks of the browser
 
-/// What a `cactus://` page asks the browser to do. Its script posts JSON to
-/// the "cactus" script message handler (`{"do": "block-social", "on": true}`);
+/// What a `wadbrowser://` page asks the browser to do. Its script posts JSON to
+/// the "wadbrowser" script message handler (`{"do": "block-social", "on": true}`);
 /// read it with [`PageAction::from_page`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "do", rename_all = "kebab-case")]
@@ -106,7 +110,7 @@ impl PageAction {
     /// A message posted by the page at `page_uri`: only the browser's own
     /// pages may ask (the handler is there for every page a view shows).
     pub fn from_page(page_uri: &str, json: &str) -> Option<Self> {
-        if !page_uri.starts_with("cactus://") {
+        if !page_uri.starts_with("wadbrowser://") {
             return None;
         }
         Self::parse(json)
@@ -123,7 +127,7 @@ pub struct Tile {
     pub id: String,
     pub name: String,
     pub url: String,
-    /// Its site's icon: a `cactus://res/icons/web/…` address ([`res_url`]),
+    /// Its site's icon: a `wadbrowser://res/icons/web/…` address ([`res_url`]),
     /// a `data:image/…` URI or a file. None: its initial.
     pub icon: Option<String>,
     /// Made from a page: right-click for Open in its own window and Remove.
@@ -156,7 +160,7 @@ fn search_template(prefs: &Preferences) -> String {
     prefs.search_url("cactusquery").replace("cactusquery", "%s")
 }
 
-/// `cactus://newtab`: the Cactus mark, a search box (the preferred engine,
+/// `wadbrowser://newtab`: WadBrowser's logo, a search box (the preferred engine,
 /// or an address), and the web apps.
 pub fn newtab_page(prefs: &Preferences, tiles: &[Tile]) -> String {
     let mut grid = String::new();
@@ -192,12 +196,12 @@ pub fn newtab_page(prefs: &Preferences, tiles: &[Tile]) -> String {
         "New tab",
         &format!(
             r#"<main class="newtab">
-<div class="brand"><span class="mark">{mark}</span><span>Cactus</span></div>
+<div class="brand"><img class="mark" src="{mark}" alt=""><span>WadBrowser</span></div>
 <form class="search" role="search" data-template="{template}">{search}<input name="q" placeholder="{placeholder}" aria-label="{placeholder}" spellcheck="false" autocomplete="off" autofocus data-newtab-search></form>
 <div class="grid">{grid}</div>
 <p class="hint">Right-click any page to make it an app of its own.</p>
 </main>{menu_icons}"#,
-            mark = icon("compass", 26),
+            mark = res_url(LOGO),
             search = icon("search", 18),
             template = esc_attr(&search_template(prefs)),
             placeholder = esc_attr(&placeholder),
@@ -218,7 +222,7 @@ pub struct SiteCount {
     pub blocked: u64,
 }
 
-/// What `cactus://privacy` shows.
+/// What `wadbrowser://privacy` shows.
 #[derive(Debug, Clone, Default)]
 pub struct Privacy {
     /// Ads and trackers blocked on this machine, in all.
@@ -236,7 +240,7 @@ pub struct Privacy {
     pub allowed: Vec<String>,
 }
 
-/// `cactus://privacy`: what the blockers have stopped (on this machine, and
+/// `wadbrowser://privacy`: what the blockers have stopped (on this machine, and
 /// in this window by site), the social media blocker, and the sites they're
 /// off for.
 pub fn privacy_page(p: &Privacy) -> String {
@@ -282,7 +286,7 @@ pub fn privacy_page(p: &Privacy) -> String {
     page(
         "Privacy",
         &format!(
-            r#"<main class="cactus-page wide">
+            r#"<main class="wadbrowser-page wide">
 <h1>{h1icon} Privacy</h1>
 <div class="stats">
 <div class="stat big"><b>{blocked}</b><span>ads and trackers blocked on this machine</span></div>
@@ -322,7 +326,7 @@ pub struct ProfileRow {
     pub color: String,
 }
 
-/// What `cactus://settings` shows besides the preferences.
+/// What `wadbrowser://settings` shows besides the preferences.
 #[derive(Debug, Clone, Default)]
 pub struct Settings {
     pub block_social: bool,
@@ -333,7 +337,7 @@ pub struct Settings {
     pub webkit_version: String,
 }
 
-/// `cactus://settings`: privacy, search, profiles, your web apps, and what
+/// `wadbrowser://settings`: privacy, search, profiles, your web apps, and what
 /// this browser is built from. Of Cactus's preferences, only what the v2
 /// design shows: blocking ads and trackers, and the search engine.
 pub fn settings_page(prefs: &Preferences, s: &Settings) -> String {
@@ -385,12 +389,12 @@ pub fn settings_page(prefs: &Preferences, s: &Settings) -> String {
     page(
         "Settings",
         &format!(
-            r#"<main class="cactus-page">
+            r#"<main class="wadbrowser-page">
 <h1>{h1icon} Settings</h1>
 <h2>Privacy</h2>
 <section>
 <div class="row"><div class="grow"><span>Block all social media</span><small class="line">A plugin of WadSpaces’ own: social sites show a blocked page instead.</small></div>{social}</div>
-<div class="row"><div class="grow"><span>Block ads and trackers</span><small class="line">{ads_note} <a href="cactus://privacy" class="inline">See what it’s blocked</a></small></div>{ads}</div>
+<div class="row"><div class="grow"><span>Block ads and trackers</span><small class="line">{ads_note} <a href="wadbrowser://privacy" class="inline">See what it’s blocked</a></small></div>{ads}</div>
 </section>
 <h2>Search</h2>
 <section>
@@ -402,7 +406,7 @@ pub fn settings_page(prefs: &Preferences, s: &Settings) -> String {
 <section data-empty="{NO_APPS}">{apps}</section>
 <h2>About</h2>
 <section>
-<div class="row"><div class="grow"><span>{name} {version} (WadOS’ fork of Cactus {cactus})</span><small class="line">WebKitGTK {webkit} · GTK 4 · libadwaita · adblock-rust · <a href="cactus://about" class="inline">More</a></small></div></div>
+<div class="row"><div class="grow"><span>{name} {version} (WadOS’ fork of Cactus {cactus})</span><small class="line">WebKitGTK {webkit} · GTK 4 · libadwaita · adblock-rust · <a href="wadbrowser://about" class="inline">More</a></small></div></div>
 </section>
 </main>"#,
             h1icon = icon("settings", 24),
@@ -419,7 +423,7 @@ pub fn settings_page(prefs: &Preferences, s: &Settings) -> String {
 
 // ------------------------------------------------------------ history
 
-/// `cactus://history`: the pages visited, newest first (the browser's own
+/// `wadbrowser://history`: the pages visited, newest first (the browser's own
 /// left out); a private window keeps none. `now` dates them ("5 min ago").
 pub fn history_page(entries: &[HistoryEntry], private: bool, now: DateTime<Utc>) -> String {
     let body = if private {
@@ -441,10 +445,13 @@ pub fn history_page(entries: &[HistoryEntry], private: bool, now: DateTime<Utc>)
             format!(r#"<ul class="plain visits">{li}</ul>"#)
         }
     };
-    page("History", &format!(r#"<main class="cactus-page list"><h1>{} History</h1>{body}</main>"#, icon("clock", 24)))
+    page(
+        "History",
+        &format!(r#"<main class="wadbrowser-page list"><h1>{} History</h1>{body}</main>"#, icon("clock", 24)),
+    )
 }
 
-/// `cactus://bookmarks` (Cactus's; the v2 design has none, so nothing links here).
+/// `wadbrowser://bookmarks` (Cactus's; the v2 design has none, so nothing links here).
 pub fn bookmarks_html(entries: &[Bookmark]) -> String {
     let mut li = String::new();
     for e in entries {
@@ -463,11 +470,11 @@ pub fn bookmarks_html(entries: &[Bookmark]) -> String {
     };
     page(
         "Bookmarks",
-        &format!(r#"<main class="cactus-page list"><h1>{} Bookmarks</h1>{body}</main>"#, icon("star", 24)),
+        &format!(r#"<main class="wadbrowser-page list"><h1>{} Bookmarks</h1>{body}</main>"#, icon("star", 24)),
     )
 }
 
-/// `cactus://downloads`.
+/// `wadbrowser://downloads`.
 pub fn downloads_html(entries: &[DownloadRecord]) -> String {
     let mut li = String::new();
     for e in entries {
@@ -485,20 +492,20 @@ pub fn downloads_html(entries: &[DownloadRecord]) -> String {
     };
     page(
         "Downloads",
-        &format!(r#"<main class="cactus-page list"><h1>{} Downloads</h1>{body}</main>"#, icon("download", 24)),
+        &format!(r#"<main class="wadbrowser-page list"><h1>{} Downloads</h1>{body}</main>"#, icon("download", 24)),
     )
 }
 
 // ------------------------------------------------------------ about
 
-/// `cactus://about`: WadBrowser, what it's based on, its WebKit and its licence.
+/// `wadbrowser://about`: WadBrowser, what it's based on, its WebKit and its licence.
 pub fn about_html(webkit_version: &str) -> String {
     let repo_shown = CACTUS_REPO.trim_start_matches("https://");
     page(
         "About",
         &format!(
-            r#"<main class="cactus-page">
-<h1>{h1icon} {name}</h1>
+            r#"<main class="wadbrowser-page">
+<h1><img class="logo" src="{logo}" alt=""> {name}</h1>
 <section>
 <div class="row"><div class="grow"><span>{name} {version}</span><small class="line">The web browser of WadOS.</small></div></div>
 <div class="row"><div class="grow"><span>Based on Cactus {cactus_version}</span><small class="line"><a class="inline" href="{repo}">{repo_shown}</a> · commit <code>{commit}</code></small></div></div>
@@ -506,7 +513,7 @@ pub fn about_html(webkit_version: &str) -> String {
 <div class="row"><div class="grow"><span>Licence</span><small class="line">{license} (Mozilla Public License 2.0)</small></div></div>
 </section>
 </main>"#,
-            h1icon = icon_class("compass", 24, "lime"),
+            logo = res_url(LOGO),
             name = crate::APP_NAME,
             version = crate::APP_VERSION,
             cactus_version = CACTUS_VERSION,
@@ -531,7 +538,7 @@ pub fn error_html(title: &str, message: &str, uri: &str) -> String {
 <h1>{title}</h1>
 <p>{message}</p>
 <p class="where"><code>{uri}</code></p>
-<div class="acts"><a class="btn ghost" href="cactus://newtab">{plus}<span>New tab</span></a><a class="btn secondary" href="{href}">{again}<span>Try again</span></a></div>
+<div class="acts"><a class="btn ghost" href="wadbrowser://newtab">{plus}<span>New tab</span></a><a class="btn secondary" href="{href}">{again}<span>Try again</span></a></div>
 </main>"#,
             badge = icon("wifi-off", 34),
             title = esc_html(title),
@@ -579,7 +586,7 @@ pub fn social_name(site: &str) -> &str {
 
 /// What a social site shows while "Block all social media" is on: Go back
 /// (when there's a page to go back to), and the blockers off for `site`.
-/// Load it at a `cactus://` address (`cactus://blocked?site=x.com`), so its
+/// Load it at a `wadbrowser://` address (`wadbrowser://blocked?site=x.com`), so its
 /// button may ask ([`PageAction::from_page`]).
 pub fn blocked_html(site: &str) -> String {
     let name = social_name(site);
@@ -603,12 +610,12 @@ pub fn blocked_html(site: &str) -> String {
     )
 }
 
-/// A `cactus://` page that doesn't exist.
+/// A `wadbrowser://` page that doesn't exist.
 pub fn missing_html(uri: &str) -> String {
     page(
         "No such page",
         &format!(
-            r#"<main class="notice missing">{compass}<p>Cactus has no page called <code>{uri}</code>.</p><a class="home" href="cactus://newtab">Open a new tab</a></main>"#,
+            r#"<main class="notice missing">{compass}<p>WadBrowser has no page called <code>{uri}</code>.</p><a class="home" href="wadbrowser://newtab">Open a new tab</a></main>"#,
             compass = icon("compass", 28),
             uri = esc_html(uri),
         ),
@@ -766,14 +773,14 @@ fn bare_host(url: &str) -> String {
 /// `url` if a link may go there (the web, files, the browser's own pages); else nowhere.
 fn safe_href(url: &str) -> String {
     let lower = url.trim().to_ascii_lowercase();
-    let ok = ["http://", "https://", "cactus://", "file://", "about:"].iter().any(|s| lower.starts_with(s));
+    let ok = ["http://", "https://", "wadbrowser://", "file://", "about:"].iter().any(|s| lower.starts_with(s));
     if ok { url.trim().to_string() } else { "#".into() }
 }
 
 /// `src` if an image may come from it.
 fn safe_img(src: &str) -> Option<&str> {
     let lower = src.trim().to_ascii_lowercase();
-    ["cactus://res/", "data:image/", "file://", "https://", "http://"]
+    ["wadbrowser://res/", "data:image/", "file://", "https://", "http://"]
         .iter()
         .any(|s| lower.starts_with(s))
         .then_some(src.trim())
@@ -829,8 +836,8 @@ mod tests {
 
     fn links_shared_files(html: &str) {
         assert!(html.starts_with("<!DOCTYPE html>"));
-        assert!(html.contains(r#"<link rel="stylesheet" href="cactus://res/pages.css">"#));
-        assert!(html.contains(r#"<script src="cactus://res/pages.js" defer></script>"#));
+        assert!(html.contains(r#"<link rel="stylesheet" href="wadbrowser://res/pages.css">"#));
+        assert!(html.contains(r#"<script src="wadbrowser://res/pages.js" defer></script>"#));
     }
 
     #[test]
@@ -839,7 +846,7 @@ mod tests {
         let pages = [
             newtab_page(
                 &prefs,
-                &[tile("github", "GitHub", "https://github.com", Some("cactus://res/icons/web/github.svg"))],
+                &[tile("github", "GitHub", "https://github.com", Some("wadbrowser://res/icons/web/github.svg"))],
             ),
             privacy_page(&Privacy::default()),
             settings_page(&prefs, &Settings::default()),
@@ -849,7 +856,7 @@ mod tests {
             about_html("2.54.2"),
             error_html("This page didn’t load", "Could not resolve host", "https://nowhere.invalid/"),
             blocked_html("x.com"),
-            missing_html("cactus://nowhere"),
+            missing_html("wadbrowser://nowhere"),
         ];
         for html in &pages {
             links_shared_files(html);
@@ -878,18 +885,18 @@ mod tests {
     fn the_new_tab_draws_its_tiles() {
         let tiles = merge_tiles(
             vec![
-                tile("github", "GitHub", "https://github.com", Some("cactus://res/icons/web/github.svg")),
+                tile("github", "GitHub", "https://github.com", Some("wadbrowser://res/icons/web/github.svg")),
                 tile(
                     "calendar",
                     "Calendar",
                     "https://calendar.google.com",
-                    Some("cactus://res/icons/web/calendar.png"),
+                    Some("wadbrowser://res/icons/web/calendar.png"),
                 ),
             ],
             vec![tile("cal", "My calendar", "https://calendar.google.com/r/week", None)],
         );
         let html = newtab_page(&Preferences::default(), &tiles);
-        assert!(html.contains(r#"<img src="cactus://res/icons/web/github.svg""#));
+        assert!(html.contains(r#"<img src="wadbrowser://res/icons/web/github.svg""#));
         assert!(!html.contains("icons/web/calendar.png"), "the catalog's Calendar shows once, as yours");
         assert!(html.contains(r#"class="tile mine""#));
         assert!(html.contains(r#"<span class="web-icon" style="--s:48px; --tint:"#));
@@ -1001,14 +1008,14 @@ mod tests {
         let now = Utc::now();
         let entries = [
             entry("Docs.rs", "https://docs.rs/", Duration::seconds(10)),
-            entry("Settings", "cactus://settings", Duration::seconds(20)),
+            entry("Settings", "wadbrowser://settings", Duration::seconds(20)),
             entry("", "https://github.com:8443/x", Duration::hours(3)),
         ];
         let html = history_page(&entries, false, now);
         assert!(html.contains(r#"<li><small>just now</small><a class="t" href="https://docs.rs/">Docs.rs</a><span class="host">docs.rs</span></li>"#));
         assert!(html.contains("<small>3 h ago</small>"));
         assert!(html.contains(">https://github.com:8443/x</a><span class=\"host\">github.com:8443</span>"));
-        assert!(!html.contains("cactus://settings"));
+        assert!(!html.contains("wadbrowser://settings"));
         assert!(history_page(&entries, true, now).contains("Private windows keep no history."));
         assert!(history_page(&[], false, now).contains("Nothing yet."));
     }
@@ -1060,7 +1067,10 @@ mod tests {
         let html = error_html("This page didn’t load", "Could not resolve host", "https://nowhere.invalid/a?b=1&c=2");
         assert!(html.contains(r#"<a class="btn secondary" href="https://nowhere.invalid/a?b=1&amp;c=2">"#));
         assert!(html.contains("Could not resolve host"));
-        assert!(missing_html("cactus://nowhere").contains("Cactus has no page called <code>cactus://nowhere</code>."));
+        assert!(
+            missing_html("wadbrowser://nowhere")
+                .contains("WadBrowser has no page called <code>wadbrowser://nowhere</code>.")
+        );
     }
 
     #[test]
@@ -1069,13 +1079,13 @@ mod tests {
         assert_eq!(mime, "text/css");
         assert!(std::str::from_utf8(css).unwrap().contains("--accent: #c6ff1f"));
         assert_eq!(resource("/pages.js").unwrap().1, "text/javascript");
-        assert_eq!(resource("cactus://res/fonts/Inter-Variable.ttf").unwrap().1, "font/ttf");
+        assert_eq!(resource("wadbrowser://res/fonts/Inter-Variable.ttf").unwrap().1, "font/ttf");
         assert!(resource("fonts/SpaceGrotesk-Variable.ttf?v=1").unwrap().0.len() > 10_000);
         assert_eq!(resource("icons/web/github.svg").unwrap().1, "image/svg+xml");
         assert_eq!(resource("icons/web/gmail.png").unwrap().1, "image/png");
         assert!(resource("../Cargo.toml").is_none());
         assert!(resource("nope.css").is_none());
-        assert_eq!(res_url("/icons/web/github.svg"), "cactus://res/icons/web/github.svg");
+        assert_eq!(res_url("/icons/web/github.svg"), "wadbrowser://res/icons/web/github.svg");
         // Every icon the pages draw is there.
         for (name, svg) in ICONS {
             assert!(icon(name, 16).contains(r#"width="16" height="16" class="icon""#), "{name}: {svg}");
@@ -1085,7 +1095,7 @@ mod tests {
     #[test]
     fn pages_ask_with_actions_only_their_own() {
         assert_eq!(
-            PageAction::from_page("cactus://privacy", r#"{"do":"block-social","on":true}"#),
+            PageAction::from_page("wadbrowser://privacy", r#"{"do":"block-social","on":true}"#),
             Some(PageAction::BlockSocial { on: true })
         );
         assert_eq!(

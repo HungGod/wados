@@ -5,7 +5,8 @@
 //! `width`×`height` is the output layout's size in logical pixels; each step
 //! is one of `move X Y`, `down`, `up`, `wait MS`, `drag X1 Y1 X2 Y2` (press,
 //! move there in small steps, release), `click X Y`, `rclick X Y` (the right
-//! button: menus), `dblclick X Y`, or `scroll DY` (wheel notches: + down).
+//! button: menus), `dblclick X Y`, `side back|forward` (the mouse's side
+//! buttons), or `scroll DY` (wheel notches: + down).
 
 use std::thread::sleep;
 use std::time::{Duration, Instant};
@@ -17,6 +18,8 @@ use wayland_protocols_wlr::virtual_pointer::v1::client::{
 
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
+const BTN_SIDE: u32 = 0x113;
+const BTN_EXTRA: u32 = 0x114;
 
 #[derive(Default)]
 struct State {
@@ -124,6 +127,10 @@ fn main() {
             }
             "wait" => {
                 sleep(Duration::from_millis(num(i + 1) as u64));
+                i += 2;
+            }
+            "side" => {
+                m.click(if args.get(i + 1).map(String::as_str) == Some("back") { BTN_SIDE } else { BTN_EXTRA });
                 i += 2;
             }
             "drag" => {

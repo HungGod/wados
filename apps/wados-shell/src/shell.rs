@@ -382,6 +382,13 @@ impl Shell {
         self.ctl.borrow_mut().push((word.to_string(), Box::new(f)));
     }
 
+    /// As [`Self::on_ctl`], in place of what had `word` (a display's desktop
+    /// made again, when it's plugged in again).
+    pub fn set_ctl(&self, word: &str, f: impl Fn(&[&str]) -> String + 'static) {
+        self.ctl.borrow_mut().retain(|(w, _)| w != word);
+        self.on_ctl(word, f);
+    }
+
     /// A module's own command, if `words` is one.
     pub fn ctl(&self, words: &[&str]) -> Option<String> {
         let (first, rest) = words.split_first()?;

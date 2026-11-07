@@ -4,10 +4,8 @@
 
 use std::cell::Cell;
 
-/// The glass the halves, the strips and the extra displays' bars share.
+/// The glass the halves and the strips share.
 pub const CSS: &str = r#"
-window.wados-display-bar { background: transparent; }
-
 /* ---- the halves, the strips between them */
 .wb-half, .wb-strip, .wb-glass {
   background-color: rgb(14 9 25 / 0.84);

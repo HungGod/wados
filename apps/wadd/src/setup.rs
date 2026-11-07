@@ -13,6 +13,7 @@ use crate::api_phase8::Updates;
 use crate::library::Docs;
 
 pub const FILE: &str = "setup.json";
+const DRM: &str = "/sys/class/drm";
 
 pub struct SetupState {
     path: PathBuf,
@@ -36,11 +37,13 @@ impl SetupState {
     }
 
     pub fn get(&self) -> Setup {
-        Setup { step: *self.step.lock().unwrap() }
+        let nvidia_card = crate::remote::gpu(Path::new(DRM)).as_deref() == Some("NVIDIA");
+        Setup { step: *self.step.lock().unwrap(), nvidia_card }
     }
 
     fn save(&self, step: SetupStep) -> Result<(), ApiError> {
-        let bytes = serde_json::to_vec(&Setup { step }).map_err(|e| ApiError::internal(e.to_string()))?;
+        let bytes =
+            serde_json::to_vec(&Setup { step, nvidia_card: false }).map_err(|e| ApiError::internal(e.to_string()))?;
         crate::store::write_atomic(&self.path, &bytes).map_err(|e| ApiError::internal(e.to_string()))?;
         *self.step.lock().unwrap() = step;
         Ok(())
@@ -58,14 +61,20 @@ impl SetupState {
         Ok(self.get())
     }
 
-    /// Install or Skip: the WadOS wadspace if asked for, and the base
-    /// images start downloading either way. That failing is the job's to say.
+    /// Install or Skip: the WadOS wadspace if asked for, the host image
+    /// with NVIDIA's driver if asked for, and the base images start
+    /// downloading either way. Those failing is their jobs' to say.
     pub async fn design(&self, req: SetupDesign) -> Result<Setup, ApiError> {
         if req.starter {
             self.docs.add_starter()?;
         }
         if let Err(e) = self.updates.refresh_bases().await {
             tracing::warn!("the base images didn't start downloading: {}", e.message);
+        }
+        if req.nvidia
+            && let Err(e) = self.updates.use_nvidia().await
+        {
+            tracing::warn!("NVIDIA's host image didn't start downloading: {}", e.message);
         }
         self.save(SetupStep::Done)?;
         Ok(self.get())

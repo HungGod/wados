@@ -2,7 +2,7 @@
 //! layer): toasts, Super+Tab's switcher, Alt+Space's search, the reveal bar
 //! over a full-screen wadspace, and the dialogs (a device asking to be
 //! trusted, the shell's yes-or-no: [`confirm`]). And, since they're per
-//! display too, the other displays' own bars (bar::Displays, TOP layer).
+//! display too.
 //!
 //! The interface main.rs uses: `Overlays::new(shell)`. Its `wadsctl`
 //! commands, registered with the shell:
@@ -38,7 +38,7 @@ use std::rc::Rc;
 use wad_model::SessionDisplay;
 use wad_proto::Level;
 
-use crate::bar::{Displays, in_front};
+use crate::bar::in_front;
 use crate::machine::Page;
 use crate::shell::Shell;
 use crate::store::Change;
@@ -154,7 +154,6 @@ pub struct Overlays {
     search: Rc<search::Search>,
     /// Made again for the displays as they change.
     reveal: RefCell<Rc<reveal::Reveal>>,
-    displays: RefCell<Displays>,
     /// What it was asked to show (tests read it back: `wadsctl log`).
     log: RefCell<Vec<String>>,
     /// The wadspace in front last (to tell the switcher).
@@ -174,7 +173,6 @@ impl Overlays {
             switcher: switcher::Switcher::new(shell),
             search: search::Search::new(shell),
             reveal: RefCell::new(Rc::new(reveal::Reveal::new(shell))),
-            displays: RefCell::new(Displays::new(shell)),
             log: RefCell::default(),
             front: RefCell::default(),
             focus: focus::FocusUi::new(shell),
@@ -225,13 +223,11 @@ impl Overlays {
             }
             *m.front.borrow_mut() = front;
         });
-        // Every display's bars, made again for the displays as they are.
+        // Every display's reveal bar, made again for the displays as they are.
         let (w, s) = (Rc::downgrade(&me), shell.clone());
         shell.on_monitors(move || {
             let Some(m) = w.upgrade() else { return };
             let old = m.reveal.replace(Rc::new(reveal::Reveal::new(&s)));
-            old.close();
-            let old = m.displays.replace(Displays::new(&s));
             old.close();
             m.reveal().windows_changed();
         });
@@ -468,11 +464,6 @@ impl Overlays {
                 }
                 _ => "error reveal [down|up] [display]".into(),
             }
-        });
-        let w = Rc::downgrade(self);
-        shell.on_ctl("displays", move |_| match w.upgrade() {
-            Some(m) => format!("ok {}", m.displays.borrow().describe()),
-            None => "error gone".into(),
         });
         let w = Rc::downgrade(self);
         shell.on_ctl("log", move |_| match w.upgrade() {

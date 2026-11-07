@@ -33,7 +33,7 @@ pub struct ShieldActions {
     pub set_blockers: Rc<dyn Fn(bool)>,
     /// "Block all social media", on or off.
     pub set_social: Rc<dyn Fn(bool)>,
-    /// "Privacy dashboard": cactus://privacy.
+    /// "Privacy dashboard": wadbrowser://privacy.
     pub open_dashboard: Run,
 }
 
@@ -234,7 +234,7 @@ impl Shield {
             }
         }
         self.count.set_label(&compact(info.total));
-        self.title.set_label(info.site.as_deref().unwrap_or("Cactus"));
+        self.title.set_label(info.site.as_deref().unwrap_or("WadBrowser"));
         self.note.set_label(if !web {
             "A page of the browser’s own"
         } else if off {

@@ -211,6 +211,8 @@ pub struct Accounts {
     /// Calls on their way, by what they do ("signin", "trust:<id>"…).
     pending: RefCell<HashSet<String>>,
     queued: std::cell::Cell<bool>,
+    /// Set up WadSpaces leaves Steam out (it's Settings').
+    steam: std::cell::Cell<bool>,
 }
 
 impl Accounts {
@@ -242,6 +244,7 @@ impl Accounts {
             state: RefCell::default(),
             pending: RefCell::default(),
             queued: std::cell::Cell::new(false),
+            steam: std::cell::Cell::new(true),
         })
     }
 
@@ -299,7 +302,9 @@ impl Accounts {
         self.column.append(&self.note);
         self.column.append(&self.github(&st).root);
         self.column.append(&self.tailscale(&st).root);
-        self.column.append(&self.steam(&st).root);
+        if self.steam.get() {
+            self.column.append(&self.steam(&st).root);
+        }
         let t = st.tailnet.clone().unwrap_or_default();
         if t.state == TailnetState::Running && !t.asks.is_empty() {
             self.column.append(&self.asks(&t).root);
@@ -689,6 +694,13 @@ impl Accounts {
 /// with wadd's events from the start.
 pub fn make(ctx: &Ctx) -> Rc<dyn Panel> {
     Rc::new(AccountsPanel(Accounts::new(ctx.link.clone())))
+}
+
+/// Accounts as Set up WadSpaces' step: GitHub and Tailscale, no Steam.
+pub fn make_for_setup(ctx: &Ctx) -> Rc<dyn Panel> {
+    let a = Accounts::new(ctx.link.clone());
+    a.steam.set(false);
+    Rc::new(AccountsPanel(a))
 }
 
 struct AccountsPanel(Rc<Accounts>);

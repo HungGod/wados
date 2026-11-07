@@ -148,6 +148,9 @@ pub enum SetupStep {
 #[serde(rename_all = "camelCase")]
 pub struct Setup {
     pub step: SetupStep,
+    /// This machine has an NVIDIA card: Set up offers its image, already on.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nvidia_card: bool,
 }
 
 /// `POST /v1/setup/design`: the last step's Install or Skip.
@@ -156,6 +159,9 @@ pub struct Setup {
 pub struct SetupDesign {
     /// Add the WadOS wadspace.
     pub starter: bool,
+    /// Move to the host image with NVIDIA's driver, from the next start.
+    #[serde(default)]
+    pub nvidia: bool,
 }
 
 #[cfg(test)]
@@ -180,7 +186,10 @@ mod tests {
 
     #[test]
     fn the_wire_names_are_the_routes() {
-        assert_eq!(serde_json::to_string(&Setup { step: SetupStep::Wifi }).unwrap(), r#"{"step":"wifi"}"#);
+        assert_eq!(
+            serde_json::to_string(&Setup { step: SetupStep::Wifi, nvidia_card: false }).unwrap(),
+            r#"{"step":"wifi"}"#
+        );
         assert_eq!(serde_json::from_str::<Setup>(r#"{"step":"design"}"#).unwrap().step, SetupStep::Design);
     }
 }

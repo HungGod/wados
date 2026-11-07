@@ -1,6 +1,6 @@
 //! The Builder (`apps/builder/Builder.svelte`, `sim/actions/builderWindow.ts`):
-//! a window down the right of the screen (labwc's `builder` region and its
-//! window rule, `host/etc/xdg/labwc/rc.xml`), its own app id
+//! a window in the middle of the screen (labwc's window rule,
+//! `host/etc/xdg/labwc/rc.xml`), its own app id
 //! (`io.wados.Builder`, so the bar groups it). The wadspaces opened in it
 //! are **stacks**, left to right ([`board`]); the **sidebar** edits the
 //! selected one, in four tabs ([`side`]). Its bar: New, then the selected
@@ -641,7 +641,7 @@ impl Builder {
 /// A button on its bar: an icon, maybe a label, and what it does in its tooltip.
 fn tool(icon: &'static str, label: Option<&str>, tip: &str) -> gtk::Button {
     let b = gtk::Button::builder().css_classes(["builder-tool"]).tooltip_text(tip).build();
-    let row = gtk::Box::builder().spacing(6).build();
+    let row = gtk::Box::builder().spacing(6).halign(gtk::Align::Center).build();
     row.append(&wad_gtk::Icon::new(icon, 16));
     if let Some(l) = label {
         row.append(&gtk::Label::new(Some(l)));

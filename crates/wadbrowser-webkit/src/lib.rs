@@ -1,11 +1,11 @@
 //! WadBrowser's WebKitGTK layer: a network session per profile (cookies
 //! kept), web views with a UserContentManager each, popups that keep
 //! `window.opener`, per-site keys, the content filters and the shield,
-//! the `cactus://` scheme, permission prompts, per-site zoom, downloads and
+//! the `wadbrowser://` scheme, permission prompts, per-site zoom, downloads and
 //! tab sleeping.
 //!
 //! The UI starts it ([`init`]), says what windows do for pages ([`set_hooks`])
-//! and serves the `cactus://` pages ([`scheme::set_page_source`]).
+//! and serves the `wadbrowser://` pages ([`scheme::set_page_source`]).
 //!
 //! Forked from Cactus (github.com/yohannes-mesay/cactus-browser, commit
 //! 8ae5a66, MPL-2.0).

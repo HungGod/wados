@@ -594,8 +594,8 @@ impl Panel {
     ///   projects button's menu, then `wadsctl side open` / `side choose <id>`);
     /// - `origin`: where the window's top left is taken to be;
     ///   `calibrate <x> <y>`: the pointer's at (x, y) over the panel: where
-    ///   the window is, for `where` (otherwise it's where labwc's region
-    ///   puts it, wrong once it's been moved);
+    ///   the window is, for `where` (otherwise it's where labwc's window
+    ///   rule puts it, wrong once it's been moved);
     /// - `upload <path> [icon]`: a picture into ~/Pictures for the
     ///   background (or the icon's own), as the file dialog's answer.
     fn answer(&self, args: &[&str]) -> String {
@@ -612,7 +612,7 @@ impl Panel {
             ["origin"] => {
                 let Some(window) = self.root.root().and_downcast::<gtk::Window>() else { return "error no window".into() };
                 let (x, y) = self.origin.get().unwrap_or_else(|| window_origin(&window, b.shell.size()));
-                let how = if self.origin.get().is_some() { "calibrated" } else { "region" };
+                let how = if self.origin.get().is_some() { "calibrated" } else { "centred" };
                 format!("ok {x:.0} {y:.0} {how} window={}x{}", window.width(), window.height())
             }
             ["where", id @ ..] if !id.is_empty() => match self.spot(&id.join(" ")) {
@@ -834,19 +834,20 @@ impl Panel {
 }
 
 /// The Builder's window's top left on the screen. Wayland doesn't tell a
-/// window where it is: this is where labwc puts it, its `builder` region
-/// (host/etc/xdg/labwc/rc.xml: the right 74% of what's under the bar, to the
-/// bottom, inside its 10 px gap), or the whole of that maximized. Either way
-/// it ends at that area's bottom right, so it's found from the window's size
-/// (the bar may not have been up yet when it was placed: then it's taller).
-/// `wadsctl custom calibrate` finds it for a window that's been moved.
+/// window where it is: this is where labwc puts it, in the middle of what's
+/// under the bar (host/etc/xdg/labwc/rc.xml), or the whole of that, inside
+/// its 10 px gap, maximized. `wadsctl custom calibrate` finds it for a
+/// window that's been moved.
 fn window_origin(window: &gtk::Window, screen: (i32, i32)) -> (f64, f64) {
-    region_origin(screen, (window.width(), window.height()))
+    placed_origin(screen, (window.width(), window.height()))
 }
 
-fn region_origin((sw, sh): (i32, i32), (w, h): (i32, i32)) -> (f64, f64) {
+fn placed_origin((sw, sh): (i32, i32), (w, h): (i32, i32)) -> (f64, f64) {
     const GAP: i32 = 10;
-    (f64::from(sw - GAP - w), f64::from(sh - GAP - h))
+    if w >= sw - 2 * GAP {
+        return (f64::from(GAP), f64::from(sh - GAP - h));
+    }
+    (f64::from((sw - w) / 2), f64::from(crate::machine::BAR + (sh - crate::machine::BAR - h) / 2))
 }
 
 /// A section's heading (the spike's `h5`: small capitals, faint).
@@ -889,15 +890,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_builder_sits_in_labwcs_region() {
-        // 1500 x 1000 (the Surface Book 2 at 200%): 26% into what's left of the 10 px gaps, under the bar.
-        // 1500 x 1000 (the Surface Book 2 at 200%): 74% of what's inside the
-        // 10 px gaps, under the 78 px bar…
-        assert_eq!(region_origin((1500, 1000), (1095, 902)), (395.0, 88.0));
-        // …or placed before the bar was up…
-        assert_eq!(region_origin((1500, 1000), (1095, 980)), (395.0, 10.0));
-        // …or maximized.
-        assert_eq!(region_origin((1500, 1000), (1480, 902)), (10.0, 88.0));
+    fn the_builder_opens_in_the_middle() {
+        // 1500 x 1000 (the Surface Book 2 at 200%), under the 78 px bar…
+        assert_eq!(placed_origin((1500, 1000), (1100, 780)), (200.0, 149.0));
+        // …or maximized, inside the 10 px gaps.
+        assert_eq!(placed_origin((1500, 1000), (1480, 902)), (10.0, 88.0));
     }
 
     #[test]

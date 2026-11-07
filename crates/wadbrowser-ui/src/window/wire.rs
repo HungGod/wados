@@ -47,7 +47,7 @@ struct App {
     id: String,
     name: String,
     url: String,
-    /// Its icon for a page (`cactus://res/…`, a data URI, a favicon).
+    /// Its icon for a page (`wadbrowser://res/…`, a data URI, a favicon).
     icon: Option<String>,
     /// The machine's own, made from a page (it can go); a wadspace's can't.
     mine: bool,
@@ -271,7 +271,7 @@ pub(super) fn set_mode(ctx: &Rc<WindowCtx>, mode: Mode) {
         if mode == Mode::App {
             let view = current_webview(ctx);
             let uri = view.as_ref().and_then(|v| v.uri()).map(String::from).unwrap_or_default();
-            let home = if site::is_cactus(&uri) || site::host_of(&uri).is_empty() {
+            let home = if site::is_own_page(&uri) || site::host_of(&uri).is_empty() {
                 spec.app.as_ref().map_or(NEW_TAB_URI.to_string(), |a| a.start.clone())
             } else {
                 let scheme = uri.split_once("://").map_or("https", |(s, _)| s);
@@ -500,7 +500,7 @@ pub(super) fn ask_permission(parent: Option<&adw::ApplicationWindow>, ask: Ask) 
 
 // ------------------------------------------------------------ what pages ask (views.rs)
 
-/// What a `cactus://` page asked that's the chrome's: a new profile, a web
+/// What a `wadbrowser://` page asked that's the chrome's: a new profile, a web
 /// app's window, a web app of yours removed. False: not one of these.
 pub(super) fn page_action(ctx: &Rc<WindowCtx>, action: &PageAction) -> bool {
     match action {
@@ -646,7 +646,7 @@ fn refresh_apps() {
             changed
         });
         if changed {
-            reload_pages(&["cactus://newtab", "cactus://home", "cactus://settings"]);
+            reload_pages(&["wadbrowser://newtab", "wadbrowser://home", "wadbrowser://settings"]);
         }
     };
     if machine() {

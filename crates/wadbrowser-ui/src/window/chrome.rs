@@ -20,6 +20,9 @@ use webkit6::prelude::*;
 use crate::chip::{ChipInfo, ProfileChip};
 use crate::shield::{Shield, ShieldActions};
 
+/// WadBrowser's logo: on its own pages, in place of a site's icon.
+static LOGO: &[u8] = include_bytes!("../../../../assets/brand/wadbrowser-icon-dark.svg");
+
 /// A header bar button: a lucide icon (`.wb-hb`).
 pub(super) fn icon_button(icon: &'static str, size: i32, tooltip: &str) -> gtk::Button {
     let b = gtk::Button::builder()
@@ -235,13 +238,13 @@ fn set_favicon(slot: &gtk::Box, view: &WebView) {
 /// its site's (the catalog's, or its initial).
 pub(super) fn favicon(view: &WebView, size: i32) -> gtk::Widget {
     let uri = view.uri().map(String::from).unwrap_or_default();
-    if uri.is_empty() || uri.starts_with("about:") || site::is_cactus(&uri) {
-        let page = uri.strip_prefix("cactus://").unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
+    if uri.is_empty() || uri.starts_with("about:") || site::is_own_page(&uri) {
+        let page = uri.strip_prefix("wadbrowser://").unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
         let icon = match page {
             "privacy" | "shield" => "shield-check",
             "settings" => "settings",
             "history" => "clock",
-            _ => "compass",
+            _ => return wad_gtk::icon::Svg::new(LOGO, size, size).upcast(),
         };
         let i = wad_gtk::Icon::new(icon, size - 2);
         i.add_css_class("wb-fav-ic");
@@ -268,6 +271,7 @@ pub(super) struct Address {
     stack: gtk::Stack,
     shown: gtk::Button,
     icon: wad_gtk::Icon,
+    logo: wad_gtk::icon::Svg,
     host: gtk::Label,
     rest: gtk::Label,
     placeholder: gtk::Label,
@@ -276,7 +280,8 @@ pub(super) struct Address {
 
 impl Address {
     pub fn new() -> Address {
-        let icon = wad_gtk::Icon::new("compass", 13);
+        let icon = wad_gtk::Icon::new("globe", 13);
+        let logo = wad_gtk::icon::Svg::new(LOGO, 15, 15);
         let host = gtk::Label::builder().css_classes(["wb-addr-host"]).build();
         let rest = gtk::Label::builder()
             .ellipsize(gtk::pango::EllipsizeMode::End)
@@ -285,6 +290,7 @@ impl Address {
             .build();
         let placeholder = gtk::Label::builder().css_classes(["wb-addr-placeholder"]).build();
         let inner = gtk::Box::builder().spacing(7).halign(gtk::Align::Center).build();
+        inner.append(&logo);
         inner.append(&icon);
         inner.append(&placeholder);
         let addr = gtk::Box::builder().build();
@@ -309,17 +315,16 @@ impl Address {
             .valign(gtk::Align::Center)
             .child(&stack)
             .build();
-        Address { root, stack, shown, icon, host, rest, placeholder, entry }
+        Address { root, stack, shown, icon, logo, host, rest, placeholder, entry }
     }
 
     /// Shows `uri` (a new tab: `placeholder`).
     pub fn show(&self, uri: &str, newtab: bool, placeholder: &str) {
         let scheme = uri.split_once("://").map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
-        self.icon.set(match scheme.as_str() {
-            "cactus" | "" => "compass",
-            "https" => "lock",
-            _ => "globe",
-        });
+        let own = matches!(scheme.as_str(), "wadbrowser" | "");
+        self.logo.set_visible(own);
+        self.icon.set_visible(!own);
+        self.icon.set(if scheme == "https" { "lock" } else { "globe" });
         self.placeholder.set_visible(newtab);
         self.placeholder.set_label(placeholder);
         self.host.set_visible(!newtab);
@@ -333,7 +338,7 @@ impl Address {
                 let host = after[..i].to_ascii_lowercase();
                 let host = host.rsplit_once('@').map_or(host.clone(), |(_, h)| h.to_string());
                 let rest = &after[i..];
-                let host = if scheme == "cactus" { format!("cactus://{host}") } else { host };
+                let host = if scheme == "wadbrowser" { format!("wadbrowser://{host}") } else { host };
                 (host, if rest == "/" { String::new() } else { rest.to_string() })
             }
             None => (uri.to_string(), String::new()),

@@ -39,8 +39,21 @@ pub struct Row {
     pub active: bool,
     /// On its way up.
     pub opening: bool,
-    /// The display it's on, if it isn't the primary (its number).
+    /// The display it's full screen on, if it isn't the primary (its number).
     pub on: Option<usize>,
+}
+
+/// The display number a running wadspace shows: only one full screen away
+/// from the primary. A window can sit anywhere, across displays too, and its
+/// number read as how many are running.
+fn badge(windows: &[&crate::wm::Top], outputs: &[String]) -> Option<usize> {
+    windows
+        .iter()
+        .filter(|t| t.fullscreen)
+        .filter_map(|t| t.outputs.first())
+        .filter_map(|o| outputs.iter().position(|c| c == o))
+        .find(|i| *i > 0)
+        .map(|i| i + 1)
 }
 
 impl Running {
@@ -98,12 +111,7 @@ impl Running {
                 let mine: Vec<_> = windows.iter().filter(|t| t.wadspace() == Some(ws.id.as_str())).collect();
                 let opening =
                     s.store.run(&ws.id).is_some_and(|r| matches!(r.state.phase, Phase::Starting | Phase::Waiting));
-                let on = mine
-                    .iter()
-                    .filter_map(|t| t.outputs.first())
-                    .filter_map(|o| outputs.iter().position(|c| c == o))
-                    .find(|i| *i > 0)
-                    .map(|i| i + 1);
+                let on = badge(&mine, &outputs);
                 Row { active: mine.iter().any(|t| super::in_front(t)), opening, on, name: ws.name, id: ws.id }
             })
             .collect()

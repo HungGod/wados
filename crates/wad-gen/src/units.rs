@@ -461,6 +461,16 @@ fn wadspace_unit(ws: &Wadspace, run: &Run, m: &Machine, draws: Draws) -> String 
     } else {
         lines.push(format!("SecurityLabelLevel={}", mcs_level(id)));
     }
+    // Steam's runtime and Proton are containers of their own (bwrap, in
+    // pressure-vessel): that takes mounting (SELinux's type for nested
+    // engines, with the categories above) and a new /proc, which the kernel
+    // refuses while parts of this one are masked.
+    if ws.has_app(wad_model::AppId::Steam) {
+        if !mounted {
+            lines.push("SecurityLabelType=container_engine_t".into());
+        }
+        lines.push("Unmask=/proc/*".into());
+    }
     lines.extend(m.devices.iter().map(|d| format!("AddDevice={}", esc(d))));
     // Devices wadd hands over while it runs (USB, gamepads, webcams): their
     // nodes may be opened, not made. They stay on this machine: not streamed.

@@ -3,6 +3,10 @@
 //! tiles), a folder per tag, the desktop's files (`~/Desktop`), then
 //! Machines and the Trash.
 //!
+//! - **Every display has one.** The primary's has every icon that isn't on
+//!   another; another display's starts empty, with those dragged onto it
+//!   (each keeps its own file, [`arrange::path_on`]). They all work alike: a
+//!   drag from one to another moves the icons, and a menu or a box selects there.
 //! - **Where they sit** ([`grid`], kept in `~/.config/wados/desk.json` by
 //!   [`arrange`]): an icon dragged to a spot stays there (onto another, the
 //!   two swap; a selection moves together); the rest fill the free spots. A
@@ -180,9 +184,25 @@ struct Panel {
     name: String,
 }
 
+thread_local! {
+    /// Every display's desktop, the primary's first.
+    static DESKS: RefCell<Vec<Weak<Desktop>>> = const { RefCell::new(Vec::new()) };
+}
+
+/// The desktops there are now.
+fn desks() -> Vec<Rc<Desktop>> {
+    DESKS.with(|d| {
+        let mut d = d.borrow_mut();
+        d.retain(|w| w.strong_count() > 0);
+        d.iter().filter_map(Weak::upgrade).collect()
+    })
+}
+
 pub struct Desktop {
     shell: Rc<Shell>,
     me: Weak<Desktop>,
+    /// The display it's on, if it isn't the primary (none: whichever that is).
+    monitor: Option<gdk::Monitor>,
     board: gtk::Fixed,
     band: gtk::Box,
     cells: RefCell<IndexMap<String, Cell>>,
@@ -203,17 +223,24 @@ pub struct Desktop {
 }
 
 impl Desktop {
-    pub fn new(shell: &Rc<Shell>) -> Rc<Self> {
+    pub fn new(shell: &Rc<Shell>, monitor: Option<&gdk::Monitor>) -> Rc<Self> {
         if let Some(d) = gdk::Display::default() {
             wad_gtk::theme::add_css(&d, CSS);
         }
         let board = gtk::Fixed::builder().css_classes(["desk"]).overflow(gtk::Overflow::Hidden).build();
+        // Empty (another display's, to start with) it would draw nothing, and
+        // a layer surface with no frame isn't mapped: clicks would go through it.
+        if monitor.is_some() {
+            board.add_css_class("desk-other");
+        }
         let band = gtk::Box::builder().css_classes(["desk-band"]).can_target(false).visible(false).build();
         board.put(&band, 0.0, 0.0);
-        let desk_json = arrange::path();
+        let connector = monitor.map(crate::monitors::connector);
+        let desk_json = connector.as_deref().map_or_else(arrange::path, arrange::path_on);
         let me = Rc::new_cyclic(|me| Self {
             shell: shell.clone(),
             me: me.clone(),
+            monitor: monitor.cloned(),
             board,
             band,
             cells: RefCell::default(),
@@ -246,7 +273,9 @@ impl Desktop {
             m.queue_refill();
         });
         let w = Rc::downgrade(&me);
-        shell.on_ctl("desk", move |args| w.upgrade().map(|m| m.ctl(args)).unwrap_or_else(|| "error gone".into()));
+        let word = connector.map_or_else(|| "desk".to_string(), |c| format!("desk:{c}"));
+        shell.set_ctl(&word, move |args| w.upgrade().map(|m| m.ctl(args)).unwrap_or_else(|| "error gone".into()));
+        DESKS.with(|d| d.borrow_mut().push(Rc::downgrade(&me)));
 
         me.watch_files();
         me.pointer();
@@ -267,14 +296,42 @@ impl Desktop {
         self.me.clone()
     }
 
-    fn rows(&self) -> u32 {
-        let (_, h) = self.shell.size();
-        grid::rows_for((h - BAR) as f64)
+    /// Everything shown again (what's on another display may have changed).
+    pub fn refresh(&self) {
+        self.queue_refill();
     }
 
+    fn rows(&self) -> u32 {
+        grid::rows_for(self.desk_size().1)
+    }
+
+    /// Its room: another display's whole, the primary's under the bar.
     fn desk_size(&self) -> (f64, f64) {
+        if let Some(m) = &self.monitor {
+            let g = m.geometry();
+            return (g.width() as f64, g.height() as f64);
+        }
         let (w, h) = self.shell.size();
         (w as f64, (h - BAR) as f64)
+    }
+
+    /// The icons on other displays: not on this one.
+    fn elsewhere(&self) -> HashSet<String> {
+        desks()
+            .iter()
+            .filter(|d| d.monitor.is_some() && !std::ptr::eq(Rc::as_ptr(d), self))
+            .flat_map(|d| d.s.borrow().saved.keys().cloned().collect::<Vec<_>>())
+            .collect()
+    }
+
+    /// Of every icon, those on this display.
+    fn here(&self, all: Vec<(String, Item)>) -> Vec<(String, Item)> {
+        if self.monitor.is_some() {
+            let s = self.s.borrow();
+            return all.into_iter().filter(|(k, _)| s.saved.contains_key(k)).collect();
+        }
+        let away = self.elsewhere();
+        all.into_iter().filter(|(k, _)| !away.contains(k)).collect()
     }
 
     /// The library's here (and the machine): wadspaces new from now on are new.
@@ -304,16 +361,18 @@ impl Desktop {
             let mine = spaces.iter().filter(|x| tag_of(&tags, x) == t.id).cloned().collect();
             out.push((format!("folder:{}", t.id), Item::Folder { tag: t.clone(), spaces: mine }));
         }
-        let s = self.s.borrow();
-        for f in &s.files {
-            out.push((format!("file:{}", f.name), Item::File(f.clone())));
+        {
+            let s = self.s.borrow();
+            for f in &s.files {
+                out.push((format!("file:{}", f.name), Item::File(f.clone())));
+            }
+            if crate::session::is_live() {
+                out.push(("install".into(), Item::Install));
+            }
+            out.push(("machines".into(), Item::Machines));
+            out.push(("trash".into(), Item::Trash { full: s.trash_files > 0 || trashed }));
         }
-        if crate::session::is_live() {
-            out.push(("install".into(), Item::Install));
-        }
-        out.push(("machines".into(), Item::Machines));
-        out.push(("trash".into(), Item::Trash { full: s.trash_files > 0 || trashed }));
-        out
+        self.here(out)
     }
 
     fn queue_refill(&self) {
@@ -965,9 +1024,35 @@ impl Desktop {
     }
 
     /// Ours (from this desktop), and what it carries.
+    /// The desktop's own drag this is, from this display's or another's.
     fn ours(&self, drop: &gdk::Drop) -> Option<Drag> {
         drop.drag()?;
-        self.s.borrow().drag.clone()
+        desks().iter().find_map(|d| d.s.borrow().drag.clone())
+    }
+
+    /// The desktop a drag came from, if it's another's.
+    fn carried_from(&self) -> Option<Rc<Desktop>> {
+        desks().into_iter().find(|d| !std::ptr::eq(Rc::as_ptr(d), self) && d.s.borrow().drag.is_some())
+    }
+
+    /// Icons dragged here from `from`, the first at `to` and the rest after it.
+    fn take_from(&self, from: &Rc<Desktop>, keys: &[String], to: Spot) {
+        let rows = self.rows();
+        let mut next = self.s.borrow().spots.clone();
+        for (i, k) in keys.iter().enumerate() {
+            next = grid::place_at(&next, k, grid::after(to, i as u64, rows));
+        }
+        self.arrange(&next);
+        {
+            let mut s = from.s.borrow_mut();
+            for k in keys {
+                s.saved.shift_remove(k);
+            }
+            s.sel.retain(|k| !keys.contains(k));
+        }
+        from.save();
+        from.refill();
+        self.refill();
     }
 
     /// Where a drop at (x, y) would go.
@@ -1074,6 +1159,10 @@ impl Desktop {
                 self.shell.op(Op::SetTag { ws: id.clone(), tag: None }, |_| {});
             }
             Target::Spot(to) => {
+                if let Some(from) = self.carried_from() {
+                    self.take_from(&from, &d.keys, to);
+                    return;
+                }
                 let Some(anchor) = d.keys.first() else { return };
                 let next = grid::move_to(&self.s.borrow().spots, anchor, to, &d.keys, self.rows());
                 if let Some(next) = next {
@@ -2163,6 +2252,10 @@ impl Desktop {
             .board
             .compute_point(&root, &graphene::Point::new(x as f32, y as f32))
             .unwrap_or(graphene::Point::new(x as f32, y as f32));
+        if let Some(m) = &self.monitor {
+            let g = m.geometry();
+            return (p.x() as f64 + g.x() as f64, p.y() as f64 + g.y() as f64);
+        }
         let (_, sh) = self.shell.size();
         let top = sh as f64 - root.height() as f64;
         (p.x() as f64, p.y() as f64 + top)

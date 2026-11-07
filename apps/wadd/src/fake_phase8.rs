@@ -740,6 +740,10 @@ impl Updates for Sample {
         );
         me.info(&job)
     }
+
+    async fn use_nvidia(&self) -> Result<JobInfo, ApiError> {
+        self.apply().await
+    }
 }
 
 #[async_trait]

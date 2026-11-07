@@ -44,7 +44,7 @@
 //! Not here yet: Focus (later), whose button shows, dimmed, its tooltip
 //! saying when; drops on a card.
 
-mod backdrop;
+pub mod backdrop;
 mod bar;
 mod buttons;
 mod card;
@@ -89,6 +89,8 @@ const MOVE: Duration = Duration::from_millis(450);
 /// How long after wadd first sends its library the launcher picks the tab
 /// it opens on (what's running comes just after the library).
 const SETTLE: Duration = Duration::from_millis(400);
+type OnPicture = Box<dyn Fn(&wad_model::Wallpaper)>;
+
 /// A sideways scroll moves one card at most this often (the spike's 380 ms).
 const WHEEL_GAP: Duration = Duration::from_millis(380);
 
@@ -97,6 +99,8 @@ pub struct Launcher {
     me: OnceCell<Weak<Launcher>>,
     stage: Stage,
     backdrop: Backdrop,
+    /// Told when the picture behind changes (the other displays show it too).
+    on_picture: RefCell<Vec<OnPicture>>,
     bar: Bar,
     buttons: Buttons,
     empty: Empty,
@@ -175,6 +179,7 @@ impl Launcher {
             me: OnceCell::new(),
             stage,
             backdrop,
+            on_picture: RefCell::default(),
             bar,
             buttons,
             empty,
@@ -203,6 +208,16 @@ impl Launcher {
 
     pub fn widget(&self) -> gtk::Widget {
         self.stage.clone().upcast()
+    }
+
+    /// The picture behind it now.
+    pub fn picture(&self) -> Option<wad_model::Wallpaper> {
+        self.backdrop.wallpaper()
+    }
+
+    /// `f` is told each time the picture behind it changes.
+    pub fn on_picture(&self, f: impl Fn(&wad_model::Wallpaper) + 'static) {
+        self.on_picture.borrow_mut().push(Box::new(f));
     }
 
     /// One of the chrome's keys: true if the launcher took it.
@@ -474,7 +489,13 @@ impl Launcher {
         self.buttons.set(&shown.actions, (nav.zone == Zone::Actions).then_some(nav.act), &self.on_act());
         let focused = shown.list.get(shown.at).and_then(|id| live.iter().find(|x| &x.id == id));
         let picture = focused.map(|x| x.look.wallpaper.clone()).unwrap_or_else(wad_model::wallpapers::default_desktop);
+        let changed = self.backdrop.wallpaper().as_ref() != Some(&picture);
         self.backdrop.set(&picture, layout.w, layout.h);
+        if changed {
+            for f in self.on_picture.borrow().iter() {
+                f(&picture);
+            }
+        }
         let on = (!choice.here).then_some(choice.name.as_str());
         self.empty.set(&view, &tags, shown.list.is_empty(), on, waiting);
 

@@ -2,7 +2,7 @@
 //! folders, settings, store and blocker the views use, the content filters,
 //! and what the UI does when a page asks for something a window does
 //! ([`Hooks`]: a popup's tab, a page closing itself, a tab moving into a key's
-//! session, a permission prompt, a `cactus://` page's message).
+//! session, a permission prompt, a `wadbrowser://` page's message).
 
 use crate::session::SessionBundle;
 use std::cell::{Cell, RefCell};
@@ -48,7 +48,7 @@ pub struct Hooks {
     /// profile: put a new view in `session` (the key's) in the tab's place,
     /// loading `uri` (`create_web_view` then `navigate`).
     pub move_view: MoveHook,
-    /// A `cactus://` page posted `json` to its "cactus" message handler
+    /// A `wadbrowser://` page posted `json` to its "wadbrowser" message handler
     /// (wadbrowser-core's `internal::PageAction`).
     pub page_action: MessageHook,
     /// A site asks for the camera, the microphone, notifications…: ask the
@@ -62,7 +62,7 @@ thread_local! {
 }
 
 /// Starts the engine (once; a later call gives the first's): registers
-/// `cactus://`, starts reading the filter lists off the main thread, then
+/// `wadbrowser://`, starts reading the filter lists off the main thread, then
 /// loads (or the first time, compiles) the content filters.
 pub fn init(
     paths: AppPaths,

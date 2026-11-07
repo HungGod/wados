@@ -8,7 +8,7 @@ pub fn normalize_navigation_input(input: &str, prefs: &Preferences) -> String {
         return prefs.homepage.clone();
     }
 
-    if trimmed.starts_with("cactus://")
+    if trimmed.starts_with("wadbrowser://")
         || trimmed.starts_with("about:")
         || trimmed.starts_with("file://")
         || trimmed.starts_with("data:")
@@ -97,8 +97,8 @@ mod tests {
     }
 
     #[test]
-    fn cactus_scheme_passthrough() {
+    fn own_scheme_passthrough() {
         let prefs = Preferences::default();
-        assert_eq!(normalize_navigation_input("cactus://settings", &prefs), "cactus://settings");
+        assert_eq!(normalize_navigation_input("wadbrowser://settings", &prefs), "wadbrowser://settings");
     }
 }

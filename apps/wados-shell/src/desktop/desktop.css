@@ -208,3 +208,6 @@ button.desk-menu-item:disabled .desk-menu-ic { color: var(--faint); }
   letter-spacing: 0.06em;
   color: var(--faint);
 }
+
+/* Never seen, but always something to draw (mod.rs says why). */
+.desk-other { background-color: rgb(0 0 0 / 0.004); }

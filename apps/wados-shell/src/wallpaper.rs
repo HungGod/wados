@@ -1,7 +1,8 @@
 //! The background, on every monitor (BACKGROUND layer): a picture filling
 //! it, the one Settings ▸ Background chose (`[background] picture` in the
 //! settings: one of WadSpaces' pictures by its id). Duo (lime and pink,
-//! mirrored) is the desktop's to start with.
+//! mirrored) is the desktop's to start with. It's part of the desktop page,
+//! so it rises with it ([`slide`], machine.rs).
 
 use gtk::{gdk, prelude::*};
 use gtk4_layer_shell::{KeyboardMode, Layer};
@@ -29,15 +30,39 @@ pub fn surface(app: &gtk::Application, monitor: &gdk::Monitor, picture: &str) ->
     );
     surface::stay(&w);
     let pic = gtk::Picture::builder().content_fit(gtk::ContentFit::Cover).can_shrink(true).build();
-    w.set_child(Some(&pic));
+    let page = gtk::Fixed::new();
+    page.put(&pic, 0.0, 0.0);
+    w.set_child(Some(&page));
+    fit(&w, monitor);
     set(&w, picture);
     surface::click_through(&w);
     w
 }
 
+fn page(w: &gtk::ApplicationWindow) -> Option<(gtk::Fixed, gtk::Picture)> {
+    let page = w.child().and_downcast::<gtk::Fixed>()?;
+    let pic = page.first_child().and_downcast::<gtk::Picture>()?;
+    Some((page, pic))
+}
+
+/// The picture as big as `monitor`.
+pub fn fit(w: &gtk::ApplicationWindow, monitor: &gdk::Monitor) {
+    if let Some((_, pic)) = page(w) {
+        let g = monitor.geometry();
+        pic.set_size_request(g.width(), g.height());
+    }
+}
+
+/// The picture's top, `y` down the display.
+pub fn slide(w: &gtk::ApplicationWindow, y: f64) {
+    if let Some((page, pic)) = page(w) {
+        page.move_(&pic, 0.0, y);
+    }
+}
+
 /// Shows picture `id` on a wallpaper surface.
 pub fn set(w: &gtk::ApplicationWindow, id: &str) {
-    if let (Some(pic), Some(p)) = (w.child().and_downcast::<gtk::Picture>(), file_of(id)) {
+    if let (Some((_, pic)), Some(p)) = (page(w), file_of(id)) {
         pic.set_filename(Some(&p));
     }
 }

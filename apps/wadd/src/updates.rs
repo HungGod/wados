@@ -86,6 +86,19 @@ const GHCR: &str = "ghcr.io";
 /// output: bootc writes it only to a pipe, and not on fd 1 (its words go to
 /// standard error instead).
 pub const UPGRADE: &[&str] = &["bash", "-c", "set -o pipefail; bootc upgrade --progress-fd 3 3>&1 >&2 | cat"];
+/// The image name that's a host image's.
+const HOST_IMAGE: &str = "wados-host";
+const NVIDIA_IMAGE: &str = "wados-host-nvidia";
+
+/// The host image with NVIDIA's driver beside `booted` (same registry and
+/// tag), if `booted` is the plain one.
+pub fn nvidia_image(booted: &str) -> Option<String> {
+    if booted.contains(NVIDIA_IMAGE) || !booted.contains(HOST_IMAGE) {
+        return None;
+    }
+    Some(booted.replacen(HOST_IMAGE, NVIDIA_IMAGE, 1))
+}
+
 /// Drops a staged deployment (bootc has no verb for it): ostree's index 0 is the staged one.
 pub const UNDEPLOY_STAGED: &[&str] = &["ostree", "admin", "undeploy", "0"];
 
@@ -793,6 +806,54 @@ impl HostUpdates {
         me.info(&job)
     }
 
+    /// Moves to the image with NVIDIA's driver: staged for the next start,
+    /// as an update is, and later updates come from it.
+    fn nvidia_job(&self, image: String) -> Result<JobInfo, ApiError> {
+        let me = &self.0;
+        me.can_update()?;
+        let job = {
+            let mut st = me.st.lock().unwrap();
+            if let Some(j) = &st.job {
+                return Err(busy("An update", j));
+            }
+            let job = me.jobs.create(
+                JobKind::Update,
+                "Installing NVIDIA's graphics image",
+                "wados",
+                &labelled(proto::updates::APPLY),
+            );
+            st.job = Some(job.clone());
+            job
+        };
+        me.publish();
+        let (inner, id) = (me.clone(), job.clone());
+        let task = tokio::spawn(async move {
+            let gone = {
+                let me = inner.clone();
+                Gone(Some(move || {
+                    me.st.lock().unwrap().job = None;
+                    me.publish();
+                }))
+            };
+            inner.jobs.running(&id);
+            let r = inner.switch(&id, &image).await;
+            drop(gone);
+            inner.jobs.finish(&id, r.clone());
+            if r.is_ok() {
+                inner.notice(
+                    Level::Ok,
+                    "NVIDIA's graphics image is ready".to_string(),
+                    "Restart to start it.",
+                    "download",
+                    Some(NoticeAction::new("Restart", "power.restart", &[])),
+                    true,
+                );
+            }
+        });
+        me.jobs.attach(&job, task.abort_handle());
+        me.info(&job)
+    }
+
     fn refresh_job(&self) -> Result<JobInfo, ApiError> {
         let me = &self.0;
         let stages: Vec<(String, String)> =
@@ -995,6 +1056,38 @@ impl Inner {
         Ok(u.available.is_some_and(|a| a.digest != declined))
     }
 
+    /// `bootc switch`: its download and staging (it says no progress).
+    async fn switch(self: &Arc<Self>, job: &str, image: &str) -> Res<()> {
+        let _one = self.lock.lock().await;
+        self.jobs.stage(job, "download", PartState::Working, None);
+        let argv = ["bootc", "switch", image];
+        let lines: OnLine = {
+            let (jobs, id) = (self.jobs.clone(), job.to_string());
+            Box::new(move |l| {
+                if !l.trim().is_empty() {
+                    jobs.line(&id, l);
+                }
+            })
+        };
+        self.jobs.line(job, &format!("$ bootc switch {image}"));
+        let r = match self.bootc.run(&argv, lines).await {
+            Err(e) if refused(&e) && self.sign_in().await => {
+                self.jobs.line(job, "» the registry wants a login: with this machine's GitHub token");
+                self.bootc(Some(job), &argv).await
+            }
+            r => r,
+        };
+        if let Err(e) = r {
+            self.failed(&e);
+            self.publish();
+            return Err(e);
+        }
+        self.jobs.stage(job, "download", PartState::Done, None);
+        self.jobs.stage(job, "stage", PartState::Done, None);
+        let _ = self.refresh().await;
+        Ok(())
+    }
+
     /// The download and staging: what's staged.
     async fn apply(self: &Arc<Self>, job: &str) -> Res<Version> {
         let _one = self.lock.lock().await;
@@ -1143,6 +1236,13 @@ impl crate::api_phase8::Updates for HostUpdates {
 
     async fn apply(&self) -> Result<JobInfo, ApiError> {
         self.apply_job()
+    }
+
+    async fn use_nvidia(&self) -> Result<JobInfo, ApiError> {
+        let booted = self.status().await?.booted.image;
+        let image = nvidia_image(&booted)
+            .ok_or_else(|| ApiError::conflict(format!("{booted} has no NVIDIA image beside it")))?;
+        self.nvidia_job(image)
     }
 
     async fn cancel(&self) -> Result<proto::Updates, ApiError> {

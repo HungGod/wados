@@ -10,7 +10,7 @@
 //!   browser which of the page's loads failed, of which those the lists block
 //!   are counted, once each (WebKit's filters block in the web process and
 //!   say nothing); frames the lists block are counted at their navigation;
-//! - the "cactus" message handler, while it shows a `cactus://` page.
+//! - the "wadbrowser" message handler, while it shows a `wadbrowser://` page.
 //!
 //! Its signals: popups keep `window.opener` (a view related to their
 //! opener's, so in its session and web process), a page that closes itself
@@ -38,8 +38,8 @@ use webkit6::{
 /// The shield's counter's world, and its message handler.
 const SHIELD_WORLD: &str = "wadbrowser";
 const SHIELD_HANDLER: &str = "wadbrowserBlocked";
-/// `cactus://` pages' message handler (wadbrowser-core's `internal::PageAction`).
-pub const PAGE_HANDLER: &str = "cactus";
+/// `wadbrowser://` pages' message handler (wadbrowser-core's `internal::PageAction`).
+pub const PAGE_HANDLER: &str = "wadbrowser";
 const STATE: &str = "wadbrowser-view";
 
 /// Tells the browser each load on the page that failed (WebKit's content
@@ -250,7 +250,7 @@ fn setup(view: &WebView, st: ViewState, prefs: &Preferences) {
     st.ucm.connect_script_message_received(Some(PAGE_HANDLER), move |_, value| {
         let Some(view) = weak.upgrade() else { return };
         // Only the browser's own pages have the handler; check again all the same.
-        if !view.uri().is_some_and(|u| u.starts_with("cactus://")) {
+        if !view.uri().is_some_and(|u| u.starts_with("wadbrowser://")) {
             return;
         }
         let json = if value.is_string() {
@@ -408,10 +408,10 @@ pub fn rehome() {
 }
 
 /// Before a top-level page starts loading in `view`: its filters, the
-/// "cactus" handler if it's one of ours.
+/// "wadbrowser" handler if it's one of ours.
 fn prepare_for(view: &WebView, st: &ViewState, uri: &str) {
     filters::apply(view, st, uri);
-    let ours = uri.starts_with("cactus://");
+    let ours = uri.starts_with("wadbrowser://");
     if ours != st.page_handler.get() {
         if ours {
             st.ucm.register_script_message_handler(PAGE_HANDLER, None);
@@ -445,7 +445,7 @@ fn count_if_blocked(view: &WebView, url: &str, kind: &str) {
 }
 
 fn web_scheme(scheme: &str) -> bool {
-    matches!(scheme, "http" | "https" | "about" | "data" | "blob" | "file" | "javascript" | "webkit" | "cactus")
+    matches!(scheme, "http" | "https" | "about" | "data" | "blob" | "file" | "javascript" | "webkit" | "wadbrowser")
 }
 
 fn decide_policy(view: &WebView, decision: &webkit6::PolicyDecision, kind: PolicyDecisionType) -> bool {

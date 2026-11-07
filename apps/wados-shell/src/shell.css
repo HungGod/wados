@@ -8,8 +8,14 @@ window.wados-overlay {
   background: transparent;
 }
 
-window.wados-chrome {
+window.wados-chrome,
+window.wados-sheet {
   background: transparent;
+}
+
+/* Under the picture as it rises. */
+window.wados-wallpaper {
+  background-color: var(--bg);
 }
 
 /* The reserve's strip: barely there, so it's drawn (and mapped) at once. */

@@ -1,5 +1,5 @@
-// The cactus:// pages' script, served at cactus://res/pages.js. What a page
-// asks of the browser goes to its "cactus" script message handler as JSON,
+// The wadbrowser:// pages' script, served at wadbrowser://res/pages.js. What a page
+// asks of the browser goes to its "wadbrowser" script message handler as JSON,
 // `{"do": "<action>", ...}` (wadbrowser_core::internal::PageAction reads
 // it). Toggles flip and removed rows go at once; the browser re-renders the
 // page when it next loads.
@@ -8,7 +8,7 @@
 
   /** Tells the browser; false if this page isn't in one that listens. */
   function post(msg) {
-    const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.cactus;
+    const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.wadbrowser;
     if (!h) return false;
     h.postMessage(JSON.stringify(msg));
     return true;

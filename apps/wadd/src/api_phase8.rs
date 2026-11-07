@@ -89,6 +89,9 @@ pub trait Updates: Send + Sync + 'static {
     async fn bases(&self) -> Result<Bases, ApiError>;
     /// A Pull job, a stage per base.
     async fn refresh_bases(&self) -> Result<JobInfo, ApiError>;
+    /// An Update job ([`proto::updates::APPLY`]): this machine moves to the
+    /// host image with NVIDIA's driver, from its next start.
+    async fn use_nvidia(&self) -> Result<JobInfo, ApiError>;
 }
 
 /// The disk (owner: the storage agent).
@@ -181,6 +184,9 @@ impl Updates for NotYet {
     }
     async fn refresh_bases(&self) -> Result<JobInfo, ApiError> {
         not_yet("Refreshing the base images")
+    }
+    async fn use_nvidia(&self) -> Result<JobInfo, ApiError> {
+        not_yet("the NVIDIA image")
     }
 }
 

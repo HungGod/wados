@@ -1,19 +1,19 @@
-//! The `cactus://` scheme: WadBrowser's own pages, served by WebKit from a
+//! The `wadbrowser://` scheme: WadBrowser's own pages, served by WebKit from a
 //! callback the UI gives ([`set_page_source`]), in place of Cactus's
 //! `load_html` with a made-up base address. It's registered once, on the
 //! web context every view shares, as secure (the pages are like https: no
 //! mixed-content warnings) and local (a web page can't link to or load
 //! them; only the browser opens them).
 //!
-//! `cactus://res/<file>` is the pages' shared files (wadbrowser-core's
+//! `wadbrowser://res/<file>` is the pages' shared files (wadbrowser-core's
 //! `internal::resource`), with the fonts read from where WadOS installs
 //! them (`/usr/share/wados/assets/fonts`) when they're there.
 //!
 //! A page that couldn't load is shown in place of it (its address stays the
 //! one that failed, so Reload tries it again), drawn by the same callback
-//! from `cactus://error?…` ([`show_error`]); its base is `cactus://error/`,
+//! from `wadbrowser://error?…` ([`show_error`]); its base is `wadbrowser://error/`,
 //! so it can use the shared files. A page the social blocker stopped is
-//! `cactus://blocked?site=…&uri=…` ([`show_blocked`]), at that address, so
+//! `wadbrowser://blocked?site=…&uri=…` ([`show_blocked`]), at that address, so
 //! its button's message reaches the browser.
 
 use std::cell::RefCell;
@@ -21,13 +21,13 @@ use std::rc::Rc;
 use webkit6::prelude::*;
 use webkit6::{URISchemeRequest, WebContext, WebView, gio, glib};
 
-pub const SCHEME: &str = "cactus";
+pub const SCHEME: &str = "wadbrowser";
 /// The base address of a page shown in place of one that failed.
-pub const ERROR_BASE: &str = "cactus://error/";
+pub const ERROR_BASE: &str = "wadbrowser://error/";
 
-/// What a `cactus://` page is asked for.
+/// What a `wadbrowser://` page is asked for.
 pub struct PageRequest<'a> {
-    /// The whole address ("cactus://history?q=rust").
+    /// The whole address ("wadbrowser://history?q=rust").
     pub uri: &'a str,
     /// The view it's for (none for one WebKit asks for itself).
     pub view: Option<&'a WebView>,
@@ -56,8 +56,8 @@ thread_local! {
     static REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// The UI's pages: `cactus://<page>` (and `cactus://error?…`,
-/// `cactus://blocked?…`) → the page, or None for one there isn't
+/// The UI's pages: `wadbrowser://<page>` (and `wadbrowser://error?…`,
+/// `wadbrowser://blocked?…`) → the page, or None for one there isn't
 /// (WebKit shows its "not found"). Called on the main thread, as WebKit asks.
 pub fn set_page_source(f: impl Fn(&PageRequest) -> Option<Page> + 'static) {
     SOURCE.set(Some(Rc::new(f)));
@@ -70,7 +70,7 @@ pub fn register() {
         return;
     }
     let Some(context) = WebContext::default() else {
-        tracing::warn!("no web context: cactus:// pages won't load");
+        tracing::warn!("no web context: wadbrowser:// pages won't load");
         return;
     };
     context.register_uri_scheme(SCHEME, serve);
@@ -78,7 +78,7 @@ pub fn register() {
         sec.register_uri_scheme_as_secure(SCHEME);
         sec.register_uri_scheme_as_local(SCHEME);
         // The pages, their stylesheet and its fonts are on different
-        // cactus:// hosts, and @font-face needs CORS.
+        // wadbrowser:// hosts, and @font-face needs CORS.
         sec.register_uri_scheme_as_cors_enabled(SCHEME);
     }
 }
@@ -124,10 +124,10 @@ fn font_dirs() -> Vec<std::path::PathBuf> {
     ]
 }
 
-/// A `cactus://` address with its query ("cactus://error?title=…").
+/// A `wadbrowser://` address with its query ("wadbrowser://error?title=…").
 pub fn page_uri(page: &str, query: &[(&str, &str)]) -> String {
     let q: Vec<String> = query.iter().map(|(k, v)| format!("{k}={}", encode(v))).collect();
-    if q.is_empty() { format!("cactus://{page}") } else { format!("cactus://{page}?{}", q.join("&")) }
+    if q.is_empty() { format!("wadbrowser://{page}") } else { format!("wadbrowser://{page}?{}", q.join("&")) }
 }
 
 /// A query's value ("a%20b" → "a b").
@@ -139,13 +139,13 @@ pub fn query_value(uri: &str, key: &str) -> Option<String> {
     })
 }
 
-/// In place of `failed_uri`'s page: the UI's `cactus://error?title=&message=&uri=`.
+/// In place of `failed_uri`'s page: the UI's `wadbrowser://error?title=&message=&uri=`.
 pub fn show_error(view: &WebView, failed_uri: &str, title: &str, message: &str) {
     let uri = page_uri("error", &[("title", title), ("message", message), ("uri", failed_uri)]);
     show_in_place(view, failed_uri, &uri);
 }
 
-/// A page the social blocker stopped: `cactus://blocked?site=&uri=`, loaded
+/// A page the social blocker stopped: `wadbrowser://blocked?site=&uri=`, loaded
 /// at that address (not in the page's place) so its button can ask the
 /// browser to let the site through; `uri` is the page it stopped.
 pub fn show_blocked(view: &WebView, failed_uri: &str, site: &str) {
@@ -214,13 +214,13 @@ mod tests {
     #[test]
     fn addresses_with_queries_both_ways() {
         let u = page_uri("error", &[("title", "No page"), ("uri", "https://x.test/a?b=1&c")]);
-        assert_eq!(u, "cactus://error?title=No%20page&uri=https%3A%2F%2Fx.test%2Fa%3Fb%3D1%26c");
+        assert_eq!(u, "wadbrowser://error?title=No%20page&uri=https%3A%2F%2Fx.test%2Fa%3Fb%3D1%26c");
         assert_eq!(query_value(&u, "uri").as_deref(), Some("https://x.test/a?b=1&c"));
         assert_eq!(query_value(&u, "title").as_deref(), Some("No page"));
         assert_eq!(query_value(&u, "none"), None);
-        assert_eq!(query_value("cactus://history?q=caf%C3%A9+au+lait", "q").as_deref(), Some("café au lait"));
-        assert_eq!(query_value("cactus://x?q=100%", "q").as_deref(), Some("100%"));
-        assert_eq!(page_uri("newtab", &[]), "cactus://newtab");
+        assert_eq!(query_value("wadbrowser://history?q=caf%C3%A9+au+lait", "q").as_deref(), Some("café au lait"));
+        assert_eq!(query_value("wadbrowser://x?q=100%", "q").as_deref(), Some("100%"));
+        assert_eq!(page_uri("newtab", &[]), "wadbrowser://newtab");
     }
 
     #[test]

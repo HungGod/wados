@@ -24,6 +24,8 @@ on:
       - images/**
       - crates/wad-clip/**
       - crates/wad-session/**
+      - crates/wadbrowser-*/**
+      - apps/wadbrowser/**
       - apps/selkies-desktop/**
       - .github/workflows/images.yml
   # Also what the check builds with: wados-pkgs (wad-gen, wad-model) and
@@ -33,6 +35,8 @@ on:
       - images/**
       - crates/wad-clip/**
       - crates/wad-session/**
+      - crates/wadbrowser-*/**
+      - apps/wadbrowser/**
       - apps/selkies-desktop/**
       - crates/wad-gen/**
       - crates/wad-model/**

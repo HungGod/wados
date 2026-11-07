@@ -1,4 +1,4 @@
-/* The cactus:// pages' look, served at cactus://res/pages.css: the spike's
+/* The wadbrowser:// pages' look, served at wadbrowser://res/pages.css: the spike's
    tokens and base (src/styles/tokens.css, base.css), its Button and Toggle,
    and its browser pages (src/apps/browser/pages/*.svelte). Dark only. */
 
@@ -256,7 +256,7 @@ select.choice option {
 
 /* ------------------------------------------------------------ a page of the browser's own */
 
-.cactus-page {
+.wadbrowser-page {
   min-height: 100%;
   max-width: 720px;
   margin: 0 auto;
@@ -265,54 +265,54 @@ select.choice option {
   flex-direction: column;
   gap: 10px;
 }
-.cactus-page.wide {
+.wadbrowser-page.wide {
   max-width: 760px;
   gap: 16px;
 }
-.cactus-page.list {
+.wadbrowser-page.list {
   gap: 14px;
 }
-.cactus-page h1 {
+.wadbrowser-page h1 {
   display: flex;
   align-items: center;
   gap: 10px;
   font-size: 24px;
 }
-.cactus-page h1 .icon.lime {
+.wadbrowser-page h1 .icon.lime {
   color: var(--accent);
 }
-.cactus-page h2 {
+.wadbrowser-page h2 {
   font-size: 13px;
   color: var(--muted);
   margin-top: 12px;
 }
-.cactus-page.wide h2 {
+.wadbrowser-page.wide h2 {
   font-size: 15px;
   color: var(--fg);
   margin-top: 8px;
 }
-.cactus-page section {
+.wadbrowser-page section {
   display: flex;
   flex-direction: column;
   border-radius: var(--r-md);
   border: 1px solid var(--line);
   background: var(--surface-2);
 }
-.cactus-page .row {
+.wadbrowser-page .row {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 12px 16px;
   min-height: 56px;
 }
-.cactus-page.wide .row {
+.wadbrowser-page.wide .row {
   gap: 14px;
   padding: 14px 16px;
 }
-.cactus-page .row + .row {
+.wadbrowser-page .row + .row {
   border-top: 1px solid var(--line);
 }
-.cactus-page .row > .icon {
+.wadbrowser-page .row > .icon {
   color: var(--muted);
 }
 .grow {
@@ -322,13 +322,13 @@ select.choice option {
   flex-direction: column;
   gap: 2px;
 }
-.cactus-page small,
-.cactus-page .empty {
+.wadbrowser-page small,
+.wadbrowser-page .empty {
   color: var(--muted);
   font-size: 12px;
   margin: 0;
 }
-.cactus-page .row small.line {
+.wadbrowser-page .row small.line {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -412,7 +412,7 @@ ul.allowed li {
 }
 
 /* History. */
-.cactus-page .empty.line {
+.wadbrowser-page .empty.line {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -461,13 +461,13 @@ ul.visits .host {
   font: 600 26px / 1 var(--font-display);
 }
 .mark {
-  display: grid;
-  place-items: center;
   width: 44px;
   height: 44px;
-  border-radius: 14px;
-  background: var(--accent-soft);
-  color: var(--accent);
+}
+.wadbrowser-page h1 .logo {
+  width: 28px;
+  height: 28px;
+  vertical-align: -5px;
 }
 form.search {
   display: flex;
@@ -683,7 +683,7 @@ form.search input::placeholder {
   gap: 8px;
   margin-top: 8px;
 }
-/* Cactus has no page by that name. */
+/* WadBrowser has no page by that name. */
 .notice.missing {
   gap: 12px;
   color: var(--muted);

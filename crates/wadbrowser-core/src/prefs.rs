@@ -41,7 +41,7 @@ pub enum SearchEngine {
 impl Default for Preferences {
     fn default() -> Self {
         Self {
-            homepage: "cactus://newtab".into(),
+            homepage: "wadbrowser://newtab".into(),
             search_engine: SearchEngine::DuckDuckGo,
             restore_session: true,
             https_first: true,
@@ -72,7 +72,11 @@ impl Preferences {
             return Ok(prefs);
         }
         let text = fs::read_to_string(&path).with_context(|| format!("reading prefs {}", path.display()))?;
-        let prefs: Self = toml::from_str(&text).context("parsing prefs.toml")?;
+        let mut prefs: Self = toml::from_str(&text).context("parsing prefs.toml")?;
+        // The browser's pages were at cactus:// once.
+        if let Some(rest) = prefs.homepage.strip_prefix("cactus://") {
+            prefs.homepage = format!("wadbrowser://{rest}");
+        }
         Ok(prefs)
     }
 

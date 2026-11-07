@@ -27,8 +27,8 @@ impl Wadd {
     }
 
     /// Set up's last step, Install or Skip (`POST /v1/setup/design`).
-    pub async fn setup_design(&self, starter: bool) -> Result<Setup, Failure> {
-        self.post("/v1/setup/design", &SetupDesign { starter }).await
+    pub async fn setup_design(&self, starter: bool, nvidia: bool) -> Result<Setup, Failure> {
+        self.post("/v1/setup/design", &SetupDesign { starter, nvidia }).await
     }
 
     /// Starts a focus (`POST /v1/focus`).
