@@ -25,11 +25,12 @@
   color-scheme: dark;
 }
 
-/* The Builder's layers: templates ice, Extensions acid, Customization pink. */
+/* The Builder's tabs, in the machine's colours: apps ice, add-ons acid, secrets pink. */
 :root {
-  --layer-template: #7fd3ff;
-  --layer-extensions: #c6ff1f;
-  --layer-customization: #ff3d81;
+  --part-app: #7fd3ff;
+  --part-ext: #c6ff1f;
+  --part-key: #ff3d81;
+  --part-look: #f5f2fa;
 }
 
 /* Bundled with the page (@fontsource, imported in main.tsx). */

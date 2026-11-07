@@ -1,21 +1,27 @@
-// wadspaces.com: what WadSpaces is. No sign-in here; streams have links of
-// their own (https://ws-<id>.wadspaces.com, served by the machine streaming
-// them through its Cloudflare tunnel, not by this site).
+// wadspaces.com: what WadSpaces is. No sign-in here. Streams have links of
+// their own (https://<machine>.wadspaces.com/ws-<guid>/), served by the
+// machine streaming them through its Cloudflare tunnel, not by this site.
 import { motion } from "motion/react";
 import {
   Bluetooth,
+  Bot,
+  Eye,
   FolderGit2,
+  Gamepad2,
   Globe,
-  HardDrive,
-  KeyRound,
   Keyboard,
-  Layers,
   Link2,
+  ListChecks,
   MonitorSmartphone,
-  NotebookPen,
+  Monitor,
+  Network,
+  Package,
   Radio,
+  RotateCcw,
+  ShieldCheck,
+  Smartphone,
   Timer,
-  Usb,
+  Users,
   WandSparkles,
   type LucideIcon,
 } from "lucide-react";
@@ -25,7 +31,7 @@ import { Logo, LogoMark } from "./components/Logo";
 function Shot({ name, alt }: { name: string; alt: string }) {
   return (
     <div className="overflow-hidden rounded-2xl shadow-deep ring-1 ring-line-strong">
-      <img src={`/shots/${name}.webp`} alt={alt} className="block w-full" loading="lazy" width={1280} height={800} />
+      <img src={`/shots/${name}.webp`} alt={alt} className="block w-full" loading="lazy" width={1500} height={1000} />
     </div>
   );
 }
@@ -44,6 +50,16 @@ function Point({ icon: Icon, title, children }: { icon: LucideIcon; title: strin
   );
 }
 
+function Card({ icon: Icon, title, children }: { icon: LucideIcon; title: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-3xl bg-surface p-6 ring-1 ring-line">
+      <Icon className="size-5 text-accent" />
+      <h3 className="mt-3 font-display text-lg font-semibold">{title}</h3>
+      <p className="mt-2 text-sm text-muted">{children}</p>
+    </div>
+  );
+}
+
 function Section({ id, eyebrow, title, lead, children }: { id: string; eyebrow: string; title: string; lead: string; children: React.ReactNode }) {
   return (
     <section id={id} aria-labelledby={`${id}-title`} className="mx-auto w-full max-w-6xl px-4 py-16 sm:px-6 sm:py-24">
@@ -57,26 +73,31 @@ function Section({ id, eyebrow, title, lead, children }: { id: string; eyebrow: 
   );
 }
 
-/** The three layers a wadspace is made of, in the Builder's colours. */
-const LAYERS = [
+/** What a wadspace is made of: the Builder's four tabs, in its colours. */
+const PARTS = [
   {
-    name: "Template",
-    color: "var(--layer-template)",
-    text: "Its apps: VS Code, Krita, Obsidian, Steam, a browser for each web app. One template can build on another.",
+    name: "Apps",
+    color: "var(--part-app)",
+    text: "VS Code, Krita, Obsidian, Steam, Dolphin and more, and WadBrowser for your web apps.",
   },
   {
-    name: "Extensions",
-    color: "var(--layer-extensions)",
-    text: "What it adds: tools, VS Code extensions, web apps, and what opens when it starts.",
+    name: "Add-ons",
+    color: "var(--part-ext)",
+    text: "What extends an app: VS Code extensions, tools like Rust, Python or Node, and Claude Code.",
   },
   {
-    name: "Customization",
-    color: "var(--layer-customization)",
-    text: "What makes it yours: its name, background, projects and keys. It's handed over when it starts, so it never needs building.",
+    name: "Secrets",
+    color: "var(--part-key)",
+    text: "Your sign-ins, kept as keys. Sign in to GitHub or Gmail once, and every wadspace with that key is signed in.",
+  },
+  {
+    name: "Customize",
+    color: "var(--part-look)",
+    text: "Its name, tag, background and projects. Changing them never needs a rebuild.",
   },
 ];
 
-/** Apps a template can have (the Builder's catalog has more). */
+/** Apps a wadspace can have (the Builder's catalog has more). */
 const APPS = [
   ["vscode", "VS Code"],
   ["obsidian", "Obsidian"],
@@ -91,25 +112,25 @@ const APPS = [
   ["dolphin", "Dolphin"],
 ];
 
-/** What a stream's link looks like, made up (nothing here is a real one). */
+/** What a public stream's share looks like, made up (nothing here is a real one). */
 function StreamCard() {
   return (
     <div className="ws-glass rounded-3xl p-5 shadow-deep ring-1 ring-line-strong sm:p-6">
       <div className="flex items-center gap-2 text-sm text-muted">
         <span className="size-2 rounded-full bg-accent shadow-glow" />
-        Streaming: 1 watching
+        Public link · 1 watching
       </div>
       <div className="mt-4 space-y-2 font-mono text-sm">
         <div className="flex items-center gap-3 rounded-xl bg-surface-2 px-3 py-2.5 ring-1 ring-line">
           <Link2 className="size-4 shrink-0 text-muted" />
-          <span className="truncate">https://ws-…….wadspaces.com</span>
+          <span className="truncate">https://studio.wadspaces.com/ws-……/</span>
         </div>
         <div className="flex items-center gap-3 rounded-xl bg-surface-2 px-3 py-2.5 ring-1 ring-line">
-          <KeyRound className="size-4 shrink-0 text-muted" />
-          <span className="truncate">a username and a password</span>
+          <Users className="size-4 shrink-0 text-muted" />
+          <span className="truncate">a user and a password</span>
         </div>
       </div>
-      <p className="mt-4 text-xs text-faint">A new link and login each time. It ends when nobody's watching.</p>
+      <p className="mt-4 text-xs text-faint">A new link each time, with a QR code. It ends when nobody's watching.</p>
     </div>
   );
 }
@@ -142,6 +163,9 @@ export default function Landing() {
           <a href="#machine" className="hidden rounded-lg px-3 py-2 text-muted hover:text-fg sm:block">
             The machine
           </a>
+          <a href="#agents" className="hidden rounded-lg px-3 py-2 text-muted hover:text-fg sm:block">
+            Agents
+          </a>
           <a href="#streams" className="hidden rounded-lg px-3 py-2 text-muted hover:text-fg sm:block">
             Streams
           </a>
@@ -157,7 +181,7 @@ export default function Landing() {
             </h1>
             <p className="mx-auto mt-5 max-w-2xl text-base text-muted sm:text-lg">
               WadSpaces is a computer that boots into desktops you design: a wadspace for each thing you do, with its own apps, files and
-              sign-ins. Build them from layers, run them on your own hardware, and stream one to any browser when you're away from it.
+              sign-ins. Run them on your own machines, switch between them in a keystroke, and stream one to any browser.
             </p>
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
               <a href="#wadspaces" className="inline-flex h-11 items-center gap-2 rounded-xl bg-accent px-5 text-sm font-semibold text-accent-fg shadow-glow">
@@ -169,7 +193,7 @@ export default function Landing() {
             </div>
           </motion.div>
           <div className="mx-auto mt-14 max-w-5xl">
-            <Shot name="launcher" alt="The launcher: your wadspaces as cards, what's running first, the bar along the bottom" />
+            <Shot name="launcher" alt="The launcher: wadspaces as cards in tabs, with the bar along the bottom" />
           </div>
         </section>
 
@@ -177,34 +201,34 @@ export default function Landing() {
           id="wadspaces"
           eyebrow="Wadspaces"
           title="A desktop for each thing you do."
-          lead="A wadspace is a whole desktop made of layers. Shared layers are built once and reused, so a new wadspace on an old template is ready in seconds."
+          lead="A wadspace is a whole desktop with its own apps, add-ons, sign-ins and look. Design it in the Builder, and your machine builds it from ready-made packages, so a new one is ready in minutes."
         >
-          <div className="grid gap-4 md:grid-cols-3">
-            {LAYERS.map((l) => (
-              <div key={l.name} className="rounded-3xl bg-surface p-6 ring-1 ring-line">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            {PARTS.map((p) => (
+              <div key={p.name} className="rounded-3xl bg-surface p-6 ring-1 ring-line">
                 <div className="flex items-center gap-2.5">
-                  <span className="size-3 rounded-full" style={{ background: l.color }} />
-                  <h3 className="font-display text-lg font-semibold">{l.name}</h3>
+                  <span className="size-3 rounded-full" style={{ background: p.color }} />
+                  <h3 className="font-display text-lg font-semibold">{p.name}</h3>
                 </div>
-                <p className="mt-3 text-sm text-muted">{l.text}</p>
+                <p className="mt-3 text-sm text-muted">{p.text}</p>
               </div>
             ))}
           </div>
           <div className="mt-10 grid items-center gap-10 lg:grid-cols-[1fr_1.3fr]">
             <div className="space-y-6">
               <Point icon={WandSparkles} title="Design it in the Builder">
-                Stack a template, Extensions and a Customization, and see the desktop you'll get before it's built.
+                Each wadspace is a stack: drag an app, a key or a whole section from one to another, and see its desktop before it's built.
               </Point>
-              <Point icon={Layers} title="Built on the machine">
-                Each layer is its own image, built on the machine where it runs, and shared by every wadspace on it.
+              <Point icon={Package} title="Built from shared packages">
+                Apps and tools come ready-made and are shared by every wadspace on the machine, so they download once.
               </Point>
-              <Point icon={KeyRound} title="Sign in once">
-                Saved sign-ins (GitHub, VS Code, your web apps) are shared by every wadspace that uses them.
+              <Point icon={FolderGit2} title="Your projects come along">
+                A GitHub repository is cloned in, a folder is opened in place, and a file is copied. Another of your machines' folders works too.
               </Point>
             </div>
-            <Shot name="builder" alt="The Builder: each wadspace a stack of its customization, secrets, add-ons and apps" />
+            <Shot name="builder" alt="The Builder: two wadspaces as stacks of their customization, secrets, add-ons and apps, with the apps beside them" />
           </div>
-          <ul className="mt-12 flex flex-wrap items-center gap-3" aria-label="Some of the apps a template can have">
+          <ul className="mt-12 flex flex-wrap items-center gap-3" aria-label="Some of the apps a wadspace can have">
             {APPS.map(([id, name]) => (
               <li key={id} className="flex items-center gap-2 rounded-full bg-surface py-1.5 pl-1.5 pr-3.5 text-sm ring-1 ring-line">
                 <img src={`/apps/${id}/icon.png`} alt="" className="size-6 rounded-md" loading="lazy" />
@@ -222,50 +246,54 @@ export default function Landing() {
           id="machine"
           eyebrow="The machine"
           title="It boots straight into your wadspaces."
-          lead="A WadSpaces machine is a laptop or desktop running the WadSpaces OS. Open several wadspaces at once and switch between them like apps."
+          lead="WadOS is the system underneath: installed from a USB stick onto an encrypted disk, and kept up to date as one image. Open several wadspaces at once, and move between them like apps."
         >
           <div className="grid items-center gap-10 lg:grid-cols-[1.3fr_1fr]">
-            <Shot name="desktop" alt="The desktop: wadspaces as glass tiles, a folder per tag, and the bar along the top" />
+            <Shot name="desktop" alt="The desktop: wadspaces and files as icons, a folder per tag, and the bar along the top" />
             <div className="space-y-6">
-              <Point icon={Keyboard} title="Super+Tab between them">
-                Every wadspace runs full screen. Super+Tab and Super+1…9 switch, and the bar above has Wi-Fi, sound and power.
+              <Point icon={Keyboard} title="Super+Tab and Alt+Space">
+                Super+Tab switches between what's running. Alt+Space finds any wadspace or app by name.
+              </Point>
+              <Point icon={Monitor} title="Every screen a desktop">
+                Scroll down from your wadspaces to the desktop. Each display has one of its own, and a wadspace can go full screen on any of them.
               </Point>
               <Point icon={Timer} title="Focus mode">
-                Pick what you're working on and for how long. Until the time's up, only those can come on screen.
-              </Point>
-              <Point icon={NotebookPen} title="WadNotes">
-                Notes, tasks and reminders for each wadspace, and a calendar they all share.
+                Pick a wadspace and how long. Until the time's up, nothing else can come on screen.
               </Point>
               <Point icon={Globe} title="WadBrowser">
-                Its own browser, where each web app gets a window of its own.
+                Its own browser, with ads and trackers blocked. Any page can become an app with a window of its own.
               </Point>
             </div>
           </div>
           <div className="mt-14 grid gap-4 md:grid-cols-3">
-            <div className="rounded-3xl bg-surface p-6 ring-1 ring-line">
-              <FolderGit2 className="size-5 text-accent" />
-              <h3 className="mt-3 font-display text-lg font-semibold">Your projects come along</h3>
-              <p className="mt-2 text-sm text-muted">
-                GitHub repositories are cloned into each wadspace that uses them. Folders on the machine can be copied in, or mounted.
-              </p>
-            </div>
-            <div className="rounded-3xl bg-surface p-6 ring-1 ring-line">
-              <Usb className="size-5 text-accent" />
-              <h3 className="mt-3 font-display text-lg font-semibold">Devices go where they're needed</h3>
-              <p className="mt-2 text-sm text-muted">
-                Plug in a gamepad, webcam or security key and hand it to a wadspace. It remembers next time.
-              </p>
-            </div>
-            <div className="rounded-3xl bg-surface p-6 ring-1 ring-line">
-              <div className="flex gap-2 text-accent">
-                <HardDrive className="size-5" />
-                <Bluetooth className="size-5" />
-              </div>
-              <h3 className="mt-3 font-display text-lg font-semibold">Drives and Bluetooth</h3>
-              <p className="mt-2 text-sm text-muted">
-                USB drives show up in a wadspace's Drives folder and eject safely. Headphones and pads pair from the bar.
-              </p>
-            </div>
+            <Card icon={Network} title="Your machines, together">
+              Machines on your tailnet find each other. Browse another's files, copy its wadspaces over, or stream one from it.
+            </Card>
+            <Card icon={RotateCcw} title="Updates you can undo">
+              WadOS downloads an update in the background. Restart into it when you're ready, or go back to the one before.
+            </Card>
+            <Card icon={Bluetooth} title="Everything in the bar">
+              Wi-Fi, Bluetooth, sound and brightness are a click away, with your notifications and what's running.
+            </Card>
+          </div>
+        </Section>
+
+        <Section
+          id="agents"
+          eyebrow="Agents"
+          title="Agents with a wadspace of their own."
+          lead="Give Claude Code a job in a wadspace. It works there on your project, not on your machine, and you watch what it builds as it goes."
+        >
+          <div className="grid gap-4 md:grid-cols-3">
+            <Card icon={Bot} title="Runs where your project is">
+              The agent works inside the wadspace, with its apps and keys. Your machine and your other wadspaces are out of its reach.
+            </Card>
+            <Card icon={Eye} title="A sandbox to try it in">
+              When it has something to show, it opens a throwaway wadspace beside its checklist, so you can try the build before you trust it.
+            </Card>
+            <Card icon={ListChecks} title="Nothing ships by itself">
+              It asks before it pushes or opens a pull request. The Agents app shows every job, what it's doing, and what's waiting for you.
+            </Card>
           </div>
         </Section>
 
@@ -273,18 +301,21 @@ export default function Landing() {
           id="streams"
           eyebrow="Streams"
           title="Stream a wadspace to any browser."
-          lead="Away from the machine? Stream a wadspace to a phone, a laptop or a friend's screen. The machine needs no open port: streams go out through a secure tunnel."
+          lead="Away from the machine? Stream a wadspace to a phone, a laptop or a friend's screen. Nothing to install, and no open port on the machine."
         >
           <div className="grid items-center gap-10 lg:grid-cols-2">
             <div className="space-y-6">
-              <Point icon={Radio} title="One button">
-                Stream it from the launcher or from Home. The wadspace moves off the machine's screen and onto the stream.
+              <Point icon={ShieldCheck} title="Private, over your tailnet">
+                Only your own devices can reach a private stream. It never leaves your network.
               </Point>
-              <Point icon={Link2} title="A private link and its own login">
-                Every stream gets a new link and a username and password to hand on with it. Nobody gets in without both.
+              <Point icon={Link2} title="Or a public link">
+                At your machine's own address, through its tunnel. Open it in one tap, or sign in with the user and password that come with it.
+              </Point>
+              <Point icon={Gamepad2} title="Play together">
+                Stream a game with up to four players, each with a link and a gamepad of their own.
               </Point>
               <Point icon={MonitorSmartphone} title="Any browser">
-                Nothing to install: open the link, sign in, and the desktop is there, keyboard, mouse, touch and sound.
+                Keyboard, mouse, touch and sound. Open it on the machine again and the stream ends, so the person there always comes first.
               </Point>
             </div>
             <StreamCard />
@@ -292,10 +323,14 @@ export default function Landing() {
           <div id="stream-link" className="mt-14 rounded-3xl bg-accent-soft p-6 ring-1 ring-line-strong sm:p-8">
             <h3 className="font-display text-xl font-semibold sm:text-2xl">Got a stream link?</h3>
             <p className="mt-2 max-w-3xl text-muted">
-              Just open it: it looks like <span className="font-mono text-fg">https://ws-…….wadspaces.com</span>. Your browser asks for
-              the username and password you were sent with it. If the link says it's not found, that stream has ended: ask for a new one.
+              Just open it. It looks like <span className="font-mono text-fg">https://&lt;machine&gt;.wadspaces.com/ws-……/</span>. A one-tap
+              link signs you straight in; otherwise, sign in with the user and password you were sent. If it says the link has expired, the
+              stream has ended: ask for a new one.
             </p>
           </div>
+          <p className="mt-6 flex items-center gap-2 text-sm text-faint">
+            <Smartphone className="size-4" /> An Android app for your machines and their streams is on its way.
+          </p>
         </Section>
       </main>
 
