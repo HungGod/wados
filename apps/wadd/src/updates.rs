@@ -28,11 +28,14 @@
 //! person's.
 //!
 //! **Signing in to the registry.** The host image on ghcr is public, so
-//! bootc needs no login. A private one's check that's refused (401, denied)
-//! is tried again once with this machine's GitHub token (the podman secret
+//! bootc needs no login: every check and download starts without one. A
+//! private one's that's refused (401, denied) is tried again once with this
+//! machine's GitHub token (the podman secret
 //! `github_token`, phase 6) written as ostree's login,
 //! `/run/ostree/auth.json` (0600, root's, in `/run` only: never in the
-//! image and never on the disk), for ghcr.io only.
+//! image and never on the disk), for ghcr.io only. A login that didn't
+//! help is removed (ghcr refuses one a token can't use, even for a public
+//! image).
 //!
 //! **How bootc runs.** wadd.service is sandboxed (ProtectSystem=strict) and
 //! bootc writes the boot loader and `/sysroot`: as root, wadd has systemd
@@ -1006,12 +1009,34 @@ impl Inner {
         }
     }
 
-    /// bootc `argv`, tried again once signed in when the registry refused it.
+    /// The registry's login gone: each try starts without one. A public image
+    /// needs none, and ghcr refuses a login it can't use (a GitHub token
+    /// without read:packages) even for a public one, so one left from an
+    /// image that was private once would refuse every check after.
+    fn sign_out(&self) {
+        if let Err(e) = std::fs::remove_file(&self.settings.auth_file)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!("updates: {}: {e}", self.settings.auth_file.display());
+        }
+    }
+
+    /// After a try signed in: a login that didn't help isn't kept.
+    fn signed_in_answer(&self, r: Res<String>) -> Res<String> {
+        if matches!(&r, Err(e) if refused(e)) {
+            self.sign_out();
+        }
+        r
+    }
+
+    /// bootc `argv`, without a login first, then signed in if the registry refused it.
     async fn with_login(&self, job: &str, argv: &[&str]) -> Res<String> {
+        self.sign_out();
         match self.bootc(Some(job), argv).await {
             Err(e) if refused(&e) && self.sign_in().await => {
                 self.jobs.line(job, "» the registry wants a login: with this machine's GitHub token");
-                self.bootc(Some(job), argv).await
+                let r = self.bootc(Some(job), argv).await;
+                self.signed_in_answer(r)
             }
             r => r,
         }
@@ -1070,10 +1095,12 @@ impl Inner {
             })
         };
         self.jobs.line(job, &format!("$ bootc switch {image}"));
+        self.sign_out();
         let r = match self.bootc.run(&argv, lines).await {
             Err(e) if refused(&e) && self.sign_in().await => {
                 self.jobs.line(job, "» the registry wants a login: with this machine's GitHub token");
-                self.bootc(Some(job), &argv).await
+                let r = self.bootc(Some(job), &argv).await;
+                self.signed_in_answer(r)
             }
             r => r,
         };
@@ -1124,10 +1151,12 @@ impl Inner {
             });
             self.jobs.line(job, "$ bootc upgrade");
             let argv = UPGRADE;
+            self.sign_out();
             match self.bootc.run(argv, on_line).await {
                 Err(e) if refused(&e) && self.sign_in().await => {
                     self.jobs.line(job, "» the registry wants a login: with this machine's GitHub token");
-                    self.bootc(Some(job), argv).await
+                    let r = self.bootc(Some(job), argv).await;
+                    self.signed_in_answer(r)
                 }
                 r => r,
             }

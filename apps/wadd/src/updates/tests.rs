@@ -147,6 +147,8 @@ struct Machine {
     fail: HashMap<&'static str, String>,
     /// The registry wants a login.
     private: bool,
+    /// A login is refused (a GitHub token without read:packages: ghcr says so even for a public image).
+    login_refused: bool,
 }
 
 fn entry(v: &Version) -> Value {
@@ -197,6 +199,9 @@ impl Bootc for FakeBootc {
         }
         let signed_in = self.auth.exists();
         let mut m = self.m.lock().unwrap().clone();
+        if matches!(verb, "check" | "upgrade") && m.login_refused && signed_in {
+            return Err("initializing source docker://ghcr.io/hunggod/wados-host:latest: Requesting bearer token: received unexpected HTTP status: 403 Forbidden".into());
+        }
         if matches!(verb, "check" | "upgrade") && m.private && !signed_in {
             return Err(
                 "reading manifest latest in ghcr.io/hunggod/wados-host: unauthorized: authentication required".into()
@@ -595,4 +600,30 @@ fn the_nvidia_image_is_beside_the_plain_one() {
     // On it already, or not one of ours: nothing to move to.
     assert_eq!(nvidia_image("ghcr.io/hunggod/wados-host-nvidia:latest"), None);
     assert_eq!(nvidia_image("quay.io/fedora/fedora-bootc:44"), None);
+}
+
+/// The machine's case (phase 13): the image was private, so a check signed in; then it was made
+/// public, and the GitHub token can't read packages, so ghcr refuses the login even for it. Every
+/// check starts without a login, and one that didn't help isn't left behind.
+#[tokio::test]
+async fn a_login_that_doesnt_help_is_never_kept() {
+    let images = FakeImages { token: Some("gho_no_packages".into()), ..FakeImages::default() };
+    let up = up_with(Machine { private: true, ..machine() }, images, |_, _| {});
+    ended_ok(&up).await;
+    assert!(up.bootc.auth.exists(), "signed in while it was private");
+
+    // Public now, and the token can't read packages.
+    {
+        let mut m = up.bootc.m.lock().unwrap();
+        m.private = false;
+        m.login_refused = true;
+    }
+    ended_ok(&up).await;
+    assert!(!up.bootc.auth.exists(), "a public image is checked without a login");
+
+    // Private, and the login refused: it fails, and the login doesn't stay.
+    up.bootc.m.lock().unwrap().private = true;
+    let job = up.u.check().await.unwrap();
+    assert_eq!(up.ended(&job).await.job.status, JobStatus::Error);
+    assert!(!up.bootc.auth.exists(), "a refused login isn't kept");
 }
