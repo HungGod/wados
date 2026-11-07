@@ -219,21 +219,31 @@ async fn purge(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Resu
 }
 
 async fn ops(State(app): State<Arc<AppState>>, Json(req): Json<OpRequest>) -> Result<Json<OpResult>, Failure> {
-    let app2 = app.clone();
-    let out = tokio::task::spawn_blocking(move || app2.docs.apply(req.op))
-        .await
-        .map_err(|e| Failure(ApiError::internal(e.to_string())))??;
-    edited(&app, &out.changed).await;
-    Ok(Json(out))
+    Ok(Json(apply_op(&app, req.op).await?))
 }
 
 async fn undo(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<OpResult>, Failure> {
+    Ok(Json(apply_undo(&app, id).await?))
+}
+
+/// An edit, as `POST /v1/ops` (and the remote API's) makes it.
+pub async fn apply_op(app: &Arc<AppState>, op: wad_model::edit::Op) -> Result<OpResult, Failure> {
+    let app2 = app.clone();
+    let out = tokio::task::spawn_blocking(move || app2.docs.apply(op))
+        .await
+        .map_err(|e| Failure(ApiError::internal(e.to_string())))??;
+    edited(app, &out.changed).await;
+    Ok(out)
+}
+
+/// An edit undone, as `POST /v1/undo/{id}` (and the remote API's).
+pub async fn apply_undo(app: &Arc<AppState>, id: String) -> Result<OpResult, Failure> {
     let app2 = app.clone();
     let out = tokio::task::spawn_blocking(move || app2.docs.undo(&id))
         .await
         .map_err(|e| Failure(ApiError::internal(e.to_string())))??;
-    edited(&app, &out.changed).await;
-    Ok(Json(out))
+    edited(app, &out.changed).await;
+    Ok(out)
 }
 
 /// What an edit changed, told to what follows the wadspaces: an image out

@@ -225,6 +225,22 @@ pub struct RemoteHello {
     pub trust: RemoteTrust,
 }
 
+/// `GET /v1/remote/notices`: one of the machine's recent notices, as a
+/// phone's Activity lists them (newest first).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteNotice {
+    /// When it was told (ms since the epoch).
+    pub at: i64,
+    pub level: crate::Level,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// A Lucide icon's name; none: the level's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
 /// `GET /v1/remote/machine`, to my machines and trusted devices: what a
 /// peer card shows.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

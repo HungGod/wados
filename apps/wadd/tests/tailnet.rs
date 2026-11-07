@@ -547,3 +547,109 @@ async fn a_wadspace_streams_from_another_machine_of_mine() {
     assert_eq!(laptop.w.stop_peer_stream("m-desk", &id).await.unwrap_err().status, 404);
     assert_eq!(laptop.w.start_peer_stream("m-nope", &id, &req).await.unwrap_err().status, 404);
 }
+
+/// What the phone app does (phase 13), once a machine trusts it: finds my
+/// other machines, reads the library, edits in its Builder (and undoes),
+/// builds, and reads Activity. Restarting is only into a staged update.
+#[tokio::test]
+async fn a_trusted_phone_does_what_the_app_needs() {
+    use reqwest::Method;
+    let net = tailnet();
+    let port = free_port();
+    let desk = machine(&net, "nDesk", "m-desk", "127.0.0.1", port).await;
+    let laptop = machine(&net, "nLaptop", "m-laptop", "127.0.0.2", port).await;
+    sees(&desk, "m-laptop").await;
+    let phone = Device::at("127.0.0.3");
+
+    // Not trusted yet: none of it, and it's asked for.
+    phone.get(&desk, port, "/v1/remote/hello").await;
+    assert_eq!(phone.get(&desk, port, "/v1/remote/peers").await.0, 403);
+    let op = serde_json::json!({ "op": { "op": "space.create", "name": "From the phone" } });
+    assert_eq!(phone.send(&desk, port, Method::POST, "/v1/remote/ops", &op).await.0, 403);
+    until("the phone's ask", async || desk.w.tailnet().await.unwrap().asks.into_iter().next()).await;
+    desk.w.trust_device("nPhone").await.unwrap();
+
+    // My other machines, with where to reach them.
+    let (status, peers) = phone.get(&desk, port, "/v1/remote/peers").await;
+    assert_eq!(status, 200, "{peers}");
+    let lap = peers.as_array().unwrap().iter().find(|p| p["id"] == "m-laptop").expect("the laptop").clone();
+    assert_eq!(lap["dnsName"], "laptop.ts.test");
+
+    // The library, and an edit from its Builder: made, renamed, the rename undone.
+    let (status, lib) = phone.get(&desk, port, "/v1/remote/library").await;
+    assert_eq!(status, 200);
+    assert!(lib["wadspaces"].as_array().is_some_and(|w| !w.is_empty()), "{lib}");
+    let (status, made) = phone.send(&desk, port, Method::POST, "/v1/remote/ops", &op).await;
+    assert_eq!(status, 200, "{made}");
+    let id = made["created"].as_str().expect("its id").to_string();
+    let rename = serde_json::json!({ "op": { "op": "builder.rename", "ws": id, "name": "Renamed" } });
+    assert_eq!(phone.send(&desk, port, Method::POST, "/v1/remote/ops", &rename).await.0, 200);
+    let one = format!("/v1/remote/wadspaces/{id}");
+    assert_eq!(phone.get(&desk, port, &one).await.1["name"], "Renamed");
+    // Something taken out has an Undo (the phone's snackbar).
+    let add = serde_json::json!({ "op": { "op": "apps.add", "ws": id, "app": "terminal" } });
+    assert_eq!(phone.send(&desk, port, Method::POST, "/v1/remote/ops", &add).await.0, 200);
+    let apps = |v: &Value| v["apps"].as_array().map(|a| a.len()).unwrap_or(0);
+    assert_eq!(apps(&phone.get(&desk, port, &one).await.1), 1);
+    let out = serde_json::json!({ "op": { "op": "space.remove", "ws": id, "chip": "app:terminal" } });
+    let (status, taken) = phone.send(&desk, port, Method::POST, "/v1/remote/ops", &out).await;
+    assert_eq!(status, 200, "{taken}");
+    assert_eq!(apps(&phone.get(&desk, port, &one).await.1), 0);
+    let path = format!("/v1/remote/undo/{}", taken["undo"].as_str().expect("an undo"));
+    assert_eq!(phone.send(&desk, port, Method::POST, &path, &Value::Null).await.0, 200);
+    assert_eq!(apps(&phone.get(&desk, port, &one).await.1), 1);
+
+    // What's running, built, under way and streaming, as the socket has them.
+    for path in ["/v1/remote/runs", "/v1/remote/builds", "/v1/remote/jobs", "/v1/remote/streams"] {
+        let (status, v) = phone.get(&desk, port, path).await;
+        assert_eq!(status, 200, "{path}: {v}");
+    }
+
+    // Activity: what it did, on the machine's screen and in its notices.
+    // (Building needs the base image, which this machine hasn't: it says so.)
+    let path = format!("/v1/remote/wadspaces/{id}/build");
+    let (status, built) = phone.send(&desk, port, Method::POST, &path, &Value::Null).await;
+    assert_eq!((status, built["code"].as_str()), (409, Some("conflict")), "{built}");
+    let path = format!("/v1/remote/wadspaces/{id}/stop");
+    let (status, stopped) = phone.send(&desk, port, Method::POST, &path, &Value::Null).await;
+    assert_eq!(status, 200, "{stopped}");
+    let (status, notices) = phone.get(&desk, port, "/v1/remote/notices").await;
+    assert_eq!(status, 200);
+    let titles: Vec<&str> = notices.as_array().unwrap().iter().filter_map(|n| n["title"].as_str()).collect();
+    assert!(titles.iter().any(|t| t.contains("pixel-9 stopped Renamed")), "{titles:?}");
+    assert!(notices[0]["at"].as_i64().is_some_and(|at| at > 0), "{notices}");
+
+    // The answers as they are, for the phone app's tests (its core reads
+    // them): WADOS_PHONE_FIXTURES=<dir> writes them there.
+    if let Ok(dir) = std::env::var("WADOS_PHONE_FIXTURES") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, v: &Value| {
+            std::fs::write(dir.join(format!("{name}.json")), serde_json::to_string_pretty(v).unwrap()).unwrap();
+        };
+        for (name, path) in [
+            ("hello", "/v1/remote/hello".to_string()),
+            ("machine", "/v1/remote/machine".into()),
+            ("peers", "/v1/remote/peers".into()),
+            ("wadspaces", "/v1/remote/wadspaces".into()),
+            ("library", "/v1/remote/library".into()),
+            ("runs", "/v1/remote/runs".into()),
+            ("builds", "/v1/remote/builds".into()),
+            ("jobs", "/v1/remote/jobs".into()),
+            ("streams", "/v1/remote/streams".into()),
+            ("notices", "/v1/remote/notices".into()),
+        ] {
+            let (status, v) = phone.get(&desk, port, &path).await;
+            assert_eq!(status, 200, "{path}");
+            write(name, &v);
+        }
+        write("op-result", &taken);
+        write("refused", &built);
+        write("hello-asked", &Device::at("127.0.0.4").get(&desk, port, "/v1/remote/hello").await.1);
+    }
+
+    // No update staged (and this isn't a machine's own wadd): never a restart.
+    let (status, _) = phone.send(&desk, port, Method::POST, "/v1/remote/restart", &Value::Null).await;
+    assert_ne!(status, 202);
+    drop(laptop);
+}

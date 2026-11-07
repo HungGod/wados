@@ -3,6 +3,9 @@
 //! nothing from another network reaches it). Its own small router, never the
 //! socket's `/v1`.
 //!
+//! A phone (phase 13) uses the routes after `trust`: it never opens a
+//! wadspace on the screen itself, and it edits, builds and streams.
+//!
 //! Every request is checked first ([`gate`]): tailscaled's WhoIs says which
 //! device the connection is from, and tailnet.rs how this machine sees it
 //! (one of my machines, trusted, asking, denied):
@@ -19,6 +22,14 @@
 //! | `POST /v1/remote/wadspaces/{id}/stream` (`StreamRequest`) → `StreamShare`, once it's live (streaming it already in that mode: its share) | my machines and trusted devices |
 //! | `GET /v1/remote/wadspaces/{id}/stream` → its `StreamInfo` (404: none) | my machines and trusted devices |
 //! | `DELETE /v1/remote/wadspaces/{id}/stream` → `StreamInfo`, ended | my machines and trusted devices |
+//! | `GET /v1/remote/peers` → my machines, as `/v1/peers` | my machines and trusted devices |
+//! | `GET /v1/remote/library` → the library (keys, tags, discs, Steam) | my machines and trusted devices |
+//! | `POST /v1/remote/ops` (`OpRequest`) → `OpResult`; `POST /v1/remote/undo/{id}` | my machines and trusted devices |
+//! | `GET /v1/remote/runs`, `/builds`, `/jobs`, `/streams` → as the socket's | my machines and trusted devices |
+//! | `GET /v1/remote/streams/{id}/share` → `StreamShare` (its players' links too) | my machines and trusted devices |
+//! | `GET /v1/remote/notices` → [`RemoteNotice`]s, newest first | my machines and trusted devices |
+//! | `GET /v1/remote/update`, `POST /v1/remote/update/check` → as the socket's | my machines and trusted devices |
+//! | `POST /v1/remote/restart` → 202: restarts into a staged update (nothing else) | my machines and trusted devices |
 //! | `GET /v1/remote/trust` → [`TrustBook`] | my machines |
 //! | `POST /v1/remote/trust` ([`TrustAnswer`]) → [`TrustBook`] | my machines |
 //!
@@ -34,15 +45,18 @@ use std::time::Duration;
 
 use axum::extract::connect_info::Connected;
 use axum::extract::{ConnectInfo, Path, Request, State};
+use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
 use tokio::net::{TcpListener, TcpSocket};
+use wad_model::edit::Library;
 use wad_model::{PeerKind, Wadspace};
 use wad_proto::{
-    ApiError, BuildAnswer, ErrorCode, Event, Level, MachineInfo, OpenRequest, RemoteHello, RemoteMachine, RemoteTrust,
-    StreamInfo, StreamRequest, StreamShare, TrustAnswer, TrustBook, WadspaceRun,
+    ApiError, BuildAnswer, ErrorCode, Event, JobInfo, Level, MachineInfo, OpRequest, OpResult, OpenRequest, PeerInfo,
+    RemoteHello, RemoteMachine, RemoteNotice, RemoteTrust, StreamInfo, StreamList, StreamRequest, StreamShare,
+    TrustAnswer, TrustBook, Updates, WadspaceBuild, WadspaceRun,
 };
 
 use crate::api::{AppState, Failure};
@@ -131,6 +145,19 @@ pub fn router(r: Arc<Remote>) -> Router {
         .route("/v1/remote/wadspaces/{id}/open", post(open))
         .route("/v1/remote/wadspaces/{id}/stop", post(stop))
         .route("/v1/remote/wadspaces/{id}/stream", get(stream_info).post(stream).delete(stream_stop))
+        .route("/v1/remote/peers", get(peers))
+        .route("/v1/remote/library", get(library))
+        .route("/v1/remote/ops", post(ops))
+        .route("/v1/remote/undo/{id}", post(undo))
+        .route("/v1/remote/runs", get(runs))
+        .route("/v1/remote/builds", get(builds))
+        .route("/v1/remote/jobs", get(jobs))
+        .route("/v1/remote/streams", get(streams))
+        .route("/v1/remote/streams/{id}/share", get(share))
+        .route("/v1/remote/notices", get(notices))
+        .route("/v1/remote/update", get(update))
+        .route("/v1/remote/update/check", post(update_check))
+        .route("/v1/remote/restart", post(restart))
         .route(TRUST, get(trust_book).post(trust_answer))
         .fallback(|| async { Failure(ApiError::not_found("no such endpoint")) })
         .layer(axum::extract::DefaultBodyLimit::max(BODY))
@@ -258,6 +285,76 @@ async fn stream_stop(
     let ended = r.app.streams.stop(&id).await?;
     notice(&r, format!("{} stopped streaming {}", c.name, w.name));
     Ok(Json(ended))
+}
+
+// ------------------------------------------------------------ for a phone
+
+async fn peers(State(r): State<Arc<Remote>>) -> Answer<Vec<PeerInfo>> {
+    Ok(Json(r.app.net.peers().await?))
+}
+
+async fn library(State(r): State<Arc<Remote>>) -> Json<Library> {
+    Json(r.app.docs.snapshot())
+}
+
+/// An edit from the phone's Builder, as the machine's own Builder's.
+async fn ops(State(r): State<Arc<Remote>>, Json(req): Json<OpRequest>) -> Answer<OpResult> {
+    Ok(Json(crate::api::apply_op(&r.app, req.op).await?))
+}
+
+async fn undo(State(r): State<Arc<Remote>>, Path(id): Path<String>) -> Answer<OpResult> {
+    Ok(Json(crate::api::apply_undo(&r.app, id).await?))
+}
+
+async fn runs(State(r): State<Arc<Remote>>) -> Json<Vec<WadspaceRun>> {
+    Json(r.app.runs.states())
+}
+
+async fn builds(State(r): State<Arc<Remote>>) -> Json<Vec<WadspaceBuild>> {
+    Json(r.app.builds.states())
+}
+
+async fn jobs(State(r): State<Arc<Remote>>) -> Json<Vec<JobInfo>> {
+    Json(r.app.jobs.list())
+}
+
+async fn streams(State(r): State<Arc<Remote>>) -> Answer<StreamList> {
+    Ok(Json(r.app.streams.streams().await?))
+}
+
+async fn share(State(r): State<Arc<Remote>>, Path(id): Path<String>) -> Answer<StreamShare> {
+    live(&r, &id)?;
+    Ok(Json(r.app.streams.share(&id).await?))
+}
+
+async fn notices(State(r): State<Arc<Remote>>) -> Json<Vec<RemoteNotice>> {
+    Json(r.app.bus.recent_notices())
+}
+
+async fn update(State(r): State<Arc<Remote>>) -> Answer<Updates> {
+    Ok(Json(r.app.updates.status().await?))
+}
+
+async fn update_check(State(r): State<Arc<Remote>>) -> Answer<JobInfo> {
+    Ok(Json(r.app.updates.check().await?))
+}
+
+/// Restarts into a staged update, and only that: on a machine's own wadd
+/// (never a laptop's), a moment after it answers.
+async fn restart(State(r): State<Arc<Remote>>, Extension(c): Extension<Caller>) -> Result<StatusCode, Failure> {
+    let staged = r.app.updates.status().await?.staged;
+    let Some(v) = staged else {
+        return Err(Failure(ApiError::conflict("There's no update to restart into")));
+    };
+    if r.app.profile != wad_config::Profile::System {
+        return Err(Failure(ApiError::conflict("Only a machine restarts to update")));
+    }
+    notice(&r, format!("{} is restarting {} into WadSpaces {}", c.name, r.app.machine.name, v.version));
+    tokio::spawn(async {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let _ = tokio::process::Command::new("systemctl").arg("reboot").status().await;
+    });
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn trust_book(State(r): State<Arc<Remote>>) -> Json<TrustBook> {

@@ -3,26 +3,45 @@
 //! machine, each wadspace's state…), so a new watcher starts from the present.
 //! An event can end a present ([`Event::ends_key`]: a sign-in's, when it's done).
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 use indexmap::IndexMap;
 use tokio::sync::broadcast;
-use wad_proto::{Event, MachineInfo, SignInProvider};
+use wad_proto::{Event, MachineInfo, RemoteNotice, SignInProvider};
+
+/// How many notices are kept for a phone's Activity.
+pub const RECENT: usize = 50;
 
 #[derive(Clone)]
 pub struct Bus {
     tx: broadcast::Sender<Event>,
     latest: Arc<Mutex<IndexMap<String, Event>>>,
+    /// The last notices, newest last (a phone's Activity: the shell keeps its own).
+    recent: Arc<Mutex<VecDeque<RemoteNotice>>>,
 }
 
 impl Bus {
     pub fn new(machine: MachineInfo) -> Self {
-        let bus = Self { tx: broadcast::channel(512).0, latest: Arc::default() };
+        let bus = Self { tx: broadcast::channel(512).0, latest: Arc::default(), recent: Arc::default() };
         bus.publish(Event::Machine(machine));
         bus
     }
 
     pub fn publish(&self, e: Event) {
+        if let Event::Notice { level, title, body, icon, .. } = &e {
+            let mut recent = self.recent.lock().unwrap();
+            recent.push_back(RemoteNotice {
+                at: crate::jobs::now_ms(),
+                level: *level,
+                title: title.clone(),
+                body: body.clone(),
+                icon: icon.clone(),
+            });
+            while recent.len() > RECENT {
+                recent.pop_front();
+            }
+        }
         {
             let mut latest = self.latest.lock().unwrap();
             if let Some(k) = e.ends_key() {
@@ -41,6 +60,11 @@ impl Bus {
     pub fn sign_in(&self, provider: SignInProvider, url: &str, code: Option<&str>) -> SignInWindow {
         self.publish(Event::SignIn { provider, url: url.to_string(), code: code.map(String::from) });
         SignInWindow { bus: self.clone(), provider }
+    }
+
+    /// The last notices, newest first.
+    pub fn recent_notices(&self) -> Vec<RemoteNotice> {
+        self.recent.lock().unwrap().iter().rev().cloned().collect()
     }
 
     /// A kind's latest is no longer the present (a job forgotten, a wadspace gone).

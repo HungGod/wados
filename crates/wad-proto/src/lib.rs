@@ -34,8 +34,8 @@ pub use signin::SignInProvider;
 pub use storage::{Storage, WadspaceStorage};
 pub use streams::{Availability, StreamInfo, StreamList, StreamRequest, StreamShare, StreamsAvailability};
 pub use tailnet::{
-    Answer, DeviceKind, DriveState, RemoteHello, RemoteMachine, RemoteTrust, Tailnet, TailnetAsk, TailnetDevice,
-    TailnetState, TrustAnswer, TrustBook,
+    Answer, DeviceKind, DriveState, RemoteHello, RemoteMachine, RemoteNotice, RemoteTrust, Tailnet, TailnetAsk,
+    TailnetDevice, TailnetState, TrustAnswer, TrustBook,
 };
 pub use updates::{Base, Bases, UpdateProgress, Updates, Version};
 

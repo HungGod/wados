@@ -1522,4 +1522,29 @@ mod tests {
         let r = apply(&mut lib, Op::Rename { ws: "nope".into(), name: "A".into() }, &ctx);
         assert_eq!(r, Err(EditError::NotFound { what: "wadspace", id: "nope".into() }));
     }
+
+    /// The phone's Builder sends these (wadspaces-android's core/…/wadd/Ops.kt, OpsTest): each reads as an Op.
+    #[test]
+    fn the_phones_ops_read() {
+        for text in [
+            r#"{"op":"space.create","name":"Studio"}"#,
+            r#"{"op":"builder.rename","ws":"art","name":"Art"}"#,
+            r#"{"op":"apps.add","ws":"art","app":"krita"}"#,
+            r#"{"op":"space.remove","ws":"art","chip":"app:krita"}"#,
+            r#"{"op":"apps.newVariant","ws":"art","app":"vscode","new":{"addon":"vscode:anthropic.claude-code"}}"#,
+            r#"{"op":"space.remove","ws":"art","chip":"ext:terminal:rust"}"#,
+            r#"{"op":"builder.addWebApp","ws":"art","name":"Maps","url":"maps.example.org"}"#,
+            r#"{"op":"space.addCommand","ws":"art","kind":"run","text":"cargo install ripgrep"}"#,
+            r#"{"op":"space.removeCommand","ws":"art","id":"cmd-1"}"#,
+            r#"{"op":"space.look","ws":"art","wallpaper":{"type":"image","value":"/wallpapers/art/koi.svg"}}"#,
+            r#"{"op":"space.duplicate","ws":"art"}"#,
+            r#"{"op":"ws.trash","ws":"art"}"#,
+            r#"{"op":"ws.restore","ws":"art"}"#,
+            r#"{"op":"builder.discardIfEmpty","ws":"art"}"#,
+        ] {
+            if let Err(e) = serde_json::from_str::<Op>(text) {
+                panic!("{text}: {e}");
+            }
+        }
+    }
 }
