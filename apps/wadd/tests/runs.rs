@@ -45,7 +45,10 @@ async fn opening_writes_its_unit_and_extras_serves_its_socket_and_waits_for_its_
         unit.contains(&format!("Volume={}:/run/wadspaces-display:ro,rslave", rig.screen_dir(&id).display())),
         "{unit}"
     );
-    assert!(unit.contains("UIDMap=1000:0:1"), "rootless: abc is you");
+    // abc is you, when rootless. (A machine's map is wad-gen's test.)
+    if !nix::unistd::geteuid().is_root() {
+        assert!(unit.contains("UIDMap=1000:0:1"), "{unit}");
+    }
     let calls = rig.fake.calls();
     let reload = calls.iter().position(|c| c == "reload").expect("a reload");
     let start = calls.iter().position(|c| *c == format!("start wad-{id}.service")).expect("a start");
@@ -177,7 +180,8 @@ async fn the_shells_session_is_the_screen_until_its_socket_goes() {
     let info = rig.screen.register(&shell.to_string_lossy(), me, me).unwrap();
     assert_eq!((info.from, info.socket.as_deref()), (ScreenFrom::Shell, Some(&*shell.to_string_lossy())));
     // Only your own, only a socket, only an absolute path.
-    assert_eq!(rig.screen.register(&shell.to_string_lossy(), me + 1, me).unwrap_err().code, ErrorCode::Forbidden);
+    // (Two others: root may say for anyone.)
+    assert_eq!(rig.screen.register(&shell.to_string_lossy(), me + 2, me + 1).unwrap_err().code, ErrorCode::Forbidden);
     assert_eq!(rig.screen.register("wayland-0", me, me).unwrap_err().code, ErrorCode::BadRequest);
     let file = rig.dir.path().join("not-a-socket");
     std::fs::write(&file, "").unwrap();

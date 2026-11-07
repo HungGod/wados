@@ -13,6 +13,10 @@
 # weekly one has Fedora's updates in), when wad-gen or the catalog changes,
 # and by hand.
 #
+# Until the first base is on ghcr there's nothing to build on: a push then
+# plans no packages and says so, and the run after the images workflow's
+# builds them. The other two ways in expect a base, so they fail.
+#
 # What isn't built again: a package's Containerfile names the base and
 # what it needs by digest (and the base carries the feature scripts and
 # wadspaces-pkg), so its sha256 stands for everything the package is built
@@ -100,7 +104,17 @@ jobs:
           chmod +x wados-pkgs
           # The base's ABI: packages built for it fit every base with the same.
           printf '%s' "$GH_TOKEN" | skopeo login ghcr.io -u "$ACTOR" --password-stdin
-          inspect=$(skopeo inspect "docker://$BASE")
+          if ! inspect=$(skopeo inspect "docker://$BASE" 2>inspect.err); then
+            if [ "$GITHUB_EVENT_NAME" = push ] && grep -q 'manifest unknown' inspect.err; then
+              echo "::notice::$BASE isn't published yet: packages are built after the images workflow's first run"
+              echo "$BASE isn't published yet: nothing planned. Packages are built after the images workflow's first run." >>"$GITHUB_STEP_SUMMARY"
+              echo 'waves=[]' >>"$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat inspect.err >&2
+            echo "::error::Couldn't read $BASE: the images workflow publishes it"
+            exit 1
+          fi
           abi=$(jq -r '.Labels["io.wadspaces.abi"] // empty' <<<"$inspect")
           if [ -z "$abi" ]; then
             echo "::error::$BASE has no io.wadspaces.abi label: the images workflow pushes one built from this repo"
@@ -176,7 +190,7 @@ jobs:
   # into inputs.json. Even after a failed wave: what was pushed is listed.
   index:
     needs: [plan, wave0, wave1, wave2]
-    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.waves != '[]' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

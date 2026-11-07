@@ -59,7 +59,9 @@ IMAGE_BASE=localhost/wados-host
 BUILDER=localhost/wados-host-builder:44
 REGISTRY=ghcr.io/hunggod
 # The base every image here is built and rechunked with (host/Containerfile's).
-BOOTC=quay.io/fedora/fedora-bootc:44@sha256:291bda73006a5cfc6d4ac24f9a261915624f9f555d9ff1a426cb412928f152ac
+# On Fedora's registry, not quay: quay collects a digest within days of its
+# tag moving, so a fresh computer can't pull it.
+BOOTC=registry.fedoraproject.org/fedora-bootc:44@sha256:291bda73006a5cfc6d4ac24f9a261915624f9f555d9ff1a426cb412928f152ac
 # host/secrets (gitignored), unless WADOS_SECRETS says, or it isn't there.
 SECRETS="${WADOS_SECRETS:-}"
 if [[ -z "${SECRETS}" ]]; then

@@ -137,7 +137,10 @@ if ${STREAM_CHECK}; then
     podman volume create "${svol}" > /dev/null
     # The two share SELinux categories, as wadd's units give a wadspace and its sidecar.
     level=(--security-opt label=level:s0:c101,c202)
-    podman run -d --name "${side}" "${level[@]}" --shm-size 1g -e PUID=1000 -e PGID=1000 \
+    # Namespaces of their own, as on a machine: CI's podman image defaults
+    # to the host's, where --shm-size is refused and -p is dropped.
+    own=(--ipc=private --network=bridge)
+    podman run -d --name "${side}" "${level[@]}" "${own[@]}" --shm-size 1g -e PUID=1000 -e PGID=1000 \
         -e SELKIES_SUBFOLDER=/ws-check -e SELKIES_MASTER_TOKEN=check-master -e SELKIES_MODE=websockets \
         -e SELKIES_ENABLE_DUAL_MODE=false -e SELKIES_TOKENS_FILE=/run/wadspaces-selkies/tokens.json \
         -e SELKIES_AUTO_GPU=false -e SELKIES_USE_CPU=true \
@@ -155,7 +158,7 @@ if ${STREAM_CHECK}; then
     check "it took the token table (secure mode)" "grep -q 'Now tracking 1 tokens' <<< \"\${slog}\""
     # The base's desktop on it, as a streamed wadspace (wadd's display file says stream).
     mkdir -p "${sdir}/extra" && echo stream > "${sdir}/extra/display"
-    podman run -d --name "${sws}" "${level[@]}" --shm-size 1g -e PUID=1000 -e PGID=1000 -e WLR_RENDERER=pixman \
+    podman run -d --name "${sws}" "${level[@]}" "${own[@]}" --shm-size 1g -e PUID=1000 -e PGID=1000 -e WLR_RENDERER=pixman \
         -e PULSE_SERVER=unix:/run/wadspaces-current/pulse/native \
         -v "${sdir}/extra":/run/wadspaces-extra:ro,z -v "${svol}":/run/wadspaces-stream:z "${BASE}" > /dev/null
     drew=""

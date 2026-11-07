@@ -8,7 +8,7 @@ Tauri client, the HUD, Firebase, the kiosk and admin users, and what belongs to 
 
 ## What's in it
 
-On `quay.io/fedora/fedora-bootc:44`, pinned by digest (`host/build.sh` rechunks with the same one):
+On `registry.fedoraproject.org/fedora-bootc:44`, pinned by digest (not quay's copy, which collected the digest within days of the tag moving) (`host/build.sh` rechunks with the same one):
 
 - **The screen:** our labwc (below), Xwayland (wlroots won't start without it; it runs only for an X client),
   greetd, GTK 4.22 with gtk4-layer-shell 1.3, libadwaita, WebKitGTK 6 (the browser lands in phase 5), foot, gvfs,
