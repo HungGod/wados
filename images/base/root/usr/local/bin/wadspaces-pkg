@@ -31,7 +31,9 @@ image's dnf sees a package's RPMs as installed outside it, which it never
 removes as unneeded. Generated caches aren't copied either; assemble makes
 them again. Any other base file the command changed or deleted stops the
 build (a package never replaces the base's own files) unless an --allow
-glob names it; --lax only reports them.
+glob names it; --lax only reports them. A file in /etc rewritten with the
+same bytes isn't a change: scriptlets do that (fontconfig's, to a catalog
+entry that's already there).
 
 assemble (on a base once packages are copied onto it, and in a package's
 build after the packages it needs) merges every package's fragments into the
@@ -112,6 +114,24 @@ def log(msg):
 
 def matches(path, globs):
     return any(fnmatch.fnmatchcase(path, g) for g in globs)
+
+
+def etc_digests(seen):
+    """What each of /etc's files holds, from a snapshot."""
+    digests = {}
+    for path, st in seen.items():
+        if path.startswith("/etc/") and st[0] == stat.S_IFREG:
+            with open(path, "rb") as f:
+                digests[path] = hashlib.file_digest(f, "sha256").digest()
+    return digests
+
+
+def same_bytes(path, was, now, digests):
+    """Only its time moved, and it holds what it did."""
+    if path not in digests or was[:5] != now[:5] or was[6:] != now[6:]:
+        return False
+    with open(path, "rb") as f:
+        return hashlib.file_digest(f, "sha256").digest() == digests[path]
 
 
 def ignored(path):
@@ -471,6 +491,7 @@ def capture(pkg, out, command, needs, probe, allow, lax):
     skip = SKIP | {out}
     log(f"{pkg}: noting the base")
     before = snapshot(skip)
+    before_etc = etc_digests(before)
     before_shared = shared_before()
     before_alts = alt_before()
     before_rpms = installed()
@@ -492,7 +513,7 @@ def capture(pkg, out, command, needs, probe, allow, lax):
                 dirs.append(p)
             elif matches(p, ALLOW + allow):
                 added.append(p)
-            else:
+            elif not same_bytes(p, was, now, before_etc):
                 changed.append(p)
     for p in before:
         if p not in after and not ignored(p) and not shared(p) and not matches(p, ALLOW + allow):
