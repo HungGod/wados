@@ -1,8 +1,7 @@
 //! The background, on every monitor (BACKGROUND layer): a picture filling
 //! it, the one Settings ▸ Background chose (`[background] picture` in the
 //! settings: one of WadSpaces' pictures by its id). Duo (lime and pink,
-//! mirrored) is the desktop's to start with. It's part of the desktop page,
-//! so it rises with it ([`slide`], machine.rs).
+//! mirrored) is the desktop's to start with.
 
 use gtk::{gdk, prelude::*};
 use gtk4_layer_shell::{KeyboardMode, Layer};
@@ -50,13 +49,6 @@ pub fn fit(w: &gtk::ApplicationWindow, monitor: &gdk::Monitor) {
     if let Some((_, pic)) = page(w) {
         let g = monitor.geometry();
         pic.set_size_request(g.width(), g.height());
-    }
-}
-
-/// The picture's top, `y` down the display.
-pub fn slide(w: &gtk::ApplicationWindow, y: f64) {
-    if let Some((page, pic)) = page(w) {
-        page.move_(&pic, 0.0, y);
     }
 }
 

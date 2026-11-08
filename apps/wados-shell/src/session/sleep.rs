@@ -156,7 +156,7 @@ mod tests {
         assert!(s.ask());
         let (f, gone) = fd();
         s.inhibited(f);
-        // Ctrl+Alt+L, or the idle lock: nothing to do with sleep.
+        // Super+L, or the idle lock: nothing to do with sleep.
         s.locked();
         assert!(!gone.get());
         assert_eq!(s.state(), "held");

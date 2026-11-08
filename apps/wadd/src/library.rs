@@ -62,6 +62,13 @@ impl Docs {
             store.save_rest(&lib)?;
             tracing::info!("a new library, with WadOS in it");
         }
+        // WadOS's rustup line, as an old one had it (it never built).
+        for w in lib.wadspaces.iter_mut() {
+            if wad_model::starter::fix_commands(w) {
+                store.save_wadspace(w)?;
+                tracing::info!("{}: its rustup command put right (--component rustfmt,clippy)", w.name);
+            }
+        }
         Ok(Self { lib: Mutex::new(lib), undos: Mutex::default(), store, bus, machine: machine.to_string() })
     }
 

@@ -108,7 +108,7 @@ fn the_starters_set_runs_its_commands_on_its_packages() {
             &format!("ARG BASE_IMAGE={from}"),
             "RUN wadspaces-pkg assemble",
             "RUN dnf install -y gcc pkg-config gtk4-devel gtk4-layer-shell-devel",
-            "RUN rustup toolchain install 1.99 --component rustfmt clippy --target wasm32-unknown-unknown",
+            "RUN rustup toolchain install 1.99 --component rustfmt,clippy --target wasm32-unknown-unknown",
         ],
     );
     // In order, after the packages are put together, and its labels last.

@@ -85,7 +85,7 @@ an exclusive surface has them. Only the host's clients have layer-shell, so a wa
 - **foreign-toplevel** `activate`, `set_minimized`/`unset_minimized`, `unset_fullscreen` and `close` all work
   on wadspace windows and host windows alike. `output_enter`/`output_leave` say which display a window is on.
 - **Keybinds:** labwc's `rc.xml` (`host/etc/xdg/labwc/rc.xml`) runs `wadsctl` for Super+Tab, Super+Shift+Tab,
-  Alt+Space, Ctrl+Alt+↓ (a full-screen wadspace into a window: `wadsctl windowed`) and Ctrl+Alt+L. A virtual keyboard (`wtype`, the same protocol the shell uses) triggers
+  Alt+Space, Ctrl+Alt+↓ (a full-screen wadspace into a window: `wadsctl windowed`) and Super+L. A virtual keyboard (`wtype`, the same protocol the shell uses) triggers
   them too.
 - **Moving a window between displays:** there's no foreign-toplevel request for it. The shell activates the
   window and types `W-C-A-S-F13` (or `F14`), which `rc.xml` binds to `MoveToOutput right` (`left`). Verified:

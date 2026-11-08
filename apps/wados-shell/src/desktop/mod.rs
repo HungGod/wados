@@ -2040,6 +2040,10 @@ impl Desktop {
                 .entry(),
             MenuItem::new("terminal", "Open terminal here", "square-terminal", self.on(|m| m.open_terminal())).entry(),
             Entry::Sep,
+            MenuItem::new("sleep", "Sleep", "moon", self.on(|m| m.shell.power(crate::session::Power::Sleep)))
+                .off((!crate::session::is_machine()).then_some("Sleep is the machine's own session's"))
+                .entry(),
+            Entry::Sep,
             MenuItem::new(
                 "background",
                 "Change background",

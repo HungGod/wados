@@ -32,6 +32,7 @@ pub fn run(shell: &Rc<Shell>, verb: &str, args: &[String]) {
     let first = args.first().map(String::as_str).unwrap_or("");
     match verb {
         "power.restart" => shell.power(Power::Restart),
+        "power.sleep" => shell.power(Power::Sleep),
         "settings.open" => {
             let mut argv = vec!["wados-settings"];
             if !first.is_empty() {

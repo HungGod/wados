@@ -14,13 +14,13 @@ A second display had a wallpaper that took no input and a bar of its own. The ba
 An empty desktop draws nothing, and GTK makes no frame for that, so its layer surface was never mapped and clicks went
 to labwc's root menu. `.desk-other` is 1/255 opaque for that reason, as the bar's reserve is.
 
-## The launcher and the desktop are two pages
+## The launcher and the desktop fade into each other
 
-One spring scrolls them a page's height on every display: the launcher page goes up whole, and the desktop, its bar and
-the wallpaper come up after it. Nothing fades, and the dock's halves no longer fly to the corners. The bar rises by its
-surface's margin and shows only once it's whole on the display, so it can't appear on a display below.
+One spring fades them on every display, where they are: the launcher (and its dock) fades out, and the desktop, its
+bar and the other displays' desktops fade in. The first version slid them a page's height, which didn't look right on
+the machine (the user, after trying it); a fade has nothing to keep in step between surfaces.
 
-Windows can't move with the page: the launcher page uncovers them.
+Windows stay where they are: the launcher fades off them.
 
 ## Steam
 
@@ -46,6 +46,11 @@ was; Set up carries on.
   2 showed a 2, which reads as a count.
 - **The Builder:** opens in the middle of the display (labwc's `AutoPlace`), and its stacks stop at 420 px wide: a bigger
   window shows more of them.
+- **Sleep** is a power item (logind's Suspend: the screen locks first, as for the lid), in the bar's power menu, the
+  power key's and the desktop's right-click menu.
+- **Lock** is Super+L (was Ctrl+Alt+L).
+- **WadOS's RUN_4** read `--component rustfmt clippy`, which rustup takes as a toolchain named `clippy`: it never
+  built. It's `--component rustfmt,clippy` now, and wadd puts the old line right in a saved WadOS as it loads.
 - **WadBrowser:** its pages are at `wadbrowser://` (a saved `cactus://` home page moves over), it shows its own logo and
   name, and the mouse's side buttons go back and forward. The Cactus credit stays on About and Settings.
 - **Set up** has a solid background (Settings' own CSS never reached it) and no Steam.

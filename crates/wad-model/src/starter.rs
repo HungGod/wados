@@ -25,8 +25,23 @@ pub const WADOS_COMMANDS: [(CommandKind, &str); 4] = [
     (CommandKind::Run, "dnf install -y gcc pkg-config gtk4-devel gtk4-layer-shell-devel libadwaita-devel pam-devel"),
     (CommandKind::Run, "dnf install -y webkitgtk6.0-devel"),
     (CommandKind::Run, "dnf install -y labwc grim wlr-randr wtype foot wayland-utils"),
-    (CommandKind::Run, "rustup toolchain install 1.99 --component rustfmt clippy"),
+    (CommandKind::Run, "rustup toolchain install 1.99 --component rustfmt,clippy"),
 ];
+
+/// RUN_4 as WadOS once had it: rustup reads the second component as a
+/// toolchain's name (`invalid toolchain name: 'clippy'`), so it never built.
+pub const BROKEN_RUSTUP: &str = "rustup toolchain install 1.99 --component rustfmt clippy";
+
+/// A wadspace's commands with WadOS's broken one put right (it was ours, so
+/// only that exact line is): true if it changed.
+pub fn fix_commands(w: &mut crate::types::Wadspace) -> bool {
+    let mut fixed = false;
+    for c in w.commands.iter_mut().filter(|c| c.kind == CommandKind::Run && c.text == BROKEN_RUSTUP) {
+        c.text = WADOS_COMMANDS[3].1.to_string();
+        fixed = true;
+    }
+    fixed
+}
 
 /// WadOS's commands, named (RUN_1…).
 pub fn wados_commands() -> Vec<BuildCommand> {
@@ -90,7 +105,17 @@ mod tests {
         }
         // Rust itself is its Rust tool (rustup, cargo); RUN_4 pins the Rust it compiles with on it.
         assert!(os.exts.contains(&Ext::new(AppId::Terminal, "rust")));
-        assert_eq!(os.commands[3].text, "rustup toolchain install 1.99 --component rustfmt clippy");
+        assert_eq!(os.commands[3].text, "rustup toolchain install 1.99 --component rustfmt,clippy");
         assert_eq!(crate::check::wadspace(&os), Ok(()));
+
+        // WadOS as it once was: only its broken line is put right, once.
+        let mut old = os.clone();
+        old.commands[3].text = BROKEN_RUSTUP.to_string();
+        old.commands.push(old.commands[0].clone());
+        old.commands[4].text = "rustup toolchain install nightly --component miri clippy".into();
+        assert!(fix_commands(&mut old));
+        assert_eq!(old.commands[3].text, os.commands[3].text);
+        assert_eq!(old.commands[4].text, "rustup toolchain install nightly --component miri clippy", "yours stays");
+        assert!(!fix_commands(&mut old));
     }
 }

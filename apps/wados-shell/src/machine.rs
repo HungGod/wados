@@ -1,25 +1,21 @@
 //! The machine's screens: the launcher and, a scroll down, the desktop
-//! (`shell/Machine.svelte`), two pages one above the other. One spring,
-//! `progress` (0 the launcher, 1 the desktop), scrolls them on every display,
-//! a page's height for a page's height:
+//! (`shell/Machine.svelte`). One spring, `progress` (0 the launcher, 1 the
+//! desktop), fades one into the other on every display, where they are:
 //!
-//! - **chrome** (TOP layer, the whole primary): the launcher page, going up
-//!   and off the top, its dock with it. It's opaque and the rest of the
-//!   surface is clear, so what's coming shows below it.
-//! - **desktop** (BOTTOM layer, under windows): desktop::Desktop, coming up
-//!   from the bottom with the **wallpaper** (BACKGROUND, every display).
+//! - **chrome** (TOP layer, the whole primary): the launcher page with its
+//!   dock, fading out. The rest of the surface is clear.
+//! - **desktop** (BOTTOM layer, under windows): desktop::Desktop, fading in
+//!   over the **wallpaper** (BACKGROUND, every display).
 //! - **bar** (TOP layer, along the top): bar::Halves at the corners and
-//!   bar::Middle between them, rising with the desktop by its surface's
-//!   margin (it's shown once it's whole on the display, so it can't appear
-//!   on one below this one).
+//!   bar::Middle between them, fading in with the desktop.
 //! - **reserve** (TOP, transparent, always there): the bar's room, kept from
 //!   windows on both pages, so nothing reflows when the page changes.
 //! - **Every other display** ([`Other`]) has a desktop of its own, with no
 //!   bar, and a **sheet** (TOP) with the launcher's picture on it: they
-//!   scroll as the primary's do. A full-screen window on a display keeps it:
+//!   fade as the primary's do. A full-screen window on a display keeps it:
 //!   labwc hides the TOP layer there.
 //!
-//! Windows can't move with the page: chrome and the sheets uncover them.
+//! Windows stay where they are: chrome and the sheets fade off them.
 //!
 //! This module owns the surfaces, the spring and the page keys; what's on
 //! each page is its module's.
@@ -28,7 +24,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use gtk::{gdk, glib, prelude::*};
-use gtk4_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
+use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
 use wad_gtk::{Params, Spring};
 
 use crate::bar::{Halves, Middle};
@@ -61,7 +57,7 @@ pub struct Machine {
     launcher: Rc<Launcher>,
     chrome_halves: Rc<Halves>,
     desktop_win: gtk::ApplicationWindow,
-    desktop_fixed: gtk::Fixed,
+    _desktop_fixed: gtk::Fixed,
     desktop: Rc<Desktop>,
     bar: gtk::ApplicationWindow,
     bar_fixed: gtk::Fixed,
@@ -80,10 +76,10 @@ pub struct Machine {
 struct Other {
     monitor: gdk::Monitor,
     desk_win: gtk::ApplicationWindow,
-    desk_fixed: gtk::Fixed,
+    _desk_fixed: gtk::Fixed,
     desktop: Rc<Desktop>,
     sheet: gtk::ApplicationWindow,
-    sheet_fixed: gtk::Fixed,
+    _sheet_fixed: gtk::Fixed,
     backdrop: Backdrop,
 }
 
@@ -98,19 +94,14 @@ impl Other {
         let (w, h) = self.size();
         self.backdrop.set_size_request(w, h);
         self.desktop.widget().set_size_request(w, h);
-        self.sheet_fixed.move_(&self.backdrop, 0.0, up_by(p, h as f64));
-        self.desk_fixed.move_(&self.desktop.widget(), 0.0, rise(p, h as f64));
+        self.backdrop.set_opacity(1.0 - shown(p));
+        self.desktop.widget().set_opacity(shown(p));
     }
 }
 
-/// How far up the launcher page has gone at `p`, on a display `h` tall.
-fn up_by(p: f64, h: f64) -> f64 {
-    -(p.clamp(0.0, 1.0) * h).round()
-}
-
-/// How far down the desktop page still is at `p`, on a display `h` tall.
-fn rise(p: f64, h: f64) -> f64 {
-    h + up_by(p, h)
+/// How much of the desktop shows at `p`: the launcher is the rest (a spring's overshoot is neither).
+fn shown(p: f64) -> f64 {
+    p.clamp(0.0, 1.0)
 }
 
 impl Machine {
@@ -157,10 +148,10 @@ impl Machine {
                 height: 0,
             },
         );
-        let desktop_fixed = gtk::Fixed::new();
+        let _desktop_fixed = gtk::Fixed::new();
         let desktop = Desktop::new(shell, None);
-        desktop_fixed.put(&desktop.widget(), 0.0, 0.0);
-        desktop_win.set_child(Some(&desktop_fixed));
+        _desktop_fixed.put(&desktop.widget(), 0.0, 0.0);
+        desktop_win.set_child(Some(&_desktop_fixed));
 
         let bar = surface::make(
             app,
@@ -215,7 +206,7 @@ impl Machine {
             launcher,
             chrome_halves,
             desktop_win,
-            desktop_fixed,
+            _desktop_fixed,
             desktop,
             bar,
             bar_fixed,
@@ -358,10 +349,10 @@ impl Machine {
             },
         );
         surface::stay(&desk_win);
-        let desk_fixed = gtk::Fixed::new();
+        let _desk_fixed = gtk::Fixed::new();
         let desktop = Desktop::new(&self.shell, Some(monitor));
-        desk_fixed.put(&desktop.widget(), 0.0, 0.0);
-        desk_win.set_child(Some(&desk_fixed));
+        _desk_fixed.put(&desktop.widget(), 0.0, 0.0);
+        desk_win.set_child(Some(&_desk_fixed));
         self.desktop_keys_on(&desk_win, &desktop);
 
         let sheet = surface::make(
@@ -377,10 +368,10 @@ impl Machine {
             },
         );
         surface::stay(&sheet);
-        let sheet_fixed = gtk::Fixed::new();
+        let _sheet_fixed = gtk::Fixed::new();
         let backdrop = Backdrop::new();
-        sheet_fixed.put(&backdrop, 0.0, 0.0);
-        sheet.set_child(Some(&sheet_fixed));
+        _sheet_fixed.put(&backdrop, 0.0, 0.0);
+        sheet.set_child(Some(&_sheet_fixed));
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL);
         let w = Rc::downgrade(self);
         scroll.connect_scroll(move |_, _, dy| {
@@ -393,7 +384,7 @@ impl Machine {
         });
         sheet.add_controller(scroll);
 
-        let o = Other { monitor: monitor.clone(), desk_win, desk_fixed, desktop, sheet, sheet_fixed, backdrop };
+        let o = Other { monitor: monitor.clone(), desk_win, _desk_fixed, desktop, sheet, _sheet_fixed, backdrop };
         o.lay_out(self.progress());
         if let Some(picture) = self.launcher.picture() {
             let (w, h) = o.size();
@@ -433,26 +424,23 @@ impl Machine {
             self.launcher.widget().set_size_request(w as i32, room);
             self.desktop.widget().set_size_request(w as i32, (h as i32 - BAR).max(0));
         }
-        // The launcher page goes up, whole.
-        let up = up_by(p, h);
-        self.chrome_fixed.move_(&self.backdrop, 0.0, up);
-        self.chrome_fixed.move_(&self.launcher.widget(), 0.0, up);
+        // The launcher fades out where it is, and the desktop and its bar fade in.
+        let (desk, launcher) = (shown(p), 1.0 - shown(p));
+        self.backdrop.set_opacity(launcher);
+        self.launcher.widget().set_opacity(launcher);
         let (lx, rx, y) = self.dock_at();
-        self.chrome_fixed.move_(&self.chrome_halves.left(), lx, y + up);
-        self.chrome_fixed.move_(&self.chrome_halves.right(), rx, y + up);
-        // The desktop page comes up after it.
-        let below = rise(p, h);
-        self.desktop_fixed.move_(&self.desktop.widget(), 0.0, below);
-        if below + BAR as f64 <= h {
-            self.bar.set_margin(Edge::Top, below as i32);
+        self.chrome_fixed.move_(&self.chrome_halves.left(), lx, y);
+        self.chrome_fixed.move_(&self.chrome_halves.right(), rx, y);
+        self.chrome_halves.left().set_opacity(launcher);
+        self.chrome_halves.right().set_opacity(launcher);
+        self.desktop.widget().set_opacity(desk);
+        self.bar_fixed.set_opacity(desk);
+        if desk > 0.0 {
             if !self.bar.is_visible() {
                 self.bar.present();
             }
         } else if self.bar.is_visible() {
             self.bar.set_visible(false);
-        }
-        for (m, wall) in self.wallpapers.borrow().iter() {
-            crate::wallpaper::slide(wall, rise(p, m.geometry().height() as f64));
         }
         for o in self.others.borrow().iter() {
             o.lay_out(p);
@@ -662,17 +650,16 @@ impl Forward {
 
 #[cfg(test)]
 mod tests {
-    use super::{Forward, rise, up_by};
+    use super::{Forward, shown};
     use crate::wm::Top;
 
     #[test]
-    fn the_pages_scroll_a_page_for_a_page() {
-        // The launcher, and halfway: the desktop's top meets the launcher's bottom.
-        assert_eq!((up_by(0.0, 1000.0), rise(0.0, 1000.0)), (0.0, 1000.0));
-        assert_eq!((up_by(0.5, 1000.0), rise(0.5, 1000.0)), (-500.0, 500.0));
-        // Landed, and a spring's little overshoot goes no further.
-        assert_eq!((up_by(1.0, 1000.0), rise(1.0, 1000.0)), (-1000.0, 0.0));
-        assert_eq!((up_by(1.02, 1000.0), rise(1.02, 1000.0)), (-1000.0, 0.0));
+    fn the_pages_fade_into_each_other() {
+        assert_eq!(shown(0.0), 0.0);
+        assert_eq!(shown(0.5), 0.5);
+        assert_eq!(shown(1.0), 1.0);
+        // A spring's little overshoot goes no further, either way.
+        assert_eq!((shown(1.02), shown(-0.02)), (1.0, 0.0));
     }
 
     fn top(id: u32, activated: bool, minimized: bool) -> Top {

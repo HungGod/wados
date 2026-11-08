@@ -22,7 +22,7 @@ use crate::parts;
 pub const WADSPACES_KEYS: [(&str, &str); 5] = [
     ("Switch between running wadspaces", "Super+Tab"),
     ("Search apps and their variants", "Alt+Space"),
-    ("Lock the screen", "Ctrl+Alt+L"),
+    ("Lock the screen", "Super+L"),
     ("Put a full-screen wadspace into a window", "Ctrl+Alt+↓"),
     ("Come back from server mode", "Ctrl+Alt+Delete"),
 ];

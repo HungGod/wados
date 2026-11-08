@@ -127,6 +127,8 @@ fn idle_times(machine: bool, secs: Option<&str>, s: &Settings, can_suspend: bool
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Power {
     Lock,
+    /// logind's Suspend (the screen locks first, as the lid does).
+    Sleep,
     Server,
     Restart,
     Off,
@@ -137,6 +139,7 @@ impl Power {
     pub fn word(self) -> &'static str {
         match self {
             Power::Lock => "lock",
+            Power::Sleep => "sleep",
             Power::Server => "server",
             Power::Restart => "restart",
             Power::Off => "off",
@@ -164,6 +167,7 @@ pub fn items(machine: bool) -> Vec<Item> {
     };
     vec![
         item(Power::Lock, "lock", "Lock", true, None),
+        item(Power::Sleep, "moon", "Sleep", machine, None),
         item(Power::Server, "server", "Server mode", machine, Some(SERVER_TIP)),
         item(Power::Restart, "rotate-ccw", "Restart", machine, None),
         item(Power::Off, "power", "Power off", machine, None),
@@ -267,6 +271,7 @@ impl Session {
     pub fn power(&self, p: Power) -> Result<(), String> {
         let reboot = match p {
             Power::Lock => return self.lock(),
+            Power::Sleep => return self.sleep(),
             Power::Server => {
                 crate::overlays::focus::server_confirm(&self.shell);
                 return Ok(());
@@ -287,6 +292,25 @@ impl Session {
             Ok(true) => s.toast(Level::Info, &format!("{label}: a dry run, so logind wasn't asked"), None),
             Ok(false) => {}
             Err(e) => s.toast(Level::Error, &format!("Couldn't {}: {e}", label.to_lowercase()), None),
+        });
+        Ok(())
+    }
+
+    /// Sleep now: logind's Suspend. The screen locks at its PrepareForSleep
+    /// (unless Lock on Suspend is off), as for the lid and an idle sleep.
+    fn sleep(&self) -> Result<(), String> {
+        if !self.machine {
+            return Err(off_here("Sleep"));
+        }
+        let Some(l) = &self.logind else {
+            return Err(format!("Sleep: logind isn't there ({})", self.no_logind.as_deref().unwrap_or("?")));
+        };
+        self.menu.close();
+        let s = self.shell.clone();
+        l.suspend(move |r| match r {
+            Ok(true) => s.toast(Level::Info, "Sleep: a dry run, so logind wasn't asked", None),
+            Ok(false) => {}
+            Err(e) => s.toast(Level::Error, &format!("Couldn't sleep: {e}"), None),
         });
         Ok(())
     }
@@ -645,9 +669,10 @@ impl Session {
                     "ok".into()
                 }
                 ["lock"] => answer(m.power(Power::Lock)),
+                ["sleep"] => answer(m.power(Power::Sleep)),
                 ["restart"] => answer(m.power(Power::Restart)),
                 ["off"] => answer(m.power(Power::Off)),
-                _ => "error power [state|close|lock|restart|off]".into(),
+                _ => "error power [state|close|lock|sleep|restart|off]".into(),
             }
         });
         let w = Rc::downgrade(self);
@@ -752,14 +777,16 @@ mod tests {
             here,
             [
                 (Power::Lock, true, "Lock".to_string()),
+                (Power::Sleep, false, "Sleep: off outside the machine's own session".to_string()),
                 (Power::Server, false, SERVER_TIP.to_string()),
                 (Power::Restart, false, "Restart: off outside the machine's own session".to_string()),
                 (Power::Off, false, "Power off: off outside the machine's own session".to_string()),
             ]
         );
         let machine: Vec<(Power, bool, String)> = items(true).into_iter().map(|i| (i.power, i.on, i.tip)).collect();
-        assert_eq!(machine[2], (Power::Restart, true, "Restart".to_string()));
-        assert_eq!(machine[3], (Power::Off, true, "Power off".to_string()));
-        assert!(machine[1].1, "server mode works on the machine");
+        assert_eq!(machine[1], (Power::Sleep, true, "Sleep".to_string()));
+        assert_eq!(machine[3], (Power::Restart, true, "Restart".to_string()));
+        assert_eq!(machine[4], (Power::Off, true, "Power off".to_string()));
+        assert!(machine[2].1, "server mode works on the machine");
     }
 }

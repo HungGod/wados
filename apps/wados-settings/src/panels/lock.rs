@@ -202,7 +202,7 @@ impl Panel for LockPanel {
         );
         lock.add(&notes.root);
         let now = Row::new(Some("lock"), Tone::Plain, "Lock the Screen Now", "");
-        now.ctl.append(&form::keys("Ctrl+Alt+L"));
+        now.ctl.append(&form::keys("Super+L"));
         let b = kit::button("Lock Now", Variant::Secondary, Some("lock"), true);
         b.set_widget_name("lock-now");
         let w = self.me.clone();
