@@ -2,12 +2,13 @@
 //! (`shell/Machine.svelte`). One spring, `progress` (0 the launcher, 1 the
 //! desktop), fades one into the other on every display, where they are:
 //!
-//! - **chrome** (TOP layer, the whole primary): the launcher page with its
-//!   dock, fading out. The rest of the surface is clear.
-//! - **desktop** (BOTTOM layer, under windows): desktop::Desktop, fading in
-//!   over the **wallpaper** (BACKGROUND, every display).
-//! - **bar** (TOP layer, along the top): bar::Halves at the corners and
-//!   bar::Middle between them, fading in with the desktop.
+//! - **chrome** (TOP layer, the whole primary, above windows): the launcher
+//!   page with its dock, fading as one. Under it, the desktop page is drawn
+//!   whole, so the fade blends the two pages, windows and all.
+//! - **desktop** (BOTTOM layer, under windows): desktop::Desktop, over the
+//!   **wallpaper** (BACKGROUND, every display).
+//! - **bar** (TOP layer, along the top, above chrome): bar::Halves at the
+//!   corners and bar::Middle between them, fading in as chrome fades out.
 //! - **reserve** (TOP, transparent, always there): the bar's room, kept from
 //!   windows on both pages, so nothing reflows when the page changes.
 //! - **Every other display** ([`Other`]) has a desktop of its own, with no
@@ -15,7 +16,9 @@
 //!   fade as the primary's do. A full-screen window on a display keeps it:
 //!   labwc hides the TOP layer there.
 //!
-//! Windows stay where they are: chrome and the sheets fade off them.
+//! Windows stay where they are, and fade with the desktop page: chrome and
+//! the sheets fade off them. A full-screen one is drawn above the TOP layer,
+//! so it doesn't fade (it isn't under the launcher either).
 //!
 //! This module owns the surfaces, the spring and the page keys; what's on
 //! each page is its module's.
@@ -94,8 +97,8 @@ impl Other {
         let (w, h) = self.size();
         self.backdrop.set_size_request(w, h);
         self.desktop.widget().set_size_request(w, h);
+        // The sheet over this display's windows and desktop, as chrome over the primary's.
         self.backdrop.set_opacity(1.0 - shown(p));
-        self.desktop.widget().set_opacity(shown(p));
     }
 }
 
@@ -424,16 +427,15 @@ impl Machine {
             self.launcher.widget().set_size_request(w as i32, room);
             self.desktop.widget().set_size_request(w as i32, (h as i32 - BAR).max(0));
         }
-        // The launcher fades out where it is, and the desktop and its bar fade in.
-        let (desk, launcher) = (shown(p), 1.0 - shown(p));
-        self.backdrop.set_opacity(launcher);
-        self.launcher.widget().set_opacity(launcher);
+        // The launcher page fades as one, over the desktop page drawn whole
+        // beneath it (its windows, desktop and wallpaper): each frame is the
+        // two blended, windows and all. The bar is above chrome, so it fades
+        // in by itself, as much.
+        let desk = shown(p);
+        self.chrome_fixed.set_opacity(1.0 - desk);
         let (lx, rx, y) = self.dock_at();
         self.chrome_fixed.move_(&self.chrome_halves.left(), lx, y);
         self.chrome_fixed.move_(&self.chrome_halves.right(), rx, y);
-        self.chrome_halves.left().set_opacity(launcher);
-        self.chrome_halves.right().set_opacity(launcher);
-        self.desktop.widget().set_opacity(desk);
         self.bar_fixed.set_opacity(desk);
         if desk > 0.0 {
             if !self.bar.is_visible() {
