@@ -315,17 +315,26 @@ fn its_own_wallpaper_and_title_bars() {
 }
 
 #[test]
-fn only_steam_may_nest_containers() {
+fn steam_and_the_podman_tool_may_nest_containers() {
     let lib = library();
     let mut w = lib.wadspaces.iter().find(|x| !x.apps.is_empty()).expect("one with apps").clone();
     let run = Run { image: BASE_IMAGE, mounts: &Mounts::new(), wallpaper: None };
     let plain = &units::units(&w, &run, &machine(), None)[0].1;
     assert!(!plain.contains("container_engine_t") && !plain.contains("Unmask="), "{plain}");
+    assert!(!units::nested(&w));
     w.apps[0].app = wad_model::AppId::Steam;
     let steam = &units::units(&w, &run, &machine(), None)[0].1;
     assert_lines(steam, &["SecurityLabelType=container_engine_t", "Unmask=/proc/*"]);
     // Its categories stay: it's still kept apart from the other wadspaces.
     assert!(steam.contains("SecurityLabelLevel="), "{steam}");
+    // The podman tool (the WadOS wadspace's) nests them too: buildah there
+    // builds the host image.
+    let mut w = lib.wadspaces.iter().find(|x| !x.apps.is_empty()).expect("one with apps").clone();
+    w.apps.clear();
+    w.exts.push(wad_model::Ext::new(wad_model::AppId::Terminal, "podman"));
+    let podman = &units::units(&w, &run, &machine(), None)[0].1;
+    assert!(units::nested(&w));
+    assert_lines(podman, &["SecurityLabelType=container_engine_t", "Unmask=/proc/*", "AddDevice=/dev/fuse"]);
 }
 
 /// A public stream's sidecar, on the sample machine.

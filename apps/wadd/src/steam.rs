@@ -327,8 +327,16 @@ impl Spaces for RealSpaces {
             .apply(Op::SwapKey { ws: ws.clone(), slot: "app:steam".into(), key: key.to_string() })
             .map_err(|e| e.message)?;
         self.builds.request(&ws).await.map_err(|e| e.message)?;
-        // Built, or as far as the build got.
+        // Built, or as far as the build got. A wadspace whose desktop can't stay
+        // up (it stops, or fails) doesn't get a window at all: say so now, rather
+        // than wait 30 minutes for a sign-in that can't happen.
         for _ in 0..1800 {
+            let run = self.runs.state(&ws);
+            if matches!(run.state.phase, wad_model::Phase::Idle | wad_model::Phase::Error) {
+                let why = run.state.error.clone().unwrap_or_else(|| "its desktop closed".into());
+                self.close(&ws).await;
+                return Err(format!("Steam's sign-in window didn't stay open: {why}"));
+            }
             let doc = self.docs.wadspace(&ws).ok_or("the wadspace went")?;
             if self.builds.image_for(&doc).is_some() {
                 self.runs.open(&ws, SessionDisplay::Window).map_err(|e| e.message)?;

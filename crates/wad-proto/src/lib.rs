@@ -42,7 +42,7 @@ pub use tailnet::{
     Answer, DeviceKind, DriveState, RemoteHello, RemoteMachine, RemoteNotice, RemoteTrust, Tailnet, TailnetAsk,
     TailnetDevice, TailnetState, TrustAnswer, TrustBook,
 };
-pub use updates::{Base, Bases, UpdateProgress, Updates, Version};
+pub use updates::{Base, Bases, UpdateProgress, UpdateSource, Updates, Version};
 
 /// The edits themselves (wad_model's), for callers that only depend on wad-proto.
 pub mod wad_model_op {
@@ -91,8 +91,21 @@ pub struct Agents {
     pub sandboxes: Vec<wad_model::agents::Sandbox>,
 }
 
-/// `POST /v1/agents`, and a word to one: `.../say`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Where an allowed sandbox is shown: here, in a window, or streamed to
+/// whoever accepted it (a phone, another machine).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AgentDisplay {
+    /// A window on this machine's screen: the person is here.
+    #[default]
+    Local,
+    /// Streamed (privately, over the tailnet) to the accepter's `share`.
+    Stream,
+}
+
+/// `POST /v1/agents`, a word to one (`.../say`), and an `allow`: where its
+/// sandbox is shown.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSend {
     #[serde(default)]
@@ -100,6 +113,21 @@ pub struct AgentSend {
     /// None for the actions (`{}`): only `say` has any.
     #[serde(default)]
     pub text: String,
+    /// `allow`: a window here, or streamed to the caller.
+    #[serde(default)]
+    pub display: AgentDisplay,
+}
+
+/// `POST /v1/agents/{id}/allow`: the sandbox made, and how to watch it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentAllowed {
+    /// Its wadspace (`sandbox-1`).
+    pub sandbox: String,
+    /// Its stream's one-tap link, when it was allowed to be streamed (the
+    /// person isn't at this machine's screen).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub share: Option<crate::StreamShare>,
 }
 
 #[cfg(test)]
@@ -110,6 +138,9 @@ mod agent_wire {
     fn an_action_is_an_empty_body() {
         let a: AgentSend = serde_json::from_str("{}").expect("Allow, Stop and Ship send {}");
         assert_eq!((a.ws.as_str(), a.text.as_str()), ("", ""));
+        assert_eq!(a.display, super::AgentDisplay::Local, "a window here, unless it says");
+        let a: AgentSend = serde_json::from_str(r#"{"display":"stream"}"#).unwrap();
+        assert_eq!(a.display, super::AgentDisplay::Stream);
     }
 }
 
@@ -444,12 +475,20 @@ pub struct WadspaceRun {
 // ------------------------------------------------------------ the screen
 
 /// `PUT /v1/screen/session`: the shell, as it starts, tells wadd its
-/// compositor: its Wayland socket (an absolute path) and whose session it is.
+/// compositor: its Wayland socket (an absolute path), whose session it is,
+/// and how many displays it has (a wadspace opened on the screen draws one
+/// window per display; sent again when they change).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenSession {
     pub wayland_socket: String,
     pub uid: u32,
+    #[serde(default = "one_monitor")]
+    pub monitors: u32,
+}
+
+fn one_monitor() -> u32 {
+    1
 }
 
 /// Where wadd found the compositor it serves wadspaces on.
@@ -478,6 +517,9 @@ pub struct ScreenInfo {
     pub from: ScreenFrom,
     /// Wadspaces with a socket of their own on it now.
     pub served: Vec<String>,
+    /// How many displays the shell said it has (1 until it does).
+    #[serde(default = "one_monitor")]
+    pub monitors: u32,
 }
 
 #[cfg(test)]
@@ -513,7 +555,7 @@ mod tests {
         assert_eq!((json["built"].as_str(), json["sizeMb"].as_u64()), (Some("update"), Some(1200)));
         assert_eq!(Event::Build(Box::new(build)).latest_key().as_deref(), Some("build:studio"));
 
-        let screen = Event::Screen(ScreenInfo { socket: None, uid: None, from: ScreenFrom::None, served: vec![] });
+        let screen = Event::Screen(ScreenInfo { socket: None, uid: None, from: ScreenFrom::None, served: vec![], monitors: 1 });
         assert_eq!(screen.latest_key().as_deref(), Some("screen"));
         // A job's lines aren't the present: its state is.
         assert_eq!(Event::JobLines { id: "j".into(), from: 0, lines: vec![] }.latest_key(), None);

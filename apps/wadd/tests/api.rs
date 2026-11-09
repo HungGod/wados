@@ -83,9 +83,10 @@ async fn a_wadspace_opens_on_the_shells_screen_and_stops() {
     // Before the shell says, there's no screen (the runtime dir has none).
     let info: wad_proto::ScreenInfo = w.get("/v1/screen").await.unwrap();
     assert_eq!(info.from, ScreenFrom::None);
-    let info = w.screen_session(&up.shell.to_string_lossy(), me).await.unwrap();
+    let info = w.screen_session(&up.shell.to_string_lossy(), me, 2).await.unwrap();
     assert_eq!(info.from, ScreenFrom::Shell);
-    let bad = w.screen_session("wayland-0", me).await.unwrap_err();
+    assert_eq!(info.monitors, 2, "how many displays the shell has");
+    let bad = w.screen_session("wayland-0", me, 1).await.unwrap_err();
     assert_eq!((bad.status, bad.code.as_str()), (400, "bad_request"));
 
     let id = create(w, "Plain", &[]).await;

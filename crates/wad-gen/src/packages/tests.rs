@@ -181,6 +181,7 @@ fn ci_builds_the_catalog_in_waves() {
             "rust",
             "claude-code",
             "ori",
+            "podman",
             "dolphin",
             "steam",
             "vscode",

@@ -69,17 +69,32 @@ impl Wadd {
 
     /// A job for a wadspace's Claude Code (`POST /v1/agents`).
     pub async fn agent_send(&self, ws: &str, text: &str) -> Result<wad_model::agents::Agent, Failure> {
-        self.post("/v1/agents", &wad_proto::AgentSend { ws: ws.into(), text: text.into() }).await
+        self.post(
+            "/v1/agents",
+            &wad_proto::AgentSend { ws: ws.into(), text: text.into(), display: Default::default() },
+        )
+        .await
     }
 
-    /// `stop`, `allow`, `deny` or `ship`.
+    /// `stop`, `deny` or `ship` (an `allow` is [`Wadd::agent_allow`]).
     pub async fn agent_act(&self, id: &str, what: &str) -> Result<(), Failure> {
         self.post(&format!("/v1/agents/{id}/{what}"), &json!({})).await
     }
 
+    /// Allow its sandbox (`POST /v1/agents/{id}/allow`), shown as `display`
+    /// (a window here, or streamed): an `allow` that streams answers its
+    /// one-tap link.
+    pub async fn agent_allow(
+        &self,
+        id: &str,
+        display: wad_proto::AgentDisplay,
+    ) -> Result<wad_proto::AgentAllowed, Failure> {
+        self.post(&format!("/v1/agents/{id}/allow"), &wad_proto::AgentSend { display, ..Default::default() }).await
+    }
+
     /// A word to a job, between its turns.
     pub async fn agent_say(&self, id: &str, text: &str) -> Result<(), Failure> {
-        let body = wad_proto::AgentSend { ws: String::new(), text: text.into() };
+        let body = wad_proto::AgentSend { ws: String::new(), text: text.into(), display: Default::default() };
         self.post(&format!("/v1/agents/{id}/say"), &body).await
     }
 

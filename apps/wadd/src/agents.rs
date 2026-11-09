@@ -20,7 +20,7 @@ pub mod stream;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -31,7 +31,7 @@ use wad_model::agents::{
     Agent, AgentNote, AgentStatus, Ask, CheckItem, Sandbox, SandboxState, StepId, StepState, Verdict, capped, wants,
 };
 use wad_model::{AppId, SessionDisplay};
-use wad_proto::{ApiError, Event, Level, NoticeAction};
+use wad_proto::{AgentAllowed, AgentDisplay, ApiError, Event, Level, NoticeAction};
 
 use crate::events::Bus;
 use crate::jobs::now_ms;
@@ -69,8 +69,9 @@ pub trait Runner: Send + Sync + 'static {
 /// Sandboxes: throwaway wadspaces.
 #[async_trait]
 pub trait Hands: Send + Sync + 'static {
-    /// One for `task`: its wadspace.
-    async fn open(&self, from: &str, task: &str) -> Result<String, String>;
+    /// One for `task`: its wadspace, shown as `display` (a window on this
+    /// machine's screen, or off it for a stream).
+    async fn open(&self, from: &str, task: &str, display: SessionDisplay) -> Result<String, String>;
     /// `path` of `from` into `sandbox`, and `run` started there.
     async fn update(&self, from: &str, sandbox: &str, path: Option<&str>, run: Option<&str>) -> Result<(), String>;
     async fn close(&self, sandbox: &str);
@@ -129,6 +130,9 @@ pub struct MachineAgents {
     hands: Arc<dyn Hands>,
     docs: Arc<Docs>,
     bus: Bus,
+    /// Its streams ([`crate::streams`], attached as it's made): an allowed
+    /// sandbox can be streamed to whoever accepted it.
+    streams: OnceLock<Arc<dyn crate::api_phase7::Streams>>,
 }
 
 fn busy_with(name: &str, task: &str) -> ApiError {
@@ -164,7 +168,14 @@ impl MachineAgents {
             hands,
             docs,
             bus,
+            streams: OnceLock::new(),
         })
+    }
+
+    /// Its streams, as they're made ([`crate::streams`]): from then on an
+    /// allowed sandbox can be streamed to whoever accepted it.
+    pub fn attach_streams(&self, streams: Arc<dyn crate::api_phase7::Streams>) {
+        let _ = self.streams.set(streams);
     }
 
     pub fn state(&self) -> AgentsState {
@@ -387,21 +398,29 @@ impl MachineAgents {
         Ok(())
     }
 
-    /// Allow: its sandbox is made, and it's told.
-    pub async fn allow(&self, id: &str) -> Result<(), ApiError> {
+    /// Allow: its sandbox is made, and it's told. `display`: a window on this
+    /// machine's screen (the person is here), or streamed to whoever accepted
+    /// it (a phone on the tailnet, another machine): then its one-tap link
+    /// comes back in the answer, and it's never on this screen.
+    pub async fn allow(&self, id: &str, display: AgentDisplay) -> Result<AgentAllowed, ApiError> {
         let (ws, task) = self
             .with(id, |a| {
                 let asked = matches!(a.ask, Some(Ask::Sandbox { .. }) | Some(Ask::Ship));
                 asked.then(|| (a.ws.clone(), a.task.clone()))
             })?
             .ok_or_else(|| ApiError::conflict("It didn't ask for a sandbox"))?;
-        let box_ws = self.hands.open(&ws, &task).await.map_err(ApiError::internal)?;
+        let shown = match display {
+            AgentDisplay::Local => SessionDisplay::Window,
+            // Off the screen: its stream is the only place it shows.
+            AgentDisplay::Stream => SessionDisplay::Background,
+        };
+        let box_ws = self.hands.open(&ws, &task, shown).await.map_err(ApiError::internal)?;
         let n = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
         let sandbox = Sandbox {
             id: format!("sandbox-{n}"),
             agent: id.to_string(),
             title: task,
-            ws: box_ws,
+            ws: box_ws.clone(),
             build: 0,
             state: SandboxState::Starting,
             items: vec![],
@@ -412,11 +431,56 @@ impl MachineAgents {
             a.sandbox = Some(name.clone());
             a.note(AgentNote::You { text: "Allowed the sandbox.".into() });
         })?;
+        // Streamed: its link, once it's live (a stream starts in the
+        // background; Selkies answers a moment later).
+        let share = match display {
+            AgentDisplay::Local => None,
+            AgentDisplay::Stream => Some(self.stream_sandbox(&name, &box_ws).await?),
+        };
+        if let Some(s) = &share {
+            let to = s.link.chars().take(200).collect::<String>();
+            tracing::info!("{id}: its sandbox streams at {to}");
+        }
         self.turn(
             id,
             format!("The person allowed it: your sandbox is {name}. Call set_checklist, then update_sandbox."),
         );
-        Ok(())
+        Ok(AgentAllowed { sandbox: name, share })
+    }
+
+    /// Its sandbox's stream, started here (privately, over the tailnet) and
+    /// waited for: the share the accepter opens. The machine it runs on is
+    /// this one (the agent's own, whose files it tries).
+    async fn stream_sandbox(&self, sandbox: &str, ws: &str) -> Result<wad_proto::StreamShare, ApiError> {
+        let streams = self
+            .streams
+            .get()
+            .cloned()
+            .ok_or_else(|| ApiError::conflict("Streaming isn't here on this machine"))?;
+        streams
+            .start(
+                ws,
+                wad_proto::StreamRequest {
+                    mode: wad_model::StreamMode::Private,
+                    // It's in the background (never on the screen): there's
+                    // nothing to take off it, which is what takeover says.
+                    takeover: true,
+                    players: 0,
+                },
+            )
+            .await?;
+        // Until it's live: its share (a second or so; a minute, at worst).
+        for _ in 0..120 {
+            match streams.share(ws).await {
+                Ok(s) => return Ok(s),
+                Err(e) if e.code == wad_proto::ErrorCode::NotFound => {
+                    tokio::time::sleep(Duration::from_millis(500)).await
+                }
+                Err(e) => return Err(e),
+            }
+        }
+        tracing::warn!("{sandbox}: its stream didn't come up in a minute");
+        Err(ApiError::internal(format!("{sandbox}'s stream didn't come up")))
     }
 
     /// Not now: open a pull request as it is, or a sandbox after all.
@@ -773,7 +837,7 @@ async fn podman(args: &[&str]) -> Result<(), String> {
 
 #[async_trait]
 impl Hands for RealHands {
-    async fn open(&self, from: &str, task: &str) -> Result<String, String> {
+    async fn open(&self, from: &str, task: &str, display: SessionDisplay) -> Result<String, String> {
         let name = format!("Sandbox · {}", text_line(task).chars().take(40).collect::<String>());
         let made =
             self.docs.apply(op(serde_json::json!({ "op": "space.create", "name": name }))?).map_err(|e| e.message)?;
@@ -789,7 +853,7 @@ impl Hands for RealHands {
         for _ in 0..1800 {
             let doc = self.docs.wadspace(&ws).ok_or("the wadspace went")?;
             if self.builds.image_for(&doc).is_some() {
-                self.runs.open(&ws, SessionDisplay::Window).map_err(|e| e.message)?;
+                self.runs.open(&ws, display).map_err(|e| e.message)?;
                 self.runs.settled(&ws).await;
                 return Ok(ws);
             }

@@ -117,6 +117,11 @@ static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
     let more = [
         ("claude-code", "Claude Code", "Anthropic’s claude command, from npm (adds Node.js)"),
         ("ori", "Ori", "OpenRouter’s command-line coding agent: Claude Code, Codex and more, through OpenRouter"),
+        (
+            "podman",
+            "Podman",
+            "podman, buildah and skopeo: build and push images from a wadspace (the WadOS one, the host image)",
+        ),
         ("hplip", "HP printer tools", "hplip (hp-setup, hp-info) and the CUPS client commands"),
     ];
     let tools = raw
@@ -485,7 +490,7 @@ mod tests {
     #[test]
     fn has_v1s_other_downloads_as_tools_and_not_what_it_dropped() {
         let tools: Vec<_> = tools().iter().map(|t| t.id.as_str()).collect();
-        for id in ["rust", "claude-code", "ori", "hplip"] {
+        for id in ["rust", "claude-code", "ori", "podman", "hplip"] {
             assert!(tools.contains(&id), "{id}");
         }
         assert!(!tools.contains(&"go") && !tools.contains(&"git-lfs"));

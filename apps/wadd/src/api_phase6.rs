@@ -217,13 +217,7 @@ async fn web_keys(State(app): State<Arc<AppState>>) -> Answer<Vec<WebKey>> {
     // A folder stays while any wadspace names its key, even one the library
     // has dropped: nothing validates those references, and removing the
     // folder is what losing the cookies would mean.
-    let mut in_use: Vec<String> = lib.keys.iter().map(|k| k.id.clone()).collect();
-    for x in &lib.wadspaces {
-        for k in x.secrets.by_slot.values() {
-            in_use.push(k.id.clone());
-        }
-        in_use.extend(x.secrets.groups.iter().map(|g| g.key.id.clone()));
-    }
+    let in_use = crate::keys::MachineKeys::in_use(&lib);
     let keys = lib.keys;
     let app = app.clone();
     let web = tokio::task::spawn_blocking(move || app.keys.web(&keys, &in_use))

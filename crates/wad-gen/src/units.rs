@@ -461,15 +461,19 @@ fn wadspace_unit(ws: &Wadspace, run: &Run, m: &Machine, draws: Draws) -> String 
     } else {
         lines.push(format!("SecurityLabelLevel={}", mcs_level(id)));
     }
-    // Steam's runtime and Proton are containers of their own (bwrap, in
-    // pressure-vessel): that takes mounting (SELinux's type for nested
-    // engines, with the categories above) and a new /proc, which the kernel
-    // refuses while parts of this one are masked.
-    if ws.has_app(wad_model::AppId::Steam) {
+    // Nested containers: Steam's runtime and Proton (bwrap, in
+    // pressure-vessel), and podman/buildah themselves (the WadOS wadspace's
+    // `podman` tool, which builds and pushes images). That takes mounting
+    // (SELinux's type for nested engines, with the categories above), a new
+    // /proc, which the kernel refuses while parts of this one are masked,
+    // and fuse for the storage (vfs needs none, fuse-overlayfs does).
+    let nested = nested(ws);
+    if nested {
         if !mounted {
             lines.push("SecurityLabelType=container_engine_t".into());
         }
         lines.push("Unmask=/proc/*".into());
+        lines.push("AddDevice=/dev/fuse".into());
     }
     lines.extend(m.devices.iter().map(|d| format!("AddDevice={}", esc(d))));
     // Devices wadd hands over while it runs (USB, gamepads, webcams): their
@@ -494,6 +498,12 @@ fn wadspace_unit(ws: &Wadspace, run: &Run, m: &Machine, draws: Draws) -> String 
         .map(String::from),
     );
     lines.join("\n")
+}
+
+/// Runs containers of its own: Steam's runtime, or the podman tool (a
+/// terminal add-on named `podman`, which the WadOS wadspace has).
+pub fn nested(ws: &Wadspace) -> bool {
+    ws.has_app(wad_model::AppId::Steam) || ws.ext(wad_model::AppId::Terminal, "podman").is_some()
 }
 
 /// Its own environment, wherever it draws: its user, time zone, title and look.

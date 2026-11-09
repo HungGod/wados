@@ -123,8 +123,8 @@ always wins: opening a streamed wadspace on the screen ends its stream.
   - Open viewer, Stop streaming.
 
   The share is fetched when it opens, dropped when it closes, and never logged.
-- **Around the shell:** card badges (`LIVE · n`), the Stream submenu, the tray's Streams tile and flyout, the reveal
-  bar's Stream, Launch on another machine's card, and toasts with Show link and Retry.
+- **Around the shell:** card badges (`LIVE · n`), the Stream submenu, the tray's Streams tile and flyout,
+  Launch on another machine's card, and toasts with Show link and Retry.
 - **The key on screen and on disk:** WadBrowser's error page and its history never show or keep a stream's key
   (`shown_uri`).
 

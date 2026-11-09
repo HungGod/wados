@@ -3,8 +3,7 @@
 //! its job's stages), the share sheet (its QR code, link and sign-in, who's
 //! watching, Stop), the Stream menu's rows, and the toasts (live, didn't
 //! start, stopped). The tray's Streams (bar/tray.rs), the cards' badges and
-//! buttons (home), the reveal bar's Stream (overlays/reveal.rs) and the
-//! desktop's menu call the verbs here.
+//! buttons (home) and the desktop's menu call the verbs here.
 //!
 //! - **This machine's:** `POST /v1/wadspaces/{id}/stream` starts a Stream
 //!   job, followed by its `job` events and the `streams` event; `DELETE`

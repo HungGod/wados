@@ -46,7 +46,7 @@ struct Boxes {
 
 #[async_trait]
 impl Hands for Boxes {
-    async fn open(&self, _: &str, _: &str) -> Result<String, String> {
+    async fn open(&self, _: &str, _: &str, _: wad_model::SessionDisplay) -> Result<String, String> {
         self.log.lock().unwrap().push("open".into());
         Ok("box".into())
     }
@@ -180,7 +180,7 @@ async fn the_whole_demo_over_a_real_socket() {
     let early = ask(call("set_checklist", json!({ "items": [] }))).await;
     assert_eq!(early["result"]["isError"], true);
 
-    u.m.allow(&a.id).await.unwrap();
+    u.m.allow(&a.id, wad_proto::AgentDisplay::Local).await.unwrap();
     settled(&u.m, &a.id).await;
     let items = json!({ "items": [{ "id": "menu", "label": "It's in the menu", "how": "Right-click", "done": 4 }] });
     assert_eq!(ask(call("set_checklist", items)).await["result"]["isError"], false);

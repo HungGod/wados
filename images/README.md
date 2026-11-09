@@ -42,7 +42,7 @@ app in `webapps.json` gets a launcher at start (`wadspaces-webapp --id <id>
 |---|---|
 | The display | A folder mounted read-only at `/run/wadspaces-display`, with one socket in it (`wayland-*`; `WADSPACES_WAYLAND` names it if there are several). The machine's labwc serves it through `wp_security_context_v1`, with app id `io.wadspaces.<id>`. abc must be able to connect: the socket belongs to abc's uid outside. |
 | Users | Run rootless with `PUID=1000 PGID=1000` and the maps `0:1:1000`, `1000:0:1`, `1001:1001:64535` (uid and gid), so abc is you outside. |
-| The display it's on | `/run/wadspaces-extra/display`: `screen` (or no file) means `/run/wadspaces-display`, and `stream` means `/run/wadspaces-stream`, its stream sidecar's display volume. svc-de links `/run/wadspaces-current` to the one in use. `/run/wadspaces-extra/screens` gives the number of labwc outputs. |
+| The display it's on | `/run/wadspaces-extra/display`: `screen` (or no file) means `/run/wadspaces-display`, and `stream` means `/run/wadspaces-stream`, its stream sidecar's display volume. svc-de links `/run/wadspaces-current` to the one in use. `/run/wadspaces-extra/screens` gives the number of labwc outputs: the displays the shell told wadd it has, so a wadspace opened on the screen draws one window on each. |
 | Start-time extras | `/run/wadspaces-extra/`: `layout.json`, `projects.json`, `signins.json`, `webapps.json` and `wadbrowser.conf`. |
 | Projects, sign-ins | `/run/wadspaces-copies/<id>/` (wadd's copies of the projects) and `/run/wadspaces-signins/<id>/` (saved sign-ins). |
 | Secrets, at run time only | `/run/secrets/github_token`, a podman secret for git and `gh`. |

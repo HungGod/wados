@@ -106,6 +106,9 @@ pub struct Screen {
     bus: Bus,
     settings: Settings,
     registered: Mutex<Option<(PathBuf, u32)>>,
+    /// How many displays the shell says it has: a wadspace on the screen
+    /// draws one window per display (svc-de's `screens`, WLR_WL_OUTPUTS).
+    monitors: std::sync::atomic::AtomicU32,
     state: Mutex<State>,
     /// One socket made at a time (the loop and a start may both want one).
     serving: Mutex<()>,
@@ -140,6 +143,7 @@ impl Screen {
             bus,
             settings,
             registered: Mutex::default(),
+            monitors: std::sync::atomic::AtomicU32::new(1),
             state: Mutex::default(),
             serving: Mutex::default(),
             poke: tokio::sync::Notify::new(),
@@ -157,6 +161,11 @@ impl Screen {
 
     pub fn enabled(&self) -> bool {
         self.settings.enabled
+    }
+
+    /// The machine's displays, as the shell last said (1 until it does).
+    pub fn monitors(&self) -> u32 {
+        self.monitors.load(std::sync::atomic::Ordering::Relaxed).max(1)
     }
 
     /// The compositor, wherever it's found now.
@@ -184,7 +193,8 @@ impl Screen {
 
     /// `PUT /v1/screen/session`: the shell's compositor. Its socket must be
     /// there, a socket, and `uid`'s; and `uid` the caller's (root may say anyone's).
-    pub fn register(&self, socket: &str, uid: u32, caller: u32) -> Result<ScreenInfo, ApiError> {
+    /// `monitors`: how many displays it has (the same call again when they change).
+    pub fn register(&self, socket: &str, uid: u32, caller: u32, monitors: u32) -> Result<ScreenInfo, ApiError> {
         if !self.settings.enabled {
             return Err(ApiError::conflict("this wadd has no screen ([display] enabled = false)"));
         }
@@ -200,6 +210,10 @@ impl Screen {
             return Err(ApiError::bad_request(format!("{socket} isn't uid {uid}'s")));
         }
         *self.registered.lock().unwrap() = Some((p, uid));
+        let was = self.monitors.swap(monitors.max(1), std::sync::atomic::Ordering::Relaxed).max(1);
+        if was != monitors.max(1) {
+            tracing::info!("the screen: {monitors} display(s), as the shell says (was {was})");
+        }
         tracing::info!("the screen: {socket} (uid {uid}), as the shell says");
         self.poke.notify_one();
         Ok(self.info())
@@ -215,6 +229,7 @@ impl Screen {
             uid: comp.as_ref().map(|c| c.uid),
             from: comp.as_ref().map_or(ScreenFrom::None, |c| c.from),
             served,
+            monitors: self.monitors(),
         }
     }
 

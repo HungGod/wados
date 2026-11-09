@@ -24,6 +24,9 @@
 //! | `PUT /v1/screen/session` | the shell's compositor, as it starts ([`ScreenSession`]) → [`ScreenInfo`] |
 //! | `GET /v1/events` | what changes, as server-sent events (the present first) |
 //! | `GET /v1/logs?n=` | wadd's last log lines, secrets taken out |
+//! | `GET /v1/discs` | the discs kept on this machine (phase 10, [`crate::discs`]) |
+//! | `POST /v1/discs` | one kept here, and pushed if it says |
+//! | `DELETE /v1/discs/{id}` | one gone from this machine: its file, and the gamespaces' variants of it |
 //!
 //! Phase 6's (the tailnet, peers, GitHub) are in [`crate::api_phase6`],
 //! phase 7's (streams) in [`crate::api_phase7`], phase 8's (the network,
@@ -298,16 +301,20 @@ async fn agent_act(
     State(app): State<Arc<AppState>>,
     Path((id, action)): Path<(String, String)>,
     body: Option<Json<wad_proto::AgentSend>>,
-) -> Result<Json<()>, Failure> {
+) -> Result<Json<wad_proto::AgentAllowed>, Failure> {
+    let body = body.map(|b| b.0).unwrap_or_default();
+    let mut allowed = wad_proto::AgentAllowed { sandbox: String::new(), share: None };
     match action.as_str() {
-        "say" => app.agents.say(&id, &body.map(|b| b.0.text).unwrap_or_default())?,
+        "say" => app.agents.say(&id, &body.text)?,
         "stop" => app.agents.stop(&id).await?,
-        "allow" => app.agents.allow(&id).await?,
+        // Where its sandbox is shown: here (a window), or streamed to the
+        // person who accepted it (a phone, another machine).
+        "allow" => allowed = app.agents.allow(&id, body.display).await?,
         "deny" => app.agents.deny(&id)?,
         "ship" => app.agents.ship(&id).await?,
         other => return Err(ApiError::not_found(format!("no action {other}")).into()),
     }
-    Ok(Json(()))
+    Ok(Json(allowed))
 }
 
 async fn sandbox_mark(
@@ -447,7 +454,7 @@ async fn screen_session(
     ConnectInfo(peer): ConnectInfo<Peer>,
     Json(req): Json<ScreenSession>,
 ) -> Result<Json<ScreenInfo>, Failure> {
-    let info = app.screen.register(&req.wayland_socket, req.uid, peer.uid)?;
+    let info = app.screen.register(&req.wayland_socket, req.uid, peer.uid, req.monitors)?;
     // A machine's COPY steps take from that session's user's home.
     if app.profile == wad_config::Profile::System
         && let Ok(Some(u)) = nix::unistd::User::from_uid(req.uid.into())

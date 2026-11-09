@@ -130,6 +130,12 @@ impl Wadd {
         self.post("/v1/update/rollback", &json!({})).await
     }
 
+    /// Where a newer one comes from (`POST /v1/update/source`): GitHub's CI
+    /// builds, this machine's own, or the ones it pushed to ghcr.
+    pub async fn update_source(&self, source: wad_proto::UpdateSource) -> Result<Updates, Failure> {
+        self.post("/v1/update/source", &source).await
+    }
+
     /// The base images here (`GET /v1/bases`).
     pub async fn bases(&self) -> Result<Bases, Failure> {
         self.get("/v1/bases").await

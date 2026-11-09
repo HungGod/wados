@@ -27,7 +27,10 @@
 //! | `POST /v1/remote/ops` (`OpRequest`) → `OpResult`; `POST /v1/remote/undo/{id}` | my machines and trusted devices |
 //! | `GET /v1/remote/runs`, `/builds`, `/jobs`, `/streams` → as the socket's | my machines and trusted devices |
 //! | `GET /v1/remote/streams/{id}/share` → `StreamShare` (its players' links too) | my machines and trusted devices |
+//! | `GET /v1/remote/agents` → the agents and sandboxes (`wad_proto::Agents`) | my machines and trusted devices |
+//! | `POST /v1/remote/agents/{id}/{action}` (`AgentSend`) → `AgentAllowed`: `say`, `stop`, `allow` (a window here, or `stream`ed to the caller), `deny`, `ship` | my machines and trusted devices |
 //! | `GET /v1/remote/notices` → [`RemoteNotice`]s, newest first | my machines and trusted devices |
+//! | `POST /v1/remote/notices` ([`RemoteNotice`]) → 204: one of my other machines' notices, shown here (an agent's question on every screen) | my machines |
 //! | `GET /v1/remote/update`, `POST /v1/remote/update/check` → as the socket's | my machines and trusted devices |
 //! | `POST /v1/remote/restart` → 202: restarts into a staged update (nothing else) | my machines and trusted devices |
 //! | `GET /v1/remote/trust` → [`TrustBook`] | my machines |
@@ -61,9 +64,9 @@ use tokio::net::{TcpListener, TcpSocket};
 use wad_model::edit::Library;
 use wad_model::{PeerKind, Wadspace};
 use wad_proto::{
-    ApiError, BuildAnswer, ErrorCode, Event, JobInfo, Level, MachineInfo, OpRequest, OpResult, OpenRequest, PeerInfo,
-    RemoteHello, RemoteMachine, RemoteNotice, RemoteTrust, StreamInfo, StreamList, StreamRequest, StreamShare,
-    TrustAnswer, TrustBook, Updates, WadspaceBuild, WadspaceRun,
+    AgentAllowed, AgentSend, Agents, ApiError, BuildAnswer, ErrorCode, Event, JobInfo, Level, MachineInfo, OpRequest,
+    OpResult, OpenRequest, PeerInfo, RemoteHello, RemoteMachine, RemoteNotice, RemoteTrust, StreamInfo, StreamList,
+    StreamRequest, StreamShare, TrustAnswer, TrustBook, Updates, WadspaceBuild, WadspaceRun,
 };
 
 use crate::api::{AppState, Failure};
@@ -173,7 +176,9 @@ pub fn router(r: Arc<Remote>) -> Router {
         .route("/v1/remote/jobs", get(jobs))
         .route("/v1/remote/streams", get(streams))
         .route("/v1/remote/streams/{id}/share", get(share))
-        .route("/v1/remote/notices", get(notices))
+        .route("/v1/remote/agents", get(agents))
+        .route("/v1/remote/agents/{id}/{action}", post(agent_act))
+        .route("/v1/remote/notices", get(notices).post(notice_in))
         .route("/v1/remote/update", get(update))
         .route("/v1/remote/update/check", post(update_check))
         .route("/v1/remote/restart", post(restart))
@@ -351,6 +356,50 @@ async fn share(State(r): State<Arc<Remote>>, Path(id): Path<String>) -> Answer<S
 
 async fn notices(State(r): State<Arc<Remote>>) -> Json<Vec<RemoteNotice>> {
     Json(r.app.bus.recent_notices())
+}
+
+/// The machine's agents and sandboxes: an agent asking a question is answered
+/// from any of the owner's devices (its notices reach them all too).
+async fn agents(State(r): State<Arc<Remote>>) -> Json<Agents> {
+    Json(Agents { agents: r.app.agents.state().agents, sandboxes: r.app.agents.state().sandboxes })
+}
+
+/// One of the machine's agents' actions, as the socket's (`api.rs`): the
+/// same words, and `allow` says where its sandbox is shown.
+async fn agent_act(
+    State(r): State<Arc<Remote>>,
+    Path((id, action)): Path<(String, String)>,
+    body: Option<Json<AgentSend>>,
+) -> Answer<AgentAllowed> {
+    let body = body.map(|b| b.0).unwrap_or_default();
+    let mut allowed = AgentAllowed { sandbox: String::new(), share: None };
+    match action.as_str() {
+        "say" => r.app.agents.say(&id, &body.text)?,
+        "stop" => r.app.agents.stop(&id).await?,
+        // `stream`: built and run here (the agent's own machine), off this
+        // screen, and its one-tap link comes back for whoever asked.
+        "allow" => allowed = r.app.agents.allow(&id, body.display).await?,
+        "deny" => r.app.agents.deny(&id)?,
+        "ship" => r.app.agents.ship(&id).await?,
+        other => return Err(Failure(ApiError::not_found(format!("no action {other}")))),
+    }
+    Ok(Json(allowed))
+}
+
+/// One of my other machines' notices: shown here as this machine's (the
+/// bell, a toast), and not passed on again. Only my machines (`Need::Machine`
+/// in `reached`): a trusted phone doesn't tell the machine's owner news.
+async fn notice_in(
+    State(r): State<Arc<Remote>>,
+    Extension(c): Extension<Caller>,
+    Json(n): Json<RemoteNotice>,
+) -> Result<StatusCode, Failure> {
+    // Only my machines: a phone is trusted, but its news isn't the machine's.
+    if c.trust != wad_proto::RemoteTrust::Machine {
+        return Err(Failure(ApiError::new(ErrorCode::Forbidden, "Only your machines may tell this machine's news")));
+    }
+    r.app.bus.adopt(n);
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn update(State(r): State<Arc<Remote>>) -> Answer<Updates> {

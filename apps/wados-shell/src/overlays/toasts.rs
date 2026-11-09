@@ -246,7 +246,8 @@ impl Toasts {
     }
 
     /// Where they go: under the bar on the desktop, by the top over a
-    /// full-screen wadspace (beside its reveal bar), else near the top.
+    /// full-screen wadspace (its bar is gone: nothing is there to avoid), else
+    /// near the top.
     fn top(&self) -> i32 {
         let primary = self.shell.primary.connector().map(|c| c.to_string()).unwrap_or_default();
         let full = self

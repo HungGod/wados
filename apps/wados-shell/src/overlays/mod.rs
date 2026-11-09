@@ -1,8 +1,12 @@
 //! What shows over everything, full-screen wadspaces included (OVERLAY
-//! layer): toasts, Super+Tab's switcher, Alt+Space's search, the reveal bar
-//! over a full-screen wadspace, and the dialogs (a device asking to be
-//! trusted, the shell's yes-or-no: [`confirm`]). And, since they're per
-//! display too.
+//! layer): toasts, Super+Tab's switcher, Alt+Space's search, and the dialogs
+//! (a device asking to be trusted, the shell's yes-or-no: [`confirm`]). And,
+//! since they're per display too.
+
+//! A full-screen wadspace has no bar of its own: every way out is a key or
+//! the desktop's own bar (Alt+Space for anything, Ctrl+Alt+↓ into a window,
+//! Super+Tab to the home page or another wadspace; `spaces` is the same as
+//! Super+Tab to the home page).
 //!
 //! The interface main.rs uses: `Overlays::new(shell)`. Its `wadsctl`
 //! commands, registered with the shell:
@@ -19,12 +23,11 @@
 //!   `toasts press <label>` (the newest toast's own button: Show link, Retry);
 //! - `dialog` (what's up), `dialog later|deny|trust|ok|cancel|close` (and a
 //!   sheet's buttons, by the names it gives them);
-//! - `reveal [down|up] [display]`, `displays`;
+//! - `displays`;
 //! - `log`: what it was asked to show.
 
 mod dialog;
 pub mod focus;
-mod reveal;
 mod search;
 mod switcher;
 mod toasts;
@@ -43,8 +46,19 @@ use crate::machine::Page;
 use crate::shell::Shell;
 use crate::store::Change;
 
+/// The wadspace full screen on the screen (the primary): what Ctrl+Alt+↓ puts
+/// in a window, and Spaces takes off the screen.
+fn screen_ws(shell: &Rc<Shell>) -> Option<String> {
+    shell
+        .store
+        .running()
+        .into_iter()
+        .map(|w| w.id)
+        .find(|id| shell.store.display(id) == Some(SessionDisplay::Screen))
+}
+
 const CSS: &str = r#"
-window.wados-toasts, window.wados-switcher, window.wados-reveal, window.wados-dialog { background: transparent; }
+window.wados-toasts, window.wados-switcher, window.wados-dialog { background: transparent; }
 window.wados-search { background-color: rgb(5 3 12 / 0.5); }
 
 /* Toasts. */
@@ -81,7 +95,7 @@ button.ov-dialog-x { min-width: 30px; min-height: 30px; padding: 0; border: none
 button.ov-dialog-x:hover { background-color: var(--surface-2); color: var(--fg); }
 .ov-dialog-body { padding: 16px 20px 20px; color: var(--muted); }
 .ov-dialog-foot { padding: 0 20px 20px; }
-button.ov-act, button.ov-x, button.ov-r, button.ov-fs-b {
+button.ov-act, button.ov-x, button.ov-r {
   background: none; border: none; box-shadow: none; outline: none; text-shadow: none;
   color: var(--fg); min-height: 0; min-width: 0; padding: 0;
 }
@@ -100,6 +114,13 @@ button.ov-x:hover { color: var(--fg); background-color: var(--surface-3); }
 .ov-sw-item { padding: 12px 8px 10px; border-radius: 16px; color: var(--muted); }
 .ov-sw-item.ov-on { background-color: rgb(255 255 255 / 0.1); box-shadow: inset 0 0 0 2px rgb(255 255 255 / 0.85); color: var(--fg); }
 .ov-sw-name { font-size: 12.5px; font-weight: 600; }
+/* The home page's tile: WadOS's mark on glass, as its card is. */
+.ov-sw-home {
+  min-width: 132px;
+  min-height: 76px;
+  border-radius: 12px;
+  background-color: var(--surface-2);
+}
 
 /* Alt+Space. */
 .ov-search {
@@ -126,25 +147,9 @@ button.ov-r.ov-on { background-color: rgb(127 211 255 / 0.16); }
 .ov-focus-left { font-family: 'Space Grotesk', Inter, sans-serif; font-size: 36px; font-weight: 600; color: var(--fg); }
 .ov-focus-note { font-size: 14px; color: var(--muted); }
 .ov-focus-until { margin-top: 8px; font-size: 13px; color: var(--muted); }
-
-/* A full-screen wadspace's bar: tucked up out of sight until it's wanted. */
-.ov-fs {
-  padding: 6px 6px 6px 14px;
-  border-radius: 14px;
-  border: 1px solid var(--line-strong);
-  background-color: rgb(27 19 45 / 0.96);
-  box-shadow: 0 10px 24px -12px var(--shadow);
-  transform: translateY(-64px);
-  opacity: 0;
-  transition: transform 250ms cubic-bezier(0.2, 0.85, 0.25, 1), opacity 200ms ease;
-}
-.ov-fs.ov-down { transform: none; opacity: 1; }
-.ov-fs-name { font-weight: 600; }
-.ov-fs-look { color: var(--muted); font-size: 13px; }
-button.ov-fs-b { min-height: 32px; padding: 0 10px; border-radius: 9px; font-size: 13px; }
-button.ov-fs-b:hover { background-color: var(--surface-3); }
-button.ov-fs-b:disabled { color: var(--faint); }
-button.ov-fs-b.ov-stop { color: var(--danger); }
+button.ov-step-b { min-height: 32px; padding: 0 10px; border-radius: 9px; font-size: 13px; }
+button.ov-step-b:hover { background-color: var(--surface-3); }
+button.ov-step-b:disabled { color: var(--faint); }
 "#;
 
 pub struct Overlays {
@@ -152,8 +157,6 @@ pub struct Overlays {
     dialogs: Rc<dialog::Dialogs>,
     switcher: Rc<switcher::Switcher>,
     search: Rc<search::Search>,
-    /// Made again for the displays as they change.
-    reveal: RefCell<Rc<reveal::Reveal>>,
     /// What it was asked to show (tests read it back: `wadsctl log`).
     log: RefCell<Vec<String>>,
     /// The wadspace in front last (to tell the switcher).
@@ -172,7 +175,6 @@ impl Overlays {
             dialogs: dialog::Dialogs::new(shell),
             switcher: switcher::Switcher::new(shell),
             search: search::Search::new(shell),
-            reveal: RefCell::new(Rc::new(reveal::Reveal::new(shell))),
             log: RefCell::default(),
             front: RefCell::default(),
             focus: focus::FocusUi::new(shell),
@@ -201,7 +203,6 @@ impl Overlays {
                         m.toasts.push_notice(*level, title, undo.clone(), body.clone(), icon.clone(), action.clone());
                     }
                 }
-                Change::Focus => m.reveal().focus_changed(),
                 Change::Run(_) => {
                     let running: Vec<String> = s.store.running().into_iter().map(|w| w.id).collect();
                     m.switcher.mru.borrow_mut().keep(&running);
@@ -212,7 +213,6 @@ impl Overlays {
         let (w, s) = (Rc::downgrade(&me), shell.clone());
         shell.placer.on_windows(move |list| {
             let Some(m) = w.upgrade() else { return };
-            m.reveal().windows_changed();
             // The wadspace in front is the one used most lately.
             let front = list.iter().find(|t| in_front(t)).and_then(|t| t.wadspace()).map(str::to_string);
             if let Some(id) = &front
@@ -223,20 +223,8 @@ impl Overlays {
             }
             *m.front.borrow_mut() = front;
         });
-        // Every display's reveal bar, made again for the displays as they are.
-        let (w, s) = (Rc::downgrade(&me), shell.clone());
-        shell.on_monitors(move || {
-            let Some(m) = w.upgrade() else { return };
-            let old = m.reveal.replace(Rc::new(reveal::Reveal::new(&s)));
-            old.close();
-            m.reveal().windows_changed();
-        });
         me.ctl(shell);
         me
-    }
-
-    fn reveal(&self) -> Rc<reveal::Reveal> {
-        self.reveal.borrow().clone()
     }
 
     fn note(&self, what: &str) {
@@ -332,36 +320,20 @@ impl Overlays {
                 _ => "error search [state|close|enter|for <words>]".into(),
             }
         });
-        let w = Rc::downgrade(self);
         let s = shell.clone();
         shell.on_ctl("spaces", move |_| {
-            let Some(m) = w.upgrade() else { return "error gone".into() };
             // Off a full-screen wadspace (it keeps running) to the desktop.
-            let id = m.reveal().primary_ws().or_else(|| {
-                s.store
-                    .running()
-                    .into_iter()
-                    .map(|w| w.id)
-                    .find(|id| s.store.display(id) == Some(SessionDisplay::Screen))
-            });
+            let id = screen_ws(&s);
             if let Some(id) = &id {
                 s.open(id, SessionDisplay::Background);
             }
             s.go(Page::Desktop);
             format!("ok {}", id.unwrap_or_default())
         });
-        let (w, s) = (Rc::downgrade(self), shell.clone());
+        let s = shell.clone();
         shell.on_ctl("windowed", move |_| {
-            let Some(m) = w.upgrade() else { return "error gone".into() };
             // Ctrl+Alt+↓: the full-screen wadspace into a window (none: nothing).
-            let id = m.reveal().primary_ws().or_else(|| {
-                s.store
-                    .running()
-                    .into_iter()
-                    .map(|w| w.id)
-                    .find(|id| s.store.display(id) == Some(SessionDisplay::Screen))
-            });
-            match id {
+            match screen_ws(&s) {
                 Some(id) => {
                     s.open(&id, SessionDisplay::Window);
                     format!("ok {id}")
@@ -447,23 +419,6 @@ impl Overlays {
                 format!("ok {size} {}", t.join(" | "))
             }
             None => "error gone".into(),
-        });
-        let w = Rc::downgrade(self);
-        shell.on_ctl("reveal", move |args| {
-            let Some(m) = w.upgrade() else { return "error gone".into() };
-            let n = |s: Option<&&str>| s.and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
-            match args {
-                [] => m.reveal().state(),
-                ["down", rest @ ..] | ["up", rest @ ..] => {
-                    let down = args[0] == "down";
-                    if m.reveal().show(n(rest.first()), down) {
-                        "ok".into()
-                    } else {
-                        "error nothing full screen there".into()
-                    }
-                }
-                _ => "error reveal [down|up] [display]".into(),
-            }
         });
         let w = Rc::downgrade(self);
         shell.on_ctl("log", move |_| match w.upgrade() {

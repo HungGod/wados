@@ -177,15 +177,18 @@ async fn the_shells_session_is_the_screen_until_its_socket_goes() {
     assert_eq!(rig.screen.info().from, ScreenFrom::RuntimeDir);
     let shell = rig.dir.path().join("shell-wayland-1");
     let held = std::os::unix::net::UnixListener::bind(&shell).unwrap();
-    let info = rig.screen.register(&shell.to_string_lossy(), me, me).unwrap();
+    let info = rig.screen.register(&shell.to_string_lossy(), me, me, 2).unwrap();
     assert_eq!((info.from, info.socket.as_deref()), (ScreenFrom::Shell, Some(&*shell.to_string_lossy())));
+    // How many displays the shell says: a wadspace on the screen draws one window each.
+    assert_eq!((info.monitors, rig.screen.monitors()), (2, 2));
+    assert_eq!(rig.screen.register(&shell.to_string_lossy(), me, me, 3).unwrap().monitors, 3);
     // Only your own, only a socket, only an absolute path.
     // (Two others: root may say for anyone.)
-    assert_eq!(rig.screen.register(&shell.to_string_lossy(), me + 2, me + 1).unwrap_err().code, ErrorCode::Forbidden);
-    assert_eq!(rig.screen.register("wayland-0", me, me).unwrap_err().code, ErrorCode::BadRequest);
+    assert_eq!(rig.screen.register(&shell.to_string_lossy(), me + 2, me + 1, 1).unwrap_err().code, ErrorCode::Forbidden);
+    assert_eq!(rig.screen.register("wayland-0", me, me, 1).unwrap_err().code, ErrorCode::BadRequest);
     let file = rig.dir.path().join("not-a-socket");
     std::fs::write(&file, "").unwrap();
-    assert_eq!(rig.screen.register(&file.to_string_lossy(), me, me).unwrap_err().code, ErrorCode::BadRequest);
+    assert_eq!(rig.screen.register(&file.to_string_lossy(), me, me, 1).unwrap_err().code, ErrorCode::BadRequest);
     drop(held);
     std::fs::remove_file(&shell).unwrap();
     assert_eq!(rig.screen.info().from, ScreenFrom::RuntimeDir);

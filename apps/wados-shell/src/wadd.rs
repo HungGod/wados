@@ -136,17 +136,24 @@ impl Link {
         );
     }
 
-    /// Tells wadd where the screen is: this shell's compositor.
+    /// Tells wadd where the screen is: this shell's compositor, and how many
+    /// displays there are (a wadspace opened on the screen draws one window
+    /// per display). Sent again when the displays change.
     pub fn register_screen(&self) {
         let Some(socket) = wayland_socket() else {
             tracing::warn!("no WAYLAND_DISPLAY: wadd will look for the compositor itself");
             return;
         };
         let uid = nix_uid();
+        let monitors = crate::monitors::monitors().len().max(1) as u32;
         self.call(
-            move |w| async move { w.screen_session(&socket, uid).await },
+            move |w| async move { w.screen_session(&socket, uid, monitors).await },
             |r| match r {
-                Ok(s) => tracing::info!("wadd puts wadspaces on this screen ({:?})", s.from),
+                Ok(s) => tracing::info!(
+                    "wadd puts wadspaces on this screen ({:?}), {} display(s)",
+                    s.from,
+                    s.monitors
+                ),
                 Err(e) => tracing::warn!("couldn't tell wadd where the screen is: {e}"),
             },
         );

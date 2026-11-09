@@ -258,6 +258,8 @@ struct FakeImages {
     remote: Mutex<HashMap<String, (String, u64)>>,
     token: Option<String>,
     pulls: Mutex<Vec<(String, bool)>>,
+    /// Images this machine built (a WadOS wadspace's): reference → (id, version).
+    built: Mutex<Vec<(String, String, String)>>,
 }
 
 #[async_trait]
@@ -292,6 +294,36 @@ impl Images for FakeImages {
 
     async fn token(&self) -> Option<String> {
         self.token.clone()
+    }
+
+    async fn all(&self) -> Res<Vec<ImageInfo>> {
+        let mut out: Vec<ImageInfo> = self
+            .here
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(tag, (id, size, created))| ImageInfo {
+                id: id.clone(),
+                created: *created,
+                size: *size,
+                labels: Default::default(),
+                tags: vec![tag.clone()],
+                parent: String::new(),
+            })
+            .collect();
+        for (reference, id, version) in self.built.lock().unwrap().iter() {
+            out.push(ImageInfo {
+                id: id.clone(),
+                created: 1.0,
+                size: 100,
+                labels: [("org.opencontainers.image.version".to_string(), serde_json::json!(version))]
+                    .into_iter()
+                    .collect(),
+                tags: vec![reference.clone()],
+                parent: String::new(),
+            });
+        }
+        Ok(out)
     }
 }
 
@@ -329,7 +361,10 @@ fn up_with(m: Machine, images: FakeImages, f: impl FnOnce(&mut FakeBootc, &mut S
         // Not the machine's cadence: these tests drive `due()` themselves,
         // and a scheduler running behind them would check again mid-test.
         every: Duration::from_secs(3600),
-        first: Duration::from_millis(1),
+        bases_every: Duration::from_secs(3600),
+        // These tests drive `due()` themselves: a scheduler starting a
+        // check of its own would race them (an hour's the same as never).
+        first: Duration::from_secs(3600),
         tick: Duration::from_millis(5),
         schedule: true,
         bases: vec![
@@ -459,6 +494,9 @@ async fn offline_and_failures_are_said() {
 async fn ended_ok(up: &Up) {
     let job = up.u.check().await.unwrap();
     assert_eq!(up.ended(&job).await.job.status, JobStatus::Done);
+    // A check that finds one downloads and stages it straight after: that
+    // apply is under way, and the next check would be the second one at once.
+    up.until(|u| u.job.is_none()).await;
 }
 
 #[tokio::test]
@@ -538,12 +576,16 @@ async fn a_laptop_doesnt_update_through_bootc() {
 #[tokio::test]
 async fn the_schedule_checks_when_its_due_and_remembers() {
     // On the real cadence, for the one test that's about the schedule.
-    let up = up_with(machine(), FakeImages::default(), |_, s| s.every = EVERY);
+    let up = up_with(machine(), FakeImages::default(), |_, s| {
+        s.every = EVERY;
+        s.bases_every = BASES_EVERY;
+        s.schedule = true;
+    });
     up.u.due().await;
     up.until(|u| u.staged.is_some() && u.job.is_none()).await;
     let checks = || up.calls().iter().filter(|c| *c == "bootc upgrade --check").count();
     assert_eq!(checks(), 1);
-    // Not due again for 15 minutes.
+    // Not due again for hours.
     up.u.due().await;
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(checks(), 1);
@@ -551,6 +593,64 @@ async fn the_schedule_checks_when_its_due_and_remembers() {
     let saved: Saved =
         serde_json::from_slice(&std::fs::read(up._dir.path().join("state/updates.json")).unwrap()).unwrap();
     assert!(saved.checked_at.is_some() && saved.bases_at.is_some());
+}
+
+// ------------------------------------------------------------ where from
+
+#[tokio::test]
+async fn this_machines_own_build_is_an_update_from_here() {
+    // The WadOS wadspace's host/build.sh image, in podman's store.
+    let images = FakeImages::default();
+    {
+        let mut built = images.built.lock().unwrap();
+        built.push(("localhost/wados-host:latest".into(), "sha256:built".into(), "44.20261106.0".into()));
+        built.push(("localhost/wados-host:44.20261101.0".into(), "sha256:old".into(), "44.20261101.0".into()));
+    }
+    let up = up_with(Machine { remote: Some(v("44.20261104.0", "booted")), ..machine() }, images, |_, _| {});
+    // Chosen: this machine's builds.
+    let u = up.u.source(UpdateSource::Local).await.unwrap();
+    assert_eq!(u.source, UpdateSource::Local);
+    // The newest by version is offered, and no registry is asked.
+    let u = up.u.status().await.unwrap();
+    assert_eq!(u.local.as_ref().map(|l| l.version.as_str()), Some("44.20261106.0"));
+    let job = up.u.check().await.unwrap();
+    assert_eq!(up.ended(&job).await.job.status, JobStatus::Done);
+    let u = up.until(|u| u.available.is_some()).await;
+    assert_eq!(u.available.map(|a| a.version), Some("44.20261106.0".into()));
+    assert!(!up.calls().iter().any(|c| c.contains("--check")), "no registry: {:?}", up.calls());
+    // Found, so switched to in podman's store straight after (a check
+    // downloads what it finds): nothing from a registry.
+    up.until(|u| u.job.is_none()).await;
+    assert!(
+        up.calls().iter().any(|c| c == "bootc switch --transport containers-storage localhost/wados-host@sha256:built"),
+        "{:?}",
+        up.calls()
+    );
+}
+
+#[tokio::test]
+async fn a_machines_build_that_is_what_it_boots_isnt_an_update() {
+    let images = FakeImages::default();
+    images.built.lock().unwrap().push((
+        "localhost/wados-host:latest".into(),
+        "sha256:same".into(),
+        "44.20261104.0".into(),
+    ));
+    let up = up_with(Machine { remote: Some(v("44.20261104.0", "booted")), ..machine() }, images, |_, _| {});
+    up.u.source(UpdateSource::Local).await.unwrap();
+    let job = up.u.check().await.unwrap();
+    up.ended(&job).await;
+    assert!(up.until(|u| u.job.is_none()).await.available.is_none());
+}
+
+#[tokio::test]
+async fn versions_compare_by_their_parts() {
+    use std::cmp::Ordering::*;
+    assert_eq!(compare_versions("44.20261105.0", "44.20261104.0"), Greater);
+    assert_eq!(compare_versions("44.20261105.10", "44.20261105.9"), Greater);
+    assert_eq!(compare_versions("44.20261105.0", "44.20261105.0"), Equal);
+    assert_eq!(compare_versions("45.20260101.0", "44.20261231.99"), Greater);
+    assert_eq!(compare_versions("44.20261105", "44.20261105.0"), Less);
 }
 
 // ------------------------------------------------------------ the bases

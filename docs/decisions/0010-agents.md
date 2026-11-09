@@ -26,6 +26,18 @@ ships only when the person says so.
   hours waiting for someone.
 - **The socket is labelled as a screen's** (`wad_wayland`'s `bind`), or SELinux stops a container even stat'ing it.
 
+## On every machine
+
+- **Notices go round.** Every notice a machine tells is posted to each of the owner's other online machines
+  (`POST /v1/remote/notices`, my machines only), and shown there as that machine's ("Studio: Claude Code wants a
+  sandbox"), once: a notice's id is a hash of what it says, and one that came from another machine is never passed on
+  again.
+- **An allowed sandbox streams to whoever accepted it.** The accept (`POST /v1/agents/{id}/allow`) says where it's
+  shown: `local` is a window on this machine (the person is here); `stream` builds and runs it **here** (the agent's
+  own machine, whose files it tries), off the screen, and answers a private tailnet stream's one-tap link for the
+  accepter (a phone's `StreamActivity`, another machine's WadBrowser). Nothing is elected or moved: the accepter is
+  whoever asked.
+
 ## Sandboxes
 
 - **A throwaway wadspace, not a host user, which the spec had.** Code an agent just wrote never runs on the machine.

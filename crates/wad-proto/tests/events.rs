@@ -268,6 +268,9 @@ fn updates() {
         checked_at: Some(5),
         progress: Some(UpdateProgress { done_bytes: 1, total_bytes: 2 }),
         job: Some("job-1".into()),
+        source: wad_proto::updates::UpdateSource::Pushed,
+        local: Some(v("44.20261106.0")),
+        pushed: Some(v("44.20261105.1")),
     }));
     let j = round_trip(&e, "updates");
     assert_eq!(

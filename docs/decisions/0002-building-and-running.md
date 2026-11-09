@@ -73,5 +73,5 @@ Phase 1. `apps/wadd/dev/try.sh` runs all of it rootless, on a headless patched l
 - **Not tested yet:** the clipboard's contents through the bridge as `wadspaces-clip` (it starts and connects; neither image has a tool to copy with). The other root paths run in the VM ("Booting it").
 - **Smaller ones:**
   - `lastLaunched` isn't set (wad-model has no edit for it);
-  - `screens` is always 1;
+  - `screens` is the shell's display count (`PUT /v1/screen/session`'s `monitors`, sent again when they change): a wadspace opened on the screen draws one window per display, and the shell full-screens each on a display of its own;
   - web app icons wait for the browser (phase 5).

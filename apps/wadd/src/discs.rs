@@ -174,7 +174,9 @@ impl MachineDiscs {
             return Err(ApiError::not_found(format!("no disc {id:?}")));
         };
         // Its wadspaces stop having it first: a named variant's id is
-        // `ext:<app>:<id>` (variants.rs).
+        // `ext:<app>:<id>` (variants.rs). A variant that won't go leaves the
+        // disc alone: forgetting it would leave that variant pointing at
+        // nothing, and the file is still here, so saying why is the whole job.
         for ws in self.docs.snapshot().wadspaces.iter().filter(|x| {
             x.exts.iter().any(|e| {
                 e.app == wad_model::AppId::Dolphin && (e.id == disc.id || e.name.as_deref() == Some(&disc.name))
@@ -186,12 +188,20 @@ impl MachineDiscs {
                 same.then(|| format!("ext:{}:{}", e.app, e.id))
             });
             if let Some(variant) = variant {
-                let _ = self.docs.apply(Op::RemoveVariant { ws: ws.id.clone(), variant });
+                self.docs.apply(Op::RemoveVariant { ws: ws.id.clone(), variant }).map_err(|e| {
+                    ApiError::conflict(format!("{} still has it: {}", ws.name, e.message))
+                })?;
             }
         }
-        self.docs.apply(Op::ForgetDisc { id: id.to_string() })?;
+        // Its file goes first (with a part a copy left): a library entry
+        // forgotten before its file would leave the file for nothing.
         let dir = self.dir.join(id);
-        std::fs::remove_dir_all(&dir).map_err(|e| ApiError::internal(format!("{}: {e}", dir.display())))?;
+        match std::fs::remove_dir_all(&dir) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(ApiError::internal(format!("{}: {e}", dir.display()))),
+        }
+        self.docs.apply(Op::ForgetDisc { id: id.to_string() })?;
         self.bus.publish(Event::Notice {
             level: Level::Ok,
             title: format!("{} removed", disc.name),

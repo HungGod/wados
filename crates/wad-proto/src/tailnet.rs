@@ -232,6 +232,14 @@ pub struct RemoteHello {
 pub struct RemoteNotice {
     /// When it was told (ms since the epoch).
     pub at: i64,
+    /// The machine it was told on, when it's a copy of another's (my
+    /// machines relay their notices to one another: an agent asking a
+    /// question reaches every screen).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub machine: Option<String>,
+    /// A hash of what it says: the same notice told twice is shown once.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub level: crate::Level,
     pub title: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]

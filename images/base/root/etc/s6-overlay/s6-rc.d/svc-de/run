@@ -105,4 +105,24 @@ if answers "${SOCKET}"; then
     echo "[svc-de] the desktop window was closed; stopping the wadspace"
     exec /run/s6/basedir/bin/halt
 fi
+# The display went away, and came back, and went again: something is
+# restarting under this desktop faster than it can start (the machine's
+# labwc crash-looping, a display flapping). A wadspace that keeps starting
+# and stopping is no use to anyone, and the person sees only a launch that
+# hangs: stop it, so wadd says what happened instead of waiting.
+STARTS_FILE="/run/wadspaces-extra/display-gone"
+now="$(date +%s)"
+gone=0
+if [[ -f "${STARTS_FILE}" ]]; then
+    read -r last _ < "${STARTS_FILE}" 2> /dev/null || true
+    [[ "${last:-}" =~ ^[0-9]+$ ]] && (( now - last < 60 )) && gone=1
+fi
+if (( gone )); then
+    echo "[svc-de] the display keeps going away; stopping the wadspace"
+    rm -f "${STARTS_FILE}"
+    exec /run/s6/basedir/bin/halt
+fi
+echo "${now}" > "${STARTS_FILE}" 2> /dev/null || true
 echo "[svc-de] the display went away; waiting for it again"
+# Not straight back into the wait: a display that's flapping would spin here.
+sleep 2

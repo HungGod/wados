@@ -151,6 +151,10 @@ impl Sample {
             checked_at: Some(now - 2 * HOUR),
             progress: None,
             job: None,
+            // The demo's: GitHub's, with a local build beside it to show.
+            source: wad_proto::UpdateSource::Github,
+            local: Some(version(NEXT)),
+            pushed: None,
         };
         let bases = Bases {
             bases: vec![
@@ -575,6 +579,15 @@ impl Bluetooth for Sample {
 impl Updates for Sample {
     async fn status(&self) -> Result<proto::Updates, ApiError> {
         Ok(self.0.st.lock().unwrap().updates.clone())
+    }
+
+    async fn source(&self, source: proto::UpdateSource) -> Result<proto::Updates, ApiError> {
+        let me = &self.0;
+        me.change_updates(|u| {
+            u.source = source;
+            u.available = None;
+        });
+        Ok(me.st.lock().unwrap().updates.clone())
     }
 
     async fn check(&self) -> Result<JobInfo, ApiError> {

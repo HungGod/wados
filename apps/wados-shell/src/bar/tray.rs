@@ -300,6 +300,10 @@ impl Tray {
             if matches!(c, Change::Network | Change::Bluetooth) {
                 m.radios_changed();
             }
+            // Focusing: the bell's countdown, and the bar's Focus button.
+            if matches!(c, Change::Focus) {
+                m.refill_open("notifications");
+            }
         });
         me.jobs_changed();
         me.streams_changed();
@@ -736,6 +740,18 @@ impl Tray {
         h.append(&Icon::new("bell", 16));
         h.append(&label("Notifications", &["wb-h3"]));
         header.append(&h);
+        // Focusing: how long is left, and what it is (the bar a full-screen
+        // wadspace used to have is gone; this and the covers say it now).
+        if let Some(f) = self.shell.store.focus() {
+            let left = f.until - glib::real_time() / 1000;
+            let timer = gtk::Button::builder()
+                .label(format!("Focus · {} left", super::super::overlays::focus::left_words(left)))
+                .css_classes(["wb-ghost"])
+                .build();
+            let s = self.shell.clone();
+            timer.connect_clicked(move |_| s.focus_ui(|f| f.held()));
+            header.append(&timer);
+        }
         let empty = self.shared.notices.borrow().is_empty();
         if !empty {
             let clear = gtk::Button::builder().label("Clear").css_classes(["wb-ghost"]).build();

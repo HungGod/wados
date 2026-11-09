@@ -111,7 +111,7 @@ pub static APPS: [(AppId, Recipe); 13] = [
 
 /// The command line's tools: each a feature script (its package is its id).
 /// What each script installs on Fedora 44 is noted beside it.
-pub static TOOLS: [(&str, Recipe); 10] = [
+pub static TOOLS: [(&str, Recipe); 11] = [
     // dnf: gcc gcc-c++ make cmake ninja-build gdb pkgconf-pkg-config clang-tools-extra (clang-format)
     ("cpp", feature("cpp", &[], "cmake --version")),
     // dnf: python3 python3-pip python3-devel (venv is python3's own)
@@ -140,12 +140,17 @@ pub static TOOLS: [(&str, Recipe); 10] = [
             github: false,
         }),
     ),
+    // The nested container tools: podman, buildah and skopeo, rootless with
+    // vfs, so a wadspace builds and pushes images (the WadOS one the host
+    // image). Its unit gets what nested containers need (container_engine_t,
+    // an unshared /proc, /dev/fuse): wad-gen's `units::nested`.
+    ("podman", feature("podman", &[], "podman --version && buildah --version && skopeo --version")),
     ("hplip", Recipe::Todo("Fedora's hplip and cups-client (a feature)")),
 ];
 
 /// Features in the order they stack: what others need first, the big,
 /// common ones low. (Each one once: a test checks.)
-pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "claude-code", "ori", "dolphin", "steam", "vscode"];
+pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "claude-code", "ori", "podman", "dolphin", "steam", "vscode"];
 
 /// An app's recipe (every app has one, if only a `Todo`).
 pub fn app(id: AppId) -> &'static Recipe {

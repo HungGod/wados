@@ -20,10 +20,42 @@ if [ "$(cat /run/wadspaces-extra/display 2> /dev/null)" = stream ] && [ -n "${WA
   wadspaces-clipboard --host "${WADSPACES_HOST_WAYLAND}" > /dev/null &
 fi
 
-# labwc is one window on the display; if that window is closed it would carry
-# on with no screen at all. Exit instead, and let svc-de decide what next.
+# labwc is one window on the display: with no display under it, it would
+# carry on with no screen at all, so it exits and svc-de decides what next.
+# What says the display has gone is the **socket** (the machine's labwc, or a
+# stream's), not the outputs: a host restart or a display swap empties
+# wlr-randr for a moment and labwc fills its window again by itself, so
+# exiting on that alone made a wadspace restart in a loop (a Steam sign-in
+# hung on it). Only a long emptiness (30 reads, ~60 s) counts, as a last
+# resort against a window nobody could ever see.
+host_socket() {
+  # The socket svc-de gave labwc (WADSPACES_HOST_WAYLAND), else the first socket there is.
+  if [ -n "${WADSPACES_HOST_WAYLAND:-}" ] && [ -S "${WADSPACES_HOST_WAYLAND}" ]; then
+    echo "${WADSPACES_HOST_WAYLAND}"
+    return 0
+  fi
+  for s in /run/wadspaces-display/wayland-* /run/wadspaces-stream/wayland-*; do
+    [ -S "$s" ] && { echo "$s"; return 0; }
+  done
+  return 1
+}
 (
+  empty=0
   while sleep 2; do
-    [ -n "$(wlr-randr 2> /dev/null)" ] || { labwc --exit; break; }
+    if [ -n "$(wlr-randr 2> /dev/null)" ]; then
+      empty=0
+      continue
+    fi
+    empty=$((empty + 1))
+    if ! host_socket > /dev/null; then
+      # No socket under it: svc-de waits for the display to come back.
+      labwc --exit
+      break
+    fi
+    if [ "${empty}" -ge 30 ]; then
+      echo "its display has had no outputs for a minute" >&2
+      labwc --exit
+      break
+    fi
   done
 ) > /dev/null 2>&1 &

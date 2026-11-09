@@ -10,11 +10,16 @@ Phase 10. Steam is built, but hasn't met a real account or client (see "Not yet"
   another wadspace on the screen or in a window, moving or stopping the focused one, streaming it, and server mode.
   Streams of other wadspaces go on, since they aren't on this screen.
 - **It's kept in `/run`,** so it outlasts wadd restarting and not the machine: restarting is the only way out early.
-- **The shell** has the setup and countdown dialogs, "Focus · MM:SS left" in place of the bar's buttons, a cover on
-  every other display, and drops Super+Tab, Alt+Space and Ctrl+Alt+Down in one place (`main.rs`'s `leaves`).
+- **The shell** has the setup and countdown dialogs, "Focus · MM:SS left" in the
+  notifications flyout's header, a cover on every other display, and drops
+  Super+Tab, Alt+Space and Ctrl+Alt+Down in one place (`main.rs`'s `leaves`).
 
 ## Displays
 
+- **Opened on the screen, a wadspace spans every display.** The shell tells wadd how many displays it has
+  (`PUT /v1/screen/session`'s `monitors`, again when they change); wadd writes it as the wadspace's `screens`
+  (`WLR_WL_OUTPUTS`), so its desktop draws one window per display; `Placer` full-screens each window on a display
+  of its own, the primary first (or the one it was opened on). One clicked "In a window" is one window.
 - **Open on N, Show on N, Full screen on N and To N** go through `Shell::open_on`. `Placer` remembers a wadspace's
   display when it isn't the primary.
 - **Unplugged:** what was on that display goes to the background and keeps running, with the spike's toasts. A focus

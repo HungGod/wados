@@ -1,7 +1,7 @@
 //! Focus (`shell/focus`): its setup dialog, the countdown dialog, and a
 //! cover on every other display. wadd holds the rule (`apps/wadd/src/focus.rs`);
 //! here are the keys (main.rs's `handle` drops the ones that would leave),
-//! the bar (reveal.rs) and these.
+//! the bell's countdown and these.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
@@ -119,8 +119,7 @@ impl FocusUi {
     }
 
     /// Every display but the primary.
-    fn cover(&self, f: &Focus) {
-        let primary = self.shell.primary.connector();
+    fn cover(&self, f: &Focus) {        let primary = self.shell.primary.connector();
         let mut covers = self.covers.borrow_mut();
         for m in crate::monitors::monitors() {
             if m.connector() == primary {
@@ -201,7 +200,7 @@ impl FocusUi {
         let row = gtk::Box::builder().spacing(8).halign(gtk::Align::Center).build();
         let step = |icon: &'static str, tip: &str, by: i32| {
             let b =
-                gtk::Button::builder().child(&Icon::new(icon, 15)).css_classes(["ov-fs-b"]).tooltip_text(tip).build();
+                gtk::Button::builder().child(&Icon::new(icon, 15)).css_classes(["ov-step-b"]).tooltip_text(tip).build();
             let (minutes, paint) = (minutes.clone(), paint.clone());
             b.connect_clicked(move |_| {
                 minutes.set(stepped(minutes.get(), by));

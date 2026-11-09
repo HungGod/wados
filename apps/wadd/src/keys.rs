@@ -18,6 +18,8 @@ use std::path::{Path, PathBuf};
 use wad_model::{Secret, SecretKind};
 use wad_proto::signin::WebKey;
 
+/// Cheap to clone (a folder and its owner), so the loop can prune off-thread.
+#[derive(Clone)]
 pub struct MachineKeys {
     dir: PathBuf,
     /// Who owns a new folder (wadd as root: abc's, 1000).
@@ -33,6 +35,21 @@ impl MachineKeys {
 
     pub fn at(dir: &Path, uid: Option<u32>) -> Self {
         Self { dir: dir.to_path_buf(), uid }
+    }
+
+    /// Every key id the library keeps, and every one a wadspace still names
+    /// (its slots and its groups): what a folder must be cleared with, so a
+    /// key removed from the library but still used by a wadspace (or in the
+    /// Trash, which can come back) keeps its cookies.
+    pub fn in_use(lib: &wad_model::edit::Library) -> Vec<String> {
+        let mut ids: Vec<String> = lib.keys.iter().map(|k| k.id.clone()).collect();
+        for x in &lib.wadspaces {
+            for k in x.secrets.by_slot.values() {
+                ids.push(k.id.clone());
+            }
+            ids.extend(x.secrets.groups.iter().map(|g| g.key.id.clone()));
+        }
+        ids
     }
 
     /// The library's web keys, each with its folder (made if it's new). A
@@ -60,8 +77,9 @@ impl MachineKeys {
     }
 
     /// Removes the folders of keys nothing is (nor names): their cookies are
-    /// signed in as nothing, and nothing would ever clear them.
-    fn prune(&self, in_use: &[String]) {
+    /// signed in as nothing, and nothing would ever clear them. Also run from
+    /// wadd's own loop, so a machine whose browser never asks is cleared too.
+    pub fn prune(&self, in_use: &[String]) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else { return };
         for e in entries.flatten() {
             let Ok(id) = e.file_name().into_string() else { continue };
@@ -161,5 +179,31 @@ mod tests {
         keys.web(&gone, &in_use(&gone));
         assert!(!d.path().join("keys/work").exists());
         assert_eq!(std::fs::read(gh.join("cookies.sqlite")).unwrap(), b"kept");
+    }
+
+    #[test]
+    fn a_trashed_wadspace_still_names_its_keys() {
+        // A wadspace in the Trash can come back, so its keys' folders stay
+        // while it's there (wadd lists it like any other document).
+        let d = tempfile::tempdir().unwrap();
+        let keys = MachineKeys::at(&d.path().join("keys"), None);
+        let all = [key("gh", SecretKind::Web, &["github.com"])];
+        keys.web(&all, &in_use(&all));
+        std::fs::write(d.path().join("keys/gh/cookies.sqlite"), b"kept").unwrap();
+        // "gh" is the library's; "old" only a trashed wadspace's.
+        std::fs::create_dir_all(d.path().join("keys/old")).unwrap();
+        let mut lib = wad_model::edit::Library::default();
+        lib.keys = all.to_vec();
+        let mut trashed = wad_model::ops::blank("club", "Club", "m", 0, 1);
+        trashed.deleted_at = Some(2);
+        trashed.secrets.by_slot.insert(
+            "app:wadbrowser".into(),
+            wad_model::types::KeyRef { id: "old".into(), name: "Old".into(), kind: SecretKind::Web },
+        );
+        lib.wadspaces = vec![trashed];
+        let named = MachineKeys::in_use(&lib);
+        keys.web(&all, &named);
+        assert!(d.path().join("keys/old").exists(), "a trashed wadspace names it");
+        assert!(d.path().join("keys/gh/cookies.sqlite").exists());
     }
 }

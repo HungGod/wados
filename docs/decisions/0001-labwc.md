@@ -71,9 +71,9 @@ an exclusive surface has them. Only the host's clients have layer-shell, so a wa
 
 ## What else the probes showed (no patch)
 
-- **Layering:** a full-screen window covers the TOP layer (the bar), and OVERLAY shows above it. So the
-  reveal bar, Super+Tab, Alt+Space, toasts and focus covers are OVERLAY surfaces; the bar and the launcher's
-  chrome are TOP.
+- **Layering:** a full-screen window covers the TOP layer (the bar), and OVERLAY shows above it. So
+  Super+Tab, Alt+Space, toasts and focus covers are OVERLAY surfaces; the bar and the launcher's chrome are
+  TOP.
 - **The bar's room (found in phase 3):** the reserve keeps 78 px from windows and the desktop, but only once
   it's mapped, and a layer surface is mapped by its first frame. GTK draws no frame for a window with nothing
   to paint, so an empty, transparent reserve could stay unmapped; then the desktop and the Builder started

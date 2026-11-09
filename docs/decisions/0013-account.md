@@ -70,7 +70,7 @@ answer is cached by the token's SHA-256 for 5 minutes). It then treats the calle
 - routes for my machines only (`Need::Machine`) never take a token;
 - with no token, or someone else's, the phone is any other device: it's asked about, as in 0005.
 
-A machine outside the account can still be added by name, as before.
+A machine outside the account is no longer added by name: the account lists them all, and a machine that trusts the phone tells it the others (`/v1/remote/peers`).
 
 ## Secret files
 

@@ -9,7 +9,7 @@
 //! out again a moment later (a burst of changes is one) and, if they're
 //! not as they were, `Shell::set_monitors` moves the primary's surfaces
 //! and tells everyone who builds something per display (machine.rs's
-//! wallpapers and layout, the other displays' bars, the reveal bars).
+//! wallpapers and layout, the other displays' bars).
 
 use std::cell::RefCell;
 use std::collections::HashSet;

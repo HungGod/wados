@@ -2,6 +2,11 @@
 //! wadspaces and Copy here; and [`TailnetPeers`], the tailnet, peers and
 //! remote API together as wadd's [`Net`] (the socket's routes in api_phase6.rs).
 //!
+//! **Notices go round.** Every notice this machine tells is posted to each of
+//! my online machines (`POST /v1/remote/notices`, [`Relay`]), so an agent
+//! asking a question is heard on every screen; one that came from another
+//! machine isn't passed on again (`Bus::adopt` keeps its id).
+//!
 //! **Which nodes are my machines** ([`Peers::round`], every `poll_s` and
 //! whenever tailscaled's state changes): from the tailnet's status, the
 //! nodes of this machine's login that are untagged and not shared in; each
@@ -41,7 +46,7 @@ use wad_model::edit::Op;
 use wad_model::{JobKind, PartState, Peer, PeerKind, Wadspace};
 use wad_proto::{
     Answer, ApiError, DeviceKind, ErrorCode, Event, JobInfo, MachineInfo, PeerInfo, RemoteHello, RemoteMachine,
-    StreamInfo, StreamRequest, StreamShare, Tailnet as View, TrustAnswer, TrustBook,
+    RemoteNotice, StreamInfo, StreamRequest, StreamShare, Tailnet as View, TrustAnswer, TrustBook,
 };
 
 use crate::api::AppState;
@@ -773,6 +778,48 @@ impl TailnetPeers {
             self.peers.push(a);
         }
         view
+    }
+}
+
+/// Notices told here, on to my other machines: each one posted to the online
+/// ones, in the background (a machine that's slow or asleep doesn't hold the
+/// shell up), with its origin so it's shown as this machine's.
+impl crate::events::Relay for Peers {
+    fn notice(&self, n: &RemoteNotice) {
+        let me = self.machine.clone();
+        // Who to tell, now: the online ones only.
+        let to: Vec<SocketAddr> = self
+            .st
+            .lock()
+            .unwrap()
+            .saved
+            .machines
+            .iter()
+            .filter(|m| m.online && m.id != me)
+            .filter_map(|m| m.addr(self.port))
+            .collect();
+        if to.is_empty() {
+            return;
+        }
+        let mut posted = n.clone();
+        // The machine it was told on: this one's name, as the others know it.
+        posted.machine = self.st.lock().unwrap().saved.machines.iter().find(|m| m.id == me).map(|m| m.name.clone());
+        let Ok(rt) = tokio::runtime::Handle::try_current() else { return };
+        for a in to {
+            let (client, body) = (self.client(), posted.clone());
+            rt.spawn(async move {
+                let url = format!("http://{a}/v1/remote/notices");
+                let sent = client
+                    .post(url)
+                    .timeout(std::time::Duration::from_secs(5))
+                    .json(&body)
+                    .send()
+                    .await;
+                if let Err(e) = sent {
+                    tracing::debug!("a notice didn't reach {a}: {e}");
+                }
+            });
+        }
     }
 }
 

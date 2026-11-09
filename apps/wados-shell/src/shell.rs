@@ -167,10 +167,15 @@ impl Shell {
         self.placer.set_primary(&primary.connector().map(|c| c.to_string()).unwrap_or_default());
         self.primary.0.set(Box::leak(Box::new(primary)));
         self.others.0.set(Box::leak(Box::new(others)));
+        // Its windows go one per display (a wadspace on the screen spans them all).
+        self.placer.set_displays(self.displays().into_iter().map(|d| d.connector).collect());
         let subs = self.monitors_subs.borrow().clone();
         for f in subs {
             f();
         }
+        // wadd hears how many displays there are: a wadspace opened on the
+        // screen draws one window per display.
+        self.link.register_screen();
         let (gone, came) = crate::monitors::changes(&was, &self.displays());
         for d in gone {
             let mut spaces = self.placer.take_output(&d.connector);
@@ -295,6 +300,23 @@ impl Shell {
             Some(SessionDisplay::Background) | None => self.open(id, SessionDisplay::Screen),
             Some(_) => self.placer.raise(id),
         }
+    }
+
+    /// The home page (WadOS: the launcher and the desktop). A full-screen
+    /// wadspace goes to the background (it keeps running) and nothing of it
+    /// shows, so the page is really there; then the launcher comes up.
+    pub fn go_home(self: &Rc<Self>) {
+        let on_screen: Vec<String> = self
+            .store
+            .running()
+            .into_iter()
+            .map(|w| w.id)
+            .filter(|id| self.store.display(id) == Some(SessionDisplay::Screen))
+            .collect();
+        for id in &on_screen {
+            self.open(id, SessionDisplay::Background);
+        }
+        self.go(Page::Launcher);
     }
 
     pub fn stop(&self, id: &str) {

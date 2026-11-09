@@ -123,7 +123,7 @@ Whether a wadspace plays sound through it on the machine is the VM's check.
 - Kernel arguments `usbcore.autosuspend=-1`; GRUB sets the screen's own mode (`gfxpayload=auto`) through
   bootupd's static config; `bootc install` defaults to XFS; NetworkManager's Wi-Fi power save is off (mwifiex).
 - **Updates are wadd's (phase 8):** the base enables `bootc-fetch-apply-updates.timer`, which stages *and reboots*;
-  this image masks it. wadd checks every 15 minutes and stages what it finds; the person restarts into it
+  this image masks it. wadd checks every 6 hours (and the base images once a day) and stages what it finds; the person restarts into it
   (`apps/wadd/src/updates.rs`). The image's version is `org.opencontainers.image.version` (`host/build.sh`).
 - `CtrlAltDelBurstAction=none`, `ctrl-alt-del.target` masked (Ctrl+Alt+Delete is the shell's).
 - sshd is the base's, enabled, for keys only (`PermitRootLogin no`, no passwords).

@@ -70,7 +70,7 @@ use tokio::task::JoinHandle;
 use wad_gen::units::{self, container_name, display_name, service};
 use wad_gen::{Machine, Mounts, Run, extras};
 use wad_model::{PartState, Phase, Project, ProjectKind, ProjectSource, RunState, SessionDisplay, Wadspace, Wallpaper};
-use wad_proto::{ApiError, ErrorCode, Event, Level, WadspaceRun};
+use wad_proto::{ApiError, ErrorCode, Event, Level, NoticeAction, WadspaceRun};
 
 use crate::backend::{Backend, RUNNING, Res};
 use crate::builds::Builds;
@@ -291,11 +291,30 @@ pub struct Runs {
     /// What Open with mounted on each one's Desktop the run before: the
     /// empty files its mounts stood on, cleared from its home the next.
     stubs: Mutex<HashMap<String, Vec<String>>>,
+    /// When each was seen starting and stopping by itself (three inside a
+    /// minute: its desktop can't stay up, so it stops rather than loop).
+    crashes: Mutex<HashMap<String, Vec<std::time::Instant>>>,
     me: Weak<Self>,
 }
 
 fn busy(p: Phase) -> bool {
     matches!(p, Phase::Starting | Phase::Waiting | Phase::Stopping)
+}
+
+/// A container's stops counted: true when it's its third inside a minute
+/// (and the count starts again). The desktop under a wadspace can go away and
+/// come back once without harm; three times in a minute is a loop.
+fn count_stop(all: &mut HashMap<String, Vec<std::time::Instant>>, container: &str, now: std::time::Instant) -> bool {
+    const WINDOW: Duration = Duration::from_secs(60);
+    const THEMOST: usize = 3;
+    let seen = all.entry(container.to_string()).or_default();
+    seen.retain(|t| now.duration_since(*t) < WINDOW);
+    seen.push(now);
+    if seen.len() < THEMOST {
+        return false;
+    }
+    all.remove(container);
+    true
 }
 
 fn conflict(e: impl Into<String>) -> ApiError {
@@ -332,6 +351,7 @@ impl Runs {
             secure: Mutex::default(),
             opened: Mutex::default(),
             stubs: Mutex::default(),
+            crashes: Mutex::default(),
             me: me.clone(),
         })
     }
@@ -479,6 +499,8 @@ impl Runs {
                 "there's no screen to show it on: the shell hasn't said where its compositor is, and none was found",
             ));
         }
+        // Opened again by the person (or Try again): the last run's stops are no more.
+        self.crashes.lock().unwrap().remove(&container_name(id));
         self.start_up(id, display, image, None)
     }
 
@@ -707,21 +729,80 @@ impl Runs {
         let lock = self.lock_for(&id);
         let _held = lock.lock().await;
         if let Err(e) = self.bring_up_locked(&id, &image, stream.as_ref()).await {
-            tracing::warn!("{id}: it didn't open: {e}");
-            if let Some(p) = self.projects.get() {
-                if let Some(job) = self.state(&id).state.job {
-                    p.jobs().finish(&job, Err(e.clone()));
-                }
-                // Not running: its Taildrive mounts go.
-                if self.backend.container_status(&container_name(&id)).await.is_ok_and(|s| s != RUNNING) {
-                    p.release(&id).await;
-                }
-            }
-            self.update(&id, |s| {
-                s.state.phase = Phase::Error;
-                s.state.error = Some(e);
-            });
+            self.failed_open(&id, e).await;
         }
+    }
+
+    /// Its open didn't happen: told, and the things that were going for it are finished.
+    async fn failed_open(&self, id: &str, e: String) {
+        tracing::warn!("{id}: it didn't open: {e}");
+        if let Some(p) = self.projects.get() {
+            if let Some(job) = self.state(id).state.job {
+                p.jobs().finish(&job, Err(e.clone()));
+            }
+            // Not running: its Taildrive mounts go.
+            if self.backend.container_status(&container_name(id)).await.is_ok_and(|s| s != RUNNING) {
+                p.release(id).await;
+            }
+        }
+        self.update(id, |s| {
+            s.state.phase = Phase::Error;
+            s.state.error = Some(e);
+        });
+    }
+
+    /// A container seen starting and then stopping by itself: three inside a
+    /// minute is a desktop that can't stay up (its labwc crash-looping, the
+    /// display under it flapping), and a person sees only a launch that hangs.
+    /// So it stops, in an error with what its container said last, and a
+    /// notice whose Try again opens it. False: it stopped once, and that's all.
+    async fn crashed(self: &Arc<Self>, id: &str) -> bool {
+        if !self.crash_seen(&container_name(id)) {
+            return false;
+        }
+        let why = self.last_words(&container_name(id)).await;
+        let title = ws_name(&self.docs, id);
+        let why = if why.is_empty() { "its desktop stopped three times in a minute".to_string() } else { why };
+        tracing::warn!("{id}: {why}");
+        // Its unit stopped and what it held let go: `stop`'s own doing, without
+        // its lock (the reconcile loop holds this wadspace's).
+        let _ = self.backend.stop(&service(id)).await;
+        self.screen.take(id);
+        self.stopped(id).await;
+        self.update(id, |s| {
+            s.state.phase = Phase::Error;
+            s.state.error = Some(why.clone());
+            s.display = None;
+        });
+        self.try_again(id, &title, &why);
+        true
+    }
+
+    /// One more stop of `container` counted: true when it's its third inside
+    /// a minute (and the count starts again).
+    fn crash_seen(&self, container: &str) -> bool {
+        count_stop(&mut self.crashes.lock().unwrap(), container, std::time::Instant::now())
+    }
+
+    /// What a container said last (its error lines, as they come).
+    async fn last_words(&self, container: &str) -> String {
+        let logs = self.backend.container_logs(container, 15).await.ok().flatten().unwrap_or_default();
+        let last: Vec<&str> = logs.lines().rev().take(3).collect();
+        last.into_iter().rev().collect::<Vec<_>>().join(" / ")
+    }
+
+    /// A wadspace that keeps stopping: a notice whose button opens it again
+    /// (the shell's `wadspace.open` verb), so the person isn't left guessing.
+    fn try_again(&self, id: &str, title: &str, why: &str) {
+        self.bus.publish(Event::Notice {
+            level: Level::Warn,
+            title: format!("{title} keeps stopping"),
+            undo: None,
+            body: Some(why.to_string()),
+            icon: Some("circle-alert".into()),
+            action: Some(NoticeAction::new("Try again", "wadspace.open", &[id])),
+            toast: true,
+        });
     }
 
     /// Its projects, here (and what it no longer has, gone): what its unit
@@ -768,6 +849,8 @@ impl Runs {
             let wallpaper = self.write_extras(&ws, &mounts, stream.is_some())?;
             self.make_key_folders(&ws)?;
             let mut machine = self.settings.machine.clone();
+            // One window per display, as the shell counts them (a stream is one).
+            machine.screens = if stream.is_some() { 1 } else { self.screen.monitors() };
             // On the screen: its screen folder (its socket, sound). Streamed, its sidecar's display.
             if stream.is_none() {
                 let screen = self.screen.clone();
@@ -887,12 +970,13 @@ impl Runs {
                 Err(e) => tracing::debug!("{container}: {e}"),
             }
             if self.backend.container_status(container).await.is_ok_and(|s| s != RUNNING) {
-                let logs = self.backend.container_logs(container, 15).await.ok().flatten().unwrap_or_default();
-                let last: Vec<&str> = logs.lines().rev().take(3).collect();
-                let why = last.into_iter().rev().collect::<Vec<_>>().join(" / ");
+                let why = self.last_words(container).await;
+                // Seen again and again (s6 starting it, its desktop dying): not one stop.
+                let again = self.crash_seen(container);
                 return Err(format!(
-                    "{title} stopped before its desktop was up{}",
-                    if why.is_empty() { String::new() } else { format!(": {why}") }
+                    "{title} stopped before its desktop was up{}{}",
+                    if why.is_empty() { String::new() } else { format!(": {why}") },
+                    if again { " (three times in a minute)" } else { "" }
                 ));
             }
             if tokio::time::Instant::now() >= deadline {
@@ -1032,10 +1116,11 @@ impl Runs {
         let keys = self.docs.snapshot().keys;
         let mut files: Vec<(String, Option<String>)> =
             extras::files(ws, &keys, mounts).into_iter().map(|(n, t)| (n.to_string(), t)).collect();
-        // Where its desktop draws (svc-de), and on how many screens (a stream is one).
+        // Where its desktop draws (svc-de), and on how many displays (a stream is one).
+        // The shell says how many there are; until it does, one.
         let (display, screens) = match streamed {
             true => ("stream", 1),
-            false => ("screen", self.settings.machine.screens.max(1)),
+            false => ("screen", self.screen.monitors()),
         };
         // Its agents' way to the desktop: the folder its socket's bound in.
         if ws.agents {
@@ -1235,7 +1320,7 @@ impl Runs {
         let dir = PathBuf::from(extras::dir(&self.settings.state_dir.to_string_lossy(), id));
         let (display, screens) = match streamed {
             true => ("stream", 1),
-            false => ("screen", self.settings.machine.screens.max(1)),
+            false => ("screen", self.screen.monitors()),
         };
         put(&dir.join(units::DISPLAY_FILE), format!("{display}\n").as_bytes())?;
         put(&dir.join("screens"), format!("{screens}\n").as_bytes())
@@ -1341,6 +1426,7 @@ impl Runs {
             }
             self.screen.forget(id);
             self.states.lock().unwrap().remove(id);
+            self.crashes.lock().unwrap().remove(&container_name(id));
             self.keep_shown(id, None);
             self.bus.forget(&format!("run:{id}"));
         }
@@ -1350,7 +1436,7 @@ impl Runs {
 
     /// What podman says now, against what wadd thinks: containers that
     /// stopped by themselves, and ones running that wadd didn't start.
-    pub async fn reconcile(&self) {
+    pub async fn reconcile(self: &Arc<Self>) {
         if !self.backend.available().await {
             return;
         }
@@ -1402,6 +1488,8 @@ impl Runs {
                     s.display = None;
                 });
                 self.stopped(&id).await;
+                // A window closed is one that stopped: three in a minute isn't.
+                self.crashed(&id).await;
             }
         }
     }
@@ -1456,8 +1544,30 @@ fn assets_dirs() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::os::unix::fs::symlink;
     use std::path::Path;
+
+    use super::count_stop;
+
+    #[test]
+    fn three_stops_inside_a_minute_are_a_loop_and_slower_ones_are_not() {
+        use std::time::{Duration, Instant};
+        let mut all = HashMap::new();
+        let t = Instant::now();
+        assert!(!count_stop(&mut all, "wad-x", t));
+        assert!(!count_stop(&mut all, "wad-x", t + Duration::from_secs(5)));
+        assert!(count_stop(&mut all, "wad-x", t + Duration::from_secs(10)), "three inside a minute");
+        // It starts again after the third.
+        assert!(!count_stop(&mut all, "wad-x", t + Duration::from_secs(11)));
+        // Once a minute is a window closed, not a loop.
+        let mut slow = HashMap::new();
+        assert!(!count_stop(&mut slow, "wad-y", t));
+        assert!(!count_stop(&mut slow, "wad-y", t + Duration::from_secs(61)));
+        assert!(!count_stop(&mut slow, "wad-y", t + Duration::from_secs(122)));
+        // Each container is its own count.
+        assert!(!count_stop(&mut slow, "wad-z", t + Duration::from_secs(123)));
+    }
 
     /// A render node on a PCI virtio GPU, as Linux 7.2's sysfs has it:
     /// renderD128/device is the PCI device (virtio-pci), virtio1 under it is virtio_gpu.

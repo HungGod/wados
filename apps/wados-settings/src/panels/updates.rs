@@ -34,7 +34,7 @@ use wad_gtk::Icon;
 use wad_gtk::form;
 use wad_gtk::kit::{self, Tone, Variant};
 use wad_model::{Job, JobKind, JobStatus, PartState};
-use wad_proto::{Bases, Event, JobInfo, Updates, Version};
+use wad_proto::{Bases, Event, JobInfo, UpdateSource, Updates, Version};
 use wad_wadd_client::{Failure, Incoming};
 
 use crate::link::Link;
@@ -288,6 +288,7 @@ button.upd-link:hover { color: var(--fg); }
 .upd-prev > wad-icon { color: var(--muted); }
 .upd-tag { font-size: 11px; padding: 2px 8px; border-radius: 99px; background-color: var(--warn-soft); color: var(--warn); }
 .upd-bases { border: 1px solid var(--line); border-radius: 12px; }
+.upd-sources { margin-top: 2px; }
 .upd-base { padding: 10px 14px; background-color: var(--surface); }
 .upd-base + .upd-base { border-top: 1px solid var(--line); }
 .upd-missing { color: var(--warn); }
@@ -590,6 +591,10 @@ impl UpdatesPage {
         };
         let check = (ph == Phase::Current).then(|| self.check_button());
         c.append(&head("monitor-cog", &title, &format!("Fedora 44 · bootc · Checked {checked}"), check.as_ref()));
+        // Where a newer one is looked for: GitHub's CI builds, this
+        // machine's own (the WadOS wadspace builds them), or the ones that
+        // wadspace pushed to GitHub's registry.
+        c.append(&self.source_row(u));
         if ph != Phase::Downloading {
             self.seen.set(None);
         }
@@ -778,6 +783,58 @@ impl UpdatesPage {
         c
     }
 
+    /// "Where updates come from": the three sources, the chosen one lit.
+    fn source_row(self: &UpdatesPage, u: &Updates) -> gtk::Box {
+        let row = gtk::Box::builder().spacing(6).css_classes(["upd-sources"]).build();
+        let what = [
+            (UpdateSource::Github, "GitHub", "The builds CI makes (ghcr.io/hunggod/wados-host)"),
+            (UpdateSource::Local, "This machine", "What the WadOS wadspace builds here (host/build.sh image)"),
+            (
+                UpdateSource::Pushed,
+                "Pushed to GitHub",
+                "What the WadOS wadspace pushed to ghcr.io/hunggod/wados-host",
+            ),
+        ];
+        for (source, name, tip) in what {
+            let b = kit::button(
+                name,
+                if u.source == source { Variant::Primary } else { Variant::Quiet },
+                None,
+                true,
+            );
+            b.set_tooltip_text(Some(tip));
+            b.set_widget_name(&format!("update-source-{}", match source {
+                UpdateSource::Github => "github",
+                UpdateSource::Local => "local",
+                UpdateSource::Pushed => "pushed",
+            }));
+            if u.source != source {
+                self.act(&b, "source", move |w| async move { w.update_source(source).await });
+            }
+            row.append(&b);
+        }
+        // What the other sources have, when it's known (one's own build is
+        // known without a look: it's podman's, here).
+        let mut note = vec![];
+        if u.source != UpdateSource::Local
+            && let Some(l) = &u.local
+        {
+            note.push(format!("This machine has {}", l.version));
+        }
+        if u.source != UpdateSource::Pushed
+            && let Some(p) = &u.pushed
+        {
+            note.push(format!("Pushed: {}", p.version));
+        }
+        if u.source == UpdateSource::Local && u.local.is_none() {
+            note.push("Nothing built here yet: build it in the WadOS wadspace".into());
+        }
+        if !note.is_empty() {
+            row.append(&small(&note.join(" · ")));
+        }
+        row
+    }
+
     fn seconds_left(&self, done: u64, total: u64) -> u64 {
         let now = now_ms();
         let rate = match self.seen.get() {
@@ -849,7 +906,7 @@ impl UpdatesPage {
         let c = card("update-bases");
         let now = now_ms();
         let pull = st.pull();
-        let mut sub = "What every wadspace is built on. Refreshes every 15 minutes".to_string();
+        let mut sub = "What every wadspace is built on. Refreshes once a day".to_string();
         if let (Some(at), None) = (b.next_refresh_at, pull) {
             sub.push_str(&format!(", next {}", until(now, at)));
         }

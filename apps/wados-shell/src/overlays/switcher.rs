@@ -1,8 +1,11 @@
 //! Super+Tab (`shell/switcher/Switcher.svelte`): the running wadspaces, and
 //! only them (never the machine's own apps), the one used most lately
-//! first. Held, each Tab moves on one (Shift+Tab back); letting go of Super
-//! brings the one picked up (full screen, or its window to the front). Esc
-//! leaves things as they were.
+//! first, and last the home page itself (WadOS: the launcher and the
+//! desktop), so a screen full of wadspaces can always come back to it.
+//! Held, each Tab moves on one (Shift+Tab back); letting go of Super
+//! brings the one picked up (full screen, or its window to the front), or
+//! for the home page sends the full-screen wadspaces to the background and
+//! goes there. Esc leaves things as they were.
 //!
 //! labwc runs `wadsctl switcher next|prev` for Super+Tab and Super+Shift+Tab
 //! (host/etc/xdg/labwc/rc.xml). The switcher takes the keyboard while it's
@@ -19,6 +22,12 @@ use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
 use crate::shell::Shell;
 use crate::surface::{self, Anchor, Spec};
 
+/// The home page in the switcher's list: not a wadspace's id (those never start with one).
+pub const HOME: &str = "@home";
+
+/// WadOS's mark, on the home page's tile.
+static MARK: &[u8] = include_bytes!("../../../../assets/brand/wadspaces-icon-dark-transparent.svg");
+
 /// Which running wadspaces were used most lately (brought up, in front).
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Mru {
@@ -33,13 +42,17 @@ impl Mru {
     }
 
     /// The running ones (with when each was last launched), most lately used
-    /// first; those not used this session after them, the latest launched first.
+    /// first; those not used this session after them, the latest launched
+    /// first. The home page is last, and alone when nothing runs: Super+Shift+Tab
+    /// from the first wadspace goes there at once, and Tab goes round to it.
     pub fn list(&self, running: &[(String, i64)]) -> Vec<String> {
         let mut r: Vec<&(String, i64)> = running.iter().collect();
         r.sort_by_key(|(id, launched)| {
             (self.order.iter().position(|x| x == id).unwrap_or(usize::MAX), std::cmp::Reverse(*launched))
         });
-        r.into_iter().map(|(id, _)| id.clone()).collect()
+        let mut out: Vec<String> = r.into_iter().map(|(id, _)| id.clone()).collect();
+        out.push(HOME.to_string());
+        out
     }
 
     /// Stopped ones are forgotten.
@@ -213,16 +226,21 @@ impl Switcher {
         self.state()
     }
 
-    /// Brings the one picked up.
+    /// The one picked, brought up. The home page sends the full-screen
+    /// wadspaces to the background (they keep running) and goes there.
     pub fn commit(&self) {
         let Some(p) = self.pick.borrow_mut().take() else { return };
         self.win.set_visible(false);
         if let Some(id) = p.picked() {
-            self.mru.borrow_mut().touch(id);
             if let Some(f) = self.on_pick.borrow().as_ref() {
                 f(id);
             }
-            self.shell.show(id);
+            if id == HOME {
+                self.shell.go_home();
+            } else {
+                self.mru.borrow_mut().touch(id);
+                self.shell.show(id);
+            }
         }
     }
 
@@ -239,7 +257,6 @@ impl Switcher {
         }
         let Some(p) = self.pick.borrow().clone() else { return };
         for (i, id) in p.ids.iter().enumerate() {
-            let Some(ws) = self.shell.store.wadspace(id) else { continue };
             let col = gtk::Box::builder()
                 .orientation(gtk::Orientation::Vertical)
                 .spacing(8)
@@ -249,17 +266,37 @@ impl Switcher {
                 col.add_css_class("ov-on");
             }
             col.set_size_request(132, -1);
-            let tile = wad_gtk::WadspaceTile::new(1.0, false);
-            tile.set(&ws, &self.shell.store.tile_state(id));
-            col.append(&tile.root);
-            col.append(
-                &gtk::Label::builder()
-                    .label(&ws.name)
-                    .css_classes(["ov-sw-name"])
-                    .ellipsize(gtk::pango::EllipsizeMode::End)
-                    .max_width_chars(14)
-                    .build(),
-            );
+            if id == HOME {
+                // The home page's own tile: the mark on glass, and its name.
+                let tile = gtk::Box::builder()
+                    .css_classes(["ov-sw-home"])
+                    .halign(gtk::Align::Center)
+                    .valign(gtk::Align::Center)
+                    .build();
+                tile.append(&wad_gtk::Svg::new(MARK, 44, 44));
+                col.append(&tile);
+                col.append(
+                    &gtk::Label::builder()
+                        .label("WadOS")
+                        .css_classes(["ov-sw-name"])
+                        .ellipsize(gtk::pango::EllipsizeMode::End)
+                        .max_width_chars(14)
+                        .build(),
+                );
+            } else {
+                let Some(ws) = self.shell.store.wadspace(id) else { continue };
+                let tile = wad_gtk::WadspaceTile::new(1.0, false);
+                tile.set(&ws, &self.shell.store.tile_state(id));
+                col.append(&tile.root);
+                col.append(
+                    &gtk::Label::builder()
+                        .label(&ws.name)
+                        .css_classes(["ov-sw-name"])
+                        .ellipsize(gtk::pango::EllipsizeMode::End)
+                        .max_width_chars(14)
+                        .build(),
+                );
+            }
             // A click picks it too.
             let click = gtk::GestureClick::new();
             let (w, at) = (Rc::downgrade(self), i);
@@ -347,18 +384,41 @@ mod tests {
         let mut m = Mru::default();
         let r = running(&[("a", 10), ("b", 30), ("c", 20)]);
         // Nothing used yet this session: the latest launched first.
-        assert_eq!(m.list(&r), ["b", "c", "a"]);
+        assert_eq!(m.list(&r), ["b", "c", "a", HOME]);
         m.touch("a");
-        assert_eq!(m.list(&r), ["a", "b", "c"]);
+        assert_eq!(m.list(&r), ["a", "b", "c", HOME]);
         m.touch("c");
-        assert_eq!(m.list(&r), ["c", "a", "b"]);
+        assert_eq!(m.list(&r), ["c", "a", "b", HOME]);
         m.touch("a");
-        assert_eq!(m.list(&r), ["a", "c", "b"]);
+        assert_eq!(m.list(&r), ["a", "c", "b", HOME]);
         // Only what's running is listed; stopped ones are forgotten.
         let r = running(&[("b", 30), ("c", 20)]);
-        assert_eq!(m.list(&r), ["c", "b"]);
+        assert_eq!(m.list(&r), ["c", "b", HOME]);
         m.keep(&["b".into(), "c".into()]);
         assert_eq!(m.order, ["c"]);
+        // The home page is there whatever runs, even when nothing does.
+        assert_eq!(Mru::default().list(&[]), [HOME]);
+    }
+
+    #[test]
+    fn the_home_page_is_last_and_a_step_away() {
+        let m = Mru::default();
+        let r = running(&[("a", 0), ("b", 0)]);
+        // A quick Super+Tab still swaps the last two (the latest launched here: b)…
+        let mut p = Pick::open(m.list(&r), false).unwrap();
+        assert_eq!(p.picked(), Some("b"));
+        // Backwards from there: the first, then round to the home page (the end).
+        p.step(true);
+        assert_eq!(p.picked(), Some("a"));
+        p.step(true);
+        assert_eq!(p.picked(), Some(HOME));
+        // From the home page, forward goes round to the first.
+        p.step(false);
+        assert_eq!(p.picked(), Some("a"));
+        // Nothing running: the home page alone, so a screen full of nothing
+        // still comes back to the desktop.
+        let alone = Pick::open(Mru::default().list(&[]), false).unwrap();
+        assert_eq!(alone.picked(), Some(HOME));
     }
 
     #[test]

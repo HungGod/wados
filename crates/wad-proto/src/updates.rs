@@ -7,10 +7,11 @@
 //! | Route | What |
 //! |---|---|
 //! | `GET /v1/update` | [`Updates`] (also the `updates` event) |
-//! | `POST /v1/update/check` | looks for a newer image: an Update job ([`CHECK`]) → `JobInfo`; it ends with `available` set, or not |
+//! | `POST /v1/update/check` | looks for a newer image, from the chosen source: an Update job ([`CHECK`]) → `JobInfo`; it ends with `available` set, or not |
 //! | `POST /v1/update/apply` | downloads and stages `available`: an Update job ([`APPLY`]) → `JobInfo`; it ends `staged` |
 //! | `POST /v1/update/cancel` | drops what's staged (it stays on `booted`) → [`Updates`] |
 //! | `POST /v1/update/rollback` | stages `rollback` → [`Updates`] |
+//! | `POST /v1/update/source` ([`UpdateSource`]) | where a newer WadOS comes from → [`Updates`] |
 //! | `GET /v1/bases` | the base images here ([`Bases`]) |
 //! | `POST /v1/bases/refresh` | pulls them again now: a Pull job, a stage per base → `JobInfo` |
 //!
@@ -23,6 +24,22 @@ use serde::{Deserialize, Serialize};
 pub const CHECK: &[(&str, &str)] = &[("check", "Looking for an update")];
 /// An Update job's stages for applying: (id, label).
 pub const APPLY: &[(&str, &str)] = &[("download", "Downloading"), ("stage", "Getting it ready for the next start")];
+
+/// Where a newer WadOS comes from: GitHub's CI builds, the images this
+/// machine builds itself (the WadOS wadspace's `host/build.sh image`), or the
+/// ones that wadspace pushes to GitHub's registry.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateSource {
+    /// `ghcr.io/hunggod/wados-host` (`bootc upgrade`, when it checks).
+    #[default]
+    Github,
+    /// This machine's own `localhost/wados-host*` builds (`bootc switch`, the
+    /// local transport: nothing downloaded).
+    Local,
+    /// `ghcr.io/hunggod/wados-host:<tag>`: what the WadOS wadspace pushed.
+    Pushed,
+}
 
 /// `GET /v1/update` (the `updates` event): where WadOS's own image is.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -56,6 +73,17 @@ pub struct Updates {
     /// The Update job under way (a check or a download).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub job: Option<String>,
+    /// Where a newer one is looked for.
+    #[serde(default)]
+    pub source: UpdateSource,
+    /// The newest image this machine built (the WadOS wadspace's), whichever
+    /// source is chosen: what "This machine's builds" would offer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local: Option<Version>,
+    /// The newest this machine pushed to GitHub's registry (from the last
+    /// look there).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushed: Option<Version>,
 }
 
 /// One of WadOS's images (bootc's deployment).
@@ -78,7 +106,7 @@ pub struct UpdateProgress {
     pub total_bytes: u64,
 }
 
-/// `GET /v1/bases`: the base images wadspaces are built on, refreshed every 15 minutes.
+/// `GET /v1/bases`: the base images wadspaces are built on, refreshed once a day.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bases {
@@ -123,6 +151,15 @@ mod tests {
         .unwrap();
         assert_eq!(u.available.as_ref().map(|v| v.version.as_str()), Some("44.20261105.0"));
         assert_eq!(u.progress, Some(UpdateProgress { done_bytes: 5, total_bytes: 10 }));
+        // Its source, when the JSON doesn't say, is GitHub's.
+        assert_eq!(u.source, UpdateSource::Github);
+        let src: Updates = serde_json::from_value(json!({
+            "online": true, "checking": false,
+            "booted": {"version": "44.20261104.0", "image": "localhost/wados-host:latest"},
+            "source": "local",
+        }))
+        .unwrap();
+        assert_eq!(src.source, UpdateSource::Local);
         assert_eq!(serde_json::from_value::<Updates>(serde_json::to_value(&u).unwrap()).unwrap(), u);
         let b: Bases =
             serde_json::from_value(json!({"bases": [{"name": "Base", "image": "x", "missing": true}]})).unwrap();

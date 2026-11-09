@@ -25,6 +25,7 @@
 //! | `POST /v1/update/apply` | an Update job (download, stage) → [`JobInfo`] |
 //! | `POST /v1/update/cancel` | drops what's staged → [`proto::Updates`] |
 //! | `POST /v1/update/rollback` | stages the one before → [`proto::Updates`] |
+//! | `POST /v1/update/source` ([`proto::UpdateSource`]) | where a newer WadOS comes from → [`proto::Updates`] |
 //! | `GET /v1/bases` | [`Bases`] |
 //! | `POST /v1/bases/refresh` | a Pull job → [`JobInfo`] |
 //! | `GET /v1/storage` | [`proto::Storage`] |
@@ -86,6 +87,9 @@ pub trait Updates: Send + Sync + 'static {
     async fn cancel(&self) -> Result<proto::Updates, ApiError>;
     /// The one before, staged.
     async fn rollback(&self) -> Result<proto::Updates, ApiError>;
+    /// Where a newer WadOS comes from: GitHub's builds, this machine's own,
+    /// or the ones it pushed to GitHub's registry.
+    async fn source(&self, source: proto::UpdateSource) -> Result<proto::Updates, ApiError>;
     async fn bases(&self) -> Result<Bases, ApiError>;
     /// A Pull job, a stage per base.
     async fn refresh_bases(&self) -> Result<JobInfo, ApiError>;
@@ -179,6 +183,9 @@ impl Updates for NotYet {
     async fn rollback(&self) -> Result<proto::Updates, ApiError> {
         not_yet("Rolling back")
     }
+    async fn source(&self, _: proto::UpdateSource) -> Result<proto::Updates, ApiError> {
+        not_yet("Choosing where updates come from")
+    }
     async fn bases(&self) -> Result<Bases, ApiError> {
         not_yet("The base images")
     }
@@ -220,6 +227,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/v1/update/apply", post(update_apply))
         .route("/v1/update/cancel", post(update_cancel))
         .route("/v1/update/rollback", post(update_rollback))
+        .route("/v1/update/source", post(update_source))
         .route("/v1/bases", get(bases))
         .route("/v1/bases/refresh", post(bases_refresh))
         .route("/v1/storage", get(storage))
@@ -297,6 +305,10 @@ async fn update_check(State(app): App) -> Answer<JobInfo> {
 
 async fn update_apply(State(app): App) -> Answer<JobInfo> {
     Ok(Json(app.updates.apply().await?))
+}
+
+async fn update_source(State(app): App, Json(s): Json<proto::UpdateSource>) -> Answer<proto::Updates> {
+    Ok(Json(app.updates.source(s).await?))
 }
 
 async fn update_cancel(State(app): App) -> Answer<proto::Updates> {

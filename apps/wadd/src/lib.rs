@@ -243,7 +243,12 @@ impl Server {
         // The tailnet, my other machines and the remote API (the sample's instead, with it).
         let tailnet = parts.sample.is_none().then(|| {
             let person = person_of(screen.clone(), profile, d.projects_uid);
-            peers::TailnetPeers::new(&config, &machine, bus.clone(), jobs.clone(), docs.clone(), builds.clone(), person)
+            let t =
+                peers::TailnetPeers::new(&config, &machine, bus.clone(), jobs.clone(), docs.clone(), builds.clone(), person);
+            // A notice told here reaches my other machines' bells too (an
+            // agent asking a question on one is heard on every screen).
+            bus.relay_through(t.peers.clone());
+            t
         });
         let (net, accounts): (Arc<dyn api_phase6::Net>, Arc<dyn api_phase6::Accounts>) = match parts.sample {
             Some(step) => {
@@ -415,6 +420,9 @@ impl Server {
             docs.clone(),
             bus.clone(),
         );
+        // An allowed sandbox can be streamed to whoever accepted it (a phone
+        // that isn't at this machine's screen).
+        agents.attach_streams(streams.clone());
         let server = server::ServerMode::new(&server_dir, runs.clone(), focus.clone(), seat, bus.clone());
         let state = Arc::new(AppState {
             machine,
@@ -595,12 +603,26 @@ fn host_system(
 
 /// The base, the images built, and the containers, against what wadd
 /// thinks, every `every`: the present first (each wadspace's image and run).
+/// And, once a minute, the keys' folders nothing names any more (the browser
+/// asks for them too when it starts, but a machine whose browser never runs
+/// has to be cleared by someone).
 async fn watch_machine(app: Arc<AppState>, every: Duration) {
+    /// Longer than the keys' endpoint's own prune: a folder removed while
+    /// the browser has it open is a folder of cookies lost.
+    const KEYS_EVERY: Duration = Duration::from_secs(60);
     app.builds.refresh_base().await;
     app.builds.publish_all();
     app.runs.publish_all();
+    let mut keys_at = std::time::Instant::now();
     loop {
         app.runs.reconcile().await;
+        if keys_at.elapsed() >= KEYS_EVERY {
+            keys_at = std::time::Instant::now();
+            let lib = app.docs.snapshot();
+            let in_use = crate::keys::MachineKeys::in_use(&lib);
+            let keys = app.keys.clone();
+            let _ = tokio::task::spawn_blocking(move || keys.prune(&in_use)).await;
+        }
         if app.builds.refresh_base().await {
             tracing::info!("the base changed: {:?}", app.builds.base().map(|b| b.id));
         }

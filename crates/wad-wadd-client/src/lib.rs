@@ -327,8 +327,13 @@ impl Wadd {
         self.post(&format!("/v1/jobs/{id}/cancel"), &serde_json::json!({})).await
     }
 
-    /// The shell's compositor, as it starts (`PUT /v1/screen/session`).
-    pub async fn screen_session(&self, wayland_socket: &str, uid: u32) -> Result<wad_proto::ScreenInfo, Failure> {
-        self.put("/v1/screen/session", &wad_proto::ScreenSession { wayland_socket: wayland_socket.into(), uid }).await
+    /// The shell's compositor, as it starts (`PUT /v1/screen/session`), and
+    /// how many displays it has (sent again when they change).
+    pub async fn screen_session(&self, wayland_socket: &str, uid: u32, monitors: u32) -> Result<wad_proto::ScreenInfo, Failure> {
+        self.put(
+            "/v1/screen/session",
+            &wad_proto::ScreenSession { wayland_socket: wayland_socket.into(), uid, monitors },
+        )
+        .await
     }
 }

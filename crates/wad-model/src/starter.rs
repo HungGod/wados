@@ -2,9 +2,10 @@
 // itself (your own branch of its repo). It comes built (it's part of the
 // image), with VS Code, the Cactus browser, the command line with Rust (the
 // Rust tool: rustup and cargo) and Claude Code, the WadSpaces repo cloned
-// in, what compiling it needs (its RUN commands), and its agents allowed to
-// message the desktop. It's an ordinary wadspace otherwise: add to it in the
-// Builder, rename it, trash it.
+// in, what compiling it needs (its RUN commands), the container tools its
+// host image is built and pushed with (podman, buildah, skopeo), and its
+// agents allowed to message the desktop. It's an ordinary wadspace
+// otherwise: add to it in the Builder, rename it, trash it.
 
 use crate::commands::named_commands;
 use crate::edit::{Ctx, Library};
@@ -22,7 +23,14 @@ pub const STARTER_REPO: &str = "HungGod/wados";
 /// tools its headless probes and screenshots use; and, on the Rust tool's
 /// rustup, the Rust it pins (1.99, rustfmt, clippy).
 pub const WADOS_COMMANDS: [(CommandKind, &str); 4] = [
-    (CommandKind::Run, "dnf install -y gcc pkg-config gtk4-devel gtk4-layer-shell-devel libadwaita-devel pam-devel"),
+    // The C toolchain, GTK and PAM (the shell and the apps), and the
+    // container tools the host image is built and pushed with (podman,
+    // buildah, skopeo: host/build.sh image, then push after
+    // wadspaces-ghcr-login).
+    (
+        CommandKind::Run,
+        "dnf install -y gcc pkg-config gtk4-devel gtk4-layer-shell-devel libadwaita-devel pam-devel podman buildah skopeo fuse-overlayfs",
+    ),
     (CommandKind::Run, "dnf install -y webkitgtk6.0-devel"),
     (CommandKind::Run, "dnf install -y labwc grim wlr-randr wtype foot wayland-utils"),
     (CommandKind::Run, "rustup toolchain install 1.99 --component rustfmt,clippy"),
@@ -52,7 +60,12 @@ pub fn wados_commands() -> Vec<BuildCommand> {
 pub fn starter_wadspace(machine: &str, now: i64) -> crate::types::Wadspace {
     let mut x = blank(STARTER_ID, "WadOS", machine, now, 0);
     x.apps = vec![AppIn::new(AppId::Vscode), AppIn::new(AppId::Wadbrowser), AppIn::new(AppId::Terminal)];
-    x.exts = vec![Ext::new(AppId::Vscode, "anthropic.claude-code"), Ext::new(AppId::Terminal, "rust")];
+    x.exts = vec![
+        Ext::new(AppId::Vscode, "anthropic.claude-code"),
+        Ext::new(AppId::Terminal, "rust"),
+        // Nested containers: the host image is built and pushed from here.
+        Ext::new(AppId::Terminal, "podman"),
+    ];
     x.look.wallpaper = art_of("aurora");
     x.look.projects = vec![Project {
         id: "wadspaces".to_string(),
@@ -100,11 +113,16 @@ mod tests {
             "webkitgtk6.0-devel",
             "labwc",
             "wtype",
+            // The host image is built and pushed here (podman, buildah, skopeo).
+            "podman",
+            "buildah",
+            "skopeo",
         ] {
             assert!(all.contains(&format!(" {pkg}")), "{pkg}");
         }
         // Rust itself is its Rust tool (rustup, cargo); RUN_4 pins the Rust it compiles with on it.
         assert!(os.exts.contains(&Ext::new(AppId::Terminal, "rust")));
+        assert!(os.exts.contains(&Ext::new(AppId::Terminal, "podman")));
         assert_eq!(os.commands[3].text, "rustup toolchain install 1.99 --component rustfmt,clippy");
         assert_eq!(crate::check::wadspace(&os), Ok(()));
 
