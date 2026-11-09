@@ -8,7 +8,7 @@
 //! | `side row <id>` | one row: its flags, its box on the screen, its label |
 //! | `side show <id>` | scrolls the tab so it's in sight |
 //! | `side click <id>` | clicks it (a pill in Secrets: picks it); a menu or dialog it opens is said |
-//! | `side menu <id>` | its right-click menu (a pill in Secrets) |
+//! | `side menu <id>` | its right-click menu (a pill in Secrets, a disc in Add-ons) |
 //! | `side open` | the menu open: what it's for and its items (`+off`, `+checked`, `@x,y`) |
 //! | `side choose <item>` | picks an item of the menu open (`key:work-web`, `key:new`, `own-key:new`) |
 //! | `side ask` | the dialog open: its title, its fields and its OK (`@x,y`) |
@@ -22,7 +22,9 @@
 //! `addon:<key>`, `focus`, `site-add`, `command:<id>`,
 //! `command-remove:<id>`, `command-kind`, `command-input`, `command-add`,
 //! `link-steam`, `disc-upload`; `pill:<variant>`, `group:<home|key>`,
-//! `key-select:<home|key|variant>`, `own-key`, `unpick`.
+//! `key-select:<home|key|variant>`, `own-key`, `unpick`. A disc's pill
+//! (`addon:dolphin:<id>`) has one too: `disc-remove:<id>` takes it off the
+//! machine.
 //!
 //! Screen points: the Builder's window is labwc's `builder` region, down
 //! the right of the screen to its bottom, `GAP` in (rc.xml's `<gap>`):

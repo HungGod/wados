@@ -23,15 +23,18 @@
 //! what belongs to nothing:
 //!
 //! 1. *images*: set images no wadspace here has (in the Trash too: it can
-//!    come back), then the images nothing names or stands on (dangling);
+//!    come back), then the images nothing names or stands on (dangling), and
+//!    the chains no set here would restack from ([`Inner::old_chains`]: a
+//!    tagged image isn't dangling, so podman's prune leaves it);
 //! 2. *containers*: stopped containers that aren't a wadspace's;
 //! 3. *caches*: what unfinished builds left (buildah's containers, and the
 //!    images under them).
 //!
 //! Never a named image anything uses (the bases, a wadspace's set, the
-//! packages and chains builds restack from), a volume (a wadspace's home,
-//! its keys, its streams), or any file of the person's. What it freed (the
-//! free space it made, else what podman says it removed) is a notice.
+//! packages and chains a set here still stacks from), a volume (a
+//! wadspace's home, its keys, its streams), or any file of the person's.
+//! What it freed (the free space it made, else what podman says it removed)
+//! is a notice.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -156,6 +159,21 @@ fn named(i: &ImageInfo, name: &str) -> bool {
 /// A set image (`io.wadspaces.layer` is `set:<key>`).
 fn is_set(i: &ImageInfo) -> bool {
     label(i, wad_gen::labels::LAYER).starts_with("set:")
+}
+
+/// The packages a set stacks, in order (`io.wadspaces.pkgs`: `id@image-id,…`).
+fn pkgs_of(label: &str) -> Vec<&str> {
+    label.split(',').filter_map(|p| p.split('@').next()).filter(|p| !p.is_empty()).collect()
+}
+
+/// The `io.wadspaces.chain` label's packages, in order, if `i` is a chain
+/// (not a set: a set inherits its top chain's label).
+fn chain_pkgs(i: &ImageInfo) -> Option<Vec<&str>> {
+    let chain = label(i, wad_gen::labels::CHAIN);
+    if chain.is_empty() || is_set(i) {
+        return None;
+    }
+    Some(pkgs_of(chain))
 }
 
 /// The disk as Storage tells it, from what was measured.
@@ -323,6 +341,42 @@ impl Inner {
             .collect()
     }
 
+    /// The chains a build would still restack from, removed: every chain
+    /// image that isn't a prefix of some set that's here built on the same
+    /// base. A build that doesn't find a chain just makes it again (one
+    /// layer per package). An image another is built on is left (podman
+    /// refuses it): the chains still on the way go first.
+    async fn old_chains(&self, images: &[ImageInfo]) -> Vec<(String, u64)> {
+        // A set is built from a chain on its own base (sets.rs's FROM: the
+        // chain's image id). A chain on another one can't be restacked.
+        let mut want = HashSet::new();
+        for i in images.iter().filter(|i| is_set(i)) {
+            let base = label(i, wad_gen::labels::FROM);
+            let pkgs = pkgs_of(label(i, wad_gen::labels::PKGS));
+            for n in 1..=pkgs.len() {
+                want.insert((base.to_string(), pkgs[..n].join(",")));
+            }
+        }
+        // Top of a chain first: the images under it are on its way.
+        let mut chains: Vec<&ImageInfo> = images.iter().filter(|i| chain_pkgs(i).is_some()).collect();
+        chains.sort_by_key(|i| std::cmp::Reverse(i.parent.is_empty()));
+        let mut gone = vec![];
+        for i in chains {
+            let Some(pkgs) = chain_pkgs(i) else { continue };
+            let base = label(i, wad_gen::labels::FROM);
+            if want.contains(&(base.to_string(), pkgs.join(","))) {
+                continue;
+            }
+            match self.disk.remove_image(&i.id).await {
+                Ok(true) => gone.push((i.id.clone(), i.size)),
+                Ok(false) => {}
+                // Another image is built on it: it's still on the way.
+                Err(_) => {}
+            }
+        }
+        gone
+    }
+
     /// The cleanup's stages: what went, in bytes podman says, and how many things.
     async fn clean(&self, job: &str) -> Result<(u64, usize), String> {
         let mut reported = 0;
@@ -349,6 +403,9 @@ impl Inner {
         }
         add(sets, &self.jobs, "the set");
         add(self.disk.prune_images(false).await?, &self.jobs, "the image");
+        // The chains on the way to the sets that are here. podman's prune
+        // doesn't take a tagged image, so they'd stay for good otherwise.
+        add(self.old_chains(&images).await, &self.jobs, "the chain");
         self.jobs.stage(job, "images", PartState::Done, None);
         // 2. Stopped containers that aren't a wadspace's.
         self.jobs.stage(job, "containers", PartState::Working, None);

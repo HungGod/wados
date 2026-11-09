@@ -103,3 +103,30 @@ async fn it_refuses_a_push_with_no_account_and_anything_outside_the_home() {
     std::fs::write(&text, b"x").unwrap();
     assert_eq!(d.add(add(&text, false)).await.unwrap_err().message, "A disc is an .iso or an .rvz file");
 }
+
+#[tokio::test]
+async fn a_disc_taken_off_its_file_and_its_wadspaces_variant_go_and_a_pushed_one_keeps_its_copy() {
+    let rig = rig();
+    let fake = Arc::new(Fake::default());
+    let (d, home) = discs(&rig, fake.clone());
+    let file = home.join("mario-party-4.iso");
+    std::fs::write(&file, b"a disc").unwrap();
+    let job = d.add(add(&file, false)).await.unwrap();
+    assert_eq!(rig.finished(&job.job.id).await, JobStatus::Done);
+    // A gamespace with the disc in it.
+    let ws = rig.docs.apply(wad_model::Op::Create { name: None, category: None, machine: None }).unwrap();
+    let id = ws.created.expect("made");
+    rig.docs.apply(wad_model::Op::AddDisc { ws: id.clone(), file: "mario-party-4.iso".into() }).unwrap();
+    assert!(rig.docs.snapshot().wadspace(&id).unwrap().exts.iter().any(|e| e.id == "mario-party-4"));
+    // Off it goes: the file, the library's record, the gamespace's variant.
+    d.remove("mario-party-4").await.unwrap();
+    assert!(!rig.state_dir().join("discs/mario-party-4").exists(), "its file went");
+    assert!(!rig.docs.snapshot().discs.contains_key("mario-party-4"), "the library's record went");
+    assert!(
+        !rig.docs.snapshot().wadspace(&id).unwrap().exts.iter().any(|e| e.id == "mario-party-4"),
+        "the gamespace's variant went"
+    );
+    // And nothing twice.
+    assert!(d.remove("mario-party-4").await.is_err());
+    assert!(d.remove("../etc").await.is_err());
+}

@@ -4,7 +4,9 @@
 //! hear each job's state (`job` events, at most every [`PUBLISH_EVERY`]
 //! unless something changed that matters: a stage, its status) and its
 //! lines as they come (`jobLines`). The last [`KEEP_FINISHED`] finished
-//! jobs are kept; older ones are forgotten (`jobGone`).
+//! jobs are kept; older ones are forgotten (`jobGone`), and each one's log
+//! goes with it. A job isn't loaded back after a restart, so logs older
+//! than [`KEEP_LOGS_FOR`] are swept when wadd starts.
 //!
 //! Cancelling a job drops its work (its task is aborted): podman's build
 //! stream closes, which stops the build.
@@ -24,6 +26,9 @@ pub const MAX_LINES: usize = 4000;
 /// Lines a job's state carries (the rest by `GET /v1/jobs/{id}`).
 pub const TAIL: usize = 12;
 pub const KEEP_FINISHED: usize = 20;
+/// How long a job's log file is kept after wadd stops (they're never loaded
+/// back, so it's for reading, not for wadd).
+pub const KEEP_LOGS_FOR: Duration = Duration::from_secs(7 * 24 * 3600);
 pub const PUBLISH_EVERY: Duration = Duration::from_millis(250);
 
 pub fn now_ms() -> i64 {
@@ -96,7 +101,11 @@ pub fn finished(s: JobStatus) -> bool {
 
 impl Jobs {
     pub fn new(bus: Bus, state_dir: &Path) -> Arc<Self> {
-        Arc::new(Self { bus, dir: state_dir.join("jobs"), entries: Mutex::default(), seq: AtomicU64::new(0) })
+        let dir = state_dir.join("jobs");
+        // Nothing is loaded back, so a log from a run that's over can't be
+        // read again: keep the ones KEEP_LOGS_FOR old, and let the rest go.
+        sweep(&dir);
+        Arc::new(Self { bus, dir, entries: Mutex::default(), seq: AtomicU64::new(0) })
     }
 
     /// A new job, queued: its stages (id, label) waiting. Its id.
@@ -371,6 +380,8 @@ impl Jobs {
             gone
         };
         for id in gone {
+            // Nothing can ask for it now: it's out of the API.
+            let _ = std::fs::remove_file(self.dir.join(format!("{id}.log")));
             self.bus.forget(&format!("job:{id}"));
             self.bus.publish(Event::JobGone { id });
         }
@@ -387,6 +398,25 @@ fn progress_of(j: &Job, part: f64) -> f64 {
 
 fn no_job(id: &str) -> ApiError {
     ApiError::not_found(format!("no job {id:?}"))
+}
+
+/// Drops the logs older than [`KEEP_LOGS_FOR`] that a previous run left.
+/// Only `<id>.log` files in `dir` are touched; a machine that checks for
+/// updates every 15 minutes makes two of them a cycle, and nothing would
+/// ever remove the ones already finished when wadd last stopped.
+fn sweep(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Some(cutoff) = SystemTime::now().checked_sub(KEEP_LOGS_FOR) else { return };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.extension().and_then(|x| x.to_str()) != Some("log") {
+            continue;
+        }
+        let old = e.metadata().and_then(|m| m.modified()).is_ok_and(|m| m < cutoff);
+        if old {
+            let _ = std::fs::remove_file(&p);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -463,7 +493,10 @@ mod tests {
     fn only_the_last_finished_jobs_are_kept() {
         let (_d, jobs, _bus) = jobs();
         let first = jobs.create(JobKind::Build, "B", "b", &[]);
+        jobs.line(&first, "its line");
         jobs.finish(&first, Err("no".into()));
+        let first_log = _d.path().join(format!("jobs/{first}.log"));
+        assert!(first_log.exists());
         for _ in 0..KEEP_FINISHED {
             let id = jobs.create(JobKind::Build, "B", "b", &[]);
             jobs.finish(&id, Ok(()));
@@ -471,5 +504,28 @@ mod tests {
         jobs.create(JobKind::Build, "B", "b", &[]);
         assert!(jobs.info(&first).is_none());
         assert_eq!(jobs.list().len(), KEEP_FINISHED + 1);
+        // Its log went with it; the ones kept still have theirs.
+        assert!(!first_log.exists(), "a forgotten job's log is removed");
+    }
+
+    #[test]
+    fn old_logs_are_swept_when_wadd_starts() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("jobs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = |name: &str| {
+            let p = dir.join(name);
+            std::fs::write(&p, "x\n").unwrap();
+            p
+        };
+        let (old, kept, other) = (log("job-old.log"), log("job-new.log"), log("notes.txt"));
+        let before = SystemTime::now().checked_sub(KEEP_LOGS_FOR + Duration::from_secs(60)).unwrap();
+        std::fs::File::options().write(true).open(&old).unwrap().set_modified(before).unwrap();
+        let bus =
+            Bus::new(MachineInfo { id: "m".into(), name: "M".into(), version: "0".into(), profile: Profile::User });
+        let _jobs = Jobs::new(bus, d.path());
+        assert!(!old.exists(), "older than KEEP_LOGS_FOR");
+        assert!(kept.exists(), "recent");
+        assert!(other.exists(), "not a job log");
     }
 }

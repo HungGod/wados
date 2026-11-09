@@ -229,3 +229,78 @@ async fn clean_up_removes_what_belongs_to_nothing() {
     }
     assert_eq!(notice.as_deref(), Some("Nothing to clean up"));
 }
+
+#[tokio::test]
+async fn chains_no_set_still_stacks_from_go_and_the_ones_on_the_way_stay() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    let bus = Bus::new(MachineInfo {
+        id: "m-test".into(),
+        name: "Test".into(),
+        version: "0".into(),
+        profile: wad_proto::Profile::User,
+    });
+    let fake = Arc::new(crate::fake::Fake::new());
+    let docs = Arc::new(Docs::open(crate::store::Store::new(&state).unwrap(), bus.clone(), "m-test").unwrap());
+    let jobs = Jobs::new(bus.clone(), &state);
+    let packages = crate::packages::Packages::new(
+        fake.clone(),
+        crate::packages::Settings {
+            pull: false,
+            index_url: String::new(),
+            index_max_age: Duration::from_secs(60),
+            state_dir: state.clone(),
+            min_free_gb: 1,
+        },
+    );
+    let builds = Builds::new(
+        fake.clone(),
+        packages,
+        jobs.clone(),
+        docs.clone(),
+        bus.clone(),
+        &state,
+        crate::builds::Settings { min_free_gb: 1, copy_max_bytes: 1 << 20 },
+        None,
+    );
+    let chain = |id: &str, base: &str, pkgs: &str, size: u64| {
+        image(
+            id,
+            &[&format!("localhost/wados-chain:{id}")],
+            size,
+            &[(wad_gen::labels::CHAIN, pkgs), (wad_gen::labels::FROM, base)],
+        )
+    };
+    // A set of cpp+rust: the chains under it (one per prefix) are on the way.
+    let mut top = set("set", "studio", 1_000 * MB);
+    top.labels.insert(wad_gen::labels::FROM.into(), Value::String("base1".into()));
+    top.labels.insert(wad_gen::labels::PKGS.into(), Value::String("cpp@a,rust@b".into()));
+    let images = vec![
+        image("b", &[BASE], 1_450 * MB, &[]),
+        chain("c1", "base1", "cpp@a", 300 * MB),
+        chain("c2", "base1", "cpp@a,rust@b", 600 * MB),
+        // Nothing stacks from these: a package no set has, another order,
+        // and one on a base that isn't the set's.
+        chain("c3", "base1", "cpp@a,nodejs@c", 700 * MB),
+        chain("c4", "base1", "rust@b", 100 * MB),
+        chain("c5", "base0", "cpp@a", 200 * MB),
+        top,
+    ];
+    let disk = Arc::new(FakeDisk::default());
+    *disk.images.lock().unwrap() = images.clone();
+    *disk.free.lock().unwrap() = 100_000 * MB;
+    let st = MachineStorage::new(
+        Settings { disk: "/var".into(), bases: vec![BASE.into()] },
+        disk.clone(),
+        docs.clone(),
+        builds.clone(),
+        jobs.clone(),
+        bus.clone(),
+    );
+    let mut gone: Vec<String> = st.0.old_chains(&images).await.into_iter().map(|(id, _)| id).collect();
+    gone.sort();
+    assert_eq!(gone, ["c3", "c4", "c5"], "only what no set stacks, and the old base's");
+    let left: Vec<_> = disk.images.lock().unwrap().iter().map(|i| i.id.clone()).collect();
+    assert!(left.contains(&"c1".to_string()) && left.contains(&"c2".to_string()), "on the way: {left:?}");
+    assert!(left.contains(&"set".to_string()) && left.contains(&"b".to_string()), "{left:?}");
+}

@@ -23,7 +23,7 @@
 //! - **rollback** (`bootc rollback`): the one before is queued for the next
 //!   start (a staged update is dropped; a check or download under way stops).
 //!
-//! Every 12 hours (from the last check) wadd checks by itself, on a
+//! Every 15 minutes (from the last check) wadd checks by itself, on a
 //! machine's wadd only (`Settings::schedule`); restarting is always the
 //! person's.
 //!
@@ -49,7 +49,7 @@
 //! a stage each: the published one pulled if it's newer (with the GitHub
 //! token, if there's one) and named as wadspaces use it. A wadspace built on
 //! the base before shows as an update and rebuilds when it next opens
-//! (`Builds::refresh_base`, through `Hooks::bases_changed`). Every 12 hours
+//! (`Builds::refresh_base`, through `Hooks::bases_changed`). Every 15 minutes
 //! too, on a machine.
 //!
 //! What wadd remembers between starts (when it last looked, what was turned
@@ -78,7 +78,7 @@ use crate::packages::GITHUB_SECRET;
 const REGISTRY_USER: &str = "wadspaces";
 
 /// Between checks, and between refreshes of the base images.
-pub const EVERY: Duration = Duration::from_secs(12 * 3600);
+pub const EVERY: Duration = Duration::from_secs(15 * 60);
 /// ostree's registry login, in `/run` only (bootc reads it before `/etc/ostree/auth.json`).
 pub const AUTH_FILE: &str = "/run/ostree/auth.json";
 /// Where CI publishes the images (`localhost/<name>` here).
@@ -564,7 +564,8 @@ impl Settings {
             auth_file: AUTH_FILE.into(),
             every: EVERY,
             first: Duration::from_secs(300),
-            tick: Duration::from_secs(600),
+            // Well under EVERY, so a due check runs close to when it's due.
+            tick: Duration::from_secs(60),
             schedule: profile == wad_config::Profile::System,
             bases: vec![
                 BaseImage::new("Fedora 44 base", wad_gen::BASE_IMAGE),
@@ -670,7 +671,7 @@ impl HostUpdates {
     }
 
     /// The schedule, for as long as wadd runs: bootc asked at once, then a
-    /// check and a refresh of the bases when each is due (every 12 hours).
+    /// check and a refresh of the bases when each is due (every 15 minutes).
     pub fn start(&self) -> Vec<tokio::task::JoinHandle<()>> {
         let me = self.clone();
         vec![tokio::spawn(async move { me.run().await })]
@@ -704,13 +705,13 @@ impl HostUpdates {
             (due(st.saved.checked_at) && st.job.is_none(), due(st.saved.bases_at) && st.bases_job.is_none())
         };
         if check && self.0.bootc.here() {
-            tracing::info!("updates: checking, as every 12 hours");
+            tracing::info!("updates: checking, as every 15 minutes");
             if let Err(e) = self.check_job() {
                 tracing::info!("updates: {}", e.message);
             }
         }
         if bases {
-            tracing::info!("updates: refreshing the base images, as every 12 hours");
+            tracing::info!("updates: refreshing the base images, as every 15 minutes");
             if let Err(e) = self.refresh_job() {
                 tracing::info!("updates: {}", e.message);
             }
@@ -868,7 +869,7 @@ impl HostUpdates {
             }
             let job = me.jobs.create(JobKind::Pull, "Refreshing the base images", "bases", &stages);
             st.bases_job = Some(job.clone());
-            // Now, or by the schedule: the next is 12 hours from now.
+            // Now, or by the schedule: the next is 15 minutes from now.
             st.saved.bases_at = Some(now_ms());
             me.save(&st.saved);
             job

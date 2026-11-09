@@ -849,7 +849,7 @@ impl UpdatesPage {
         let c = card("update-bases");
         let now = now_ms();
         let pull = st.pull();
-        let mut sub = "What every wadspace is built on. Refreshes every 12 hours".to_string();
+        let mut sub = "What every wadspace is built on. Refreshes every 15 minutes".to_string();
         if let (Some(at), None) = (b.next_refresh_at, pull) {
             sub.push_str(&format!(", next {}", until(now, at)));
         }

@@ -14,8 +14,9 @@ use wad_model::catalog::{WEB_APPS, extensions, tools};
 use wad_model::edit::{Library, Op, Payload};
 use wad_model::games::owned_games;
 use wad_model::suggest::{Suggestion, suggestions};
-use wad_model::{AppId, Ext, NewVariant, Section, Wadspace};
+use wad_model::{AppId, DiscImage, Ext, NewVariant, Section, Wadspace};
 
+use crate::builder::side::keys::{Act, Choice, Pick};
 use crate::dnd::Held;
 
 /// How many suggestions per app.
@@ -98,6 +99,40 @@ pub fn toggle(x: &Wadspace, i: &Item) -> Option<Op> {
         Some(chip) => Some(Op::Remove { ws: x.id.clone(), chip: chip.clone() }),
         None => i.add.clone(),
     }
+}
+
+/// A disc's own menu (a right-click on its pill in Dolphin games): take it
+/// off this machine. It says where it's used, since it goes from there too
+/// (three names at most: the rest are counted). One pushed keeps its copy
+/// in the account's packages (the toast says so).
+pub fn disc_menu(lib: &Library, d: &DiscImage) -> Vec<Choice> {
+    let uses: Vec<&str> = lib
+        .wadspaces
+        .iter()
+        .filter(|x| !x.is_trashed())
+        .filter(|x| {
+            x.exts
+                .iter()
+                .any(|e| e.app == AppId::Dolphin && (e.id == d.id || e.name.as_deref() == Some(d.name.as_str())))
+        })
+        .map(|x| x.name.as_str())
+        .collect();
+    let mut out = vec![];
+    if !uses.is_empty() {
+        let named = uses[..uses.len().min(3)].join(", ");
+        let rest = uses.len().saturating_sub(3);
+        let more = if rest == 0 { String::new() } else { format!(" and {rest} more") };
+        out.push(Choice::Heading(format!("Used in {named}{more}")));
+    }
+    out.push(Choice::Item(Pick {
+        id: format!("disc-remove:{}", d.id),
+        label: "Remove from this machine".into(),
+        icon: "trash",
+        checked: false,
+        off: None,
+        act: Act::RemoveDisc { id: d.id.clone() },
+    }));
+    out
 }
 
 /// WadBrowser's Focus in `x`, as its chip.
@@ -291,7 +326,7 @@ mod tests {
         // Calendar, the machine's browser's own web app, is one of the usual sites already.
         assert!(!web.items.iter().any(|i| i.key.starts_with("own:")));
         let tools = group(&gs, GroupId::Tools);
-        for t in ["claude-code", "hplip", "rust"] {
+        for t in ["claude-code", "ori", "hplip", "rust"] {
             item(tools, t);
         }
         assert!(!tools.items.iter().any(|i| i.key == "go" || i.key == "git-lfs"));
@@ -401,5 +436,29 @@ mod tests {
                 new: NewVariant::Addon("vscode:eamodio.gitlens".into())
             })
         );
+    }
+
+    #[test]
+    fn a_discs_menu_says_where_its_used_and_takes_it_off_this_machine() {
+        let lib = sample();
+        let disc = lib.discs.get("mario-kart-double-dash").expect("the sample's disc").clone();
+        let menu = disc_menu(&lib, &disc);
+        let Choice::Heading(h) = &menu[0] else { panic!("it says where it's used: {menu:?}") };
+        assert!(h.starts_with("Used in ") && h.contains("Retro"), "{h}");
+        let Choice::Item(p) = &menu[1] else { panic!("then the way out: {menu:?}") };
+        assert_eq!((p.label.as_str(), p.icon), ("Remove from this machine", "trash"));
+        assert_eq!(p.act, Act::RemoveDisc { id: "mario-kart-double-dash".into() });
+    }
+
+    #[test]
+    fn a_disc_no_wadspace_has_has_no_where_line() {
+        let mut lib = sample();
+        let disc = lib.discs.get("mario-party-4").expect("the sample's disc").clone();
+        // Taken out of every wadspace that had it.
+        for x in &mut lib.wadspaces {
+            x.exts.retain(|e| !(e.app == AppId::Dolphin && (e.id == disc.id || e.name.as_deref() == Some(&disc.name))));
+        }
+        let menu = disc_menu(&lib, &disc);
+        assert!(matches!(menu[0], Choice::Item(_)), "nothing to say about where: {menu:?}");
     }
 }

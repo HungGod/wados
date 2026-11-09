@@ -284,8 +284,10 @@ impl StoragePanel {
         column.append(&ws.root);
 
         if let Some(b) = &st.bases {
-            let g =
-                Group::new("Base Images", "The Fedora 44 images every wadspace is built on; refreshed every 12 hours.");
+            let g = Group::new(
+                "Base Images",
+                "The Fedora 44 images every wadspace is built on; refreshed every 15 minutes.",
+            );
             g.root.set_widget_name("group-bases");
             let now = glib::real_time() / 1000;
             for (i, base) in b.bases.iter().enumerate() {

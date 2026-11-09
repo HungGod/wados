@@ -38,7 +38,7 @@ pub fn label(text: &str, classes: &[&str]) -> gtk::Label {
     l
 }
 
-/// What isn't on the machine yet: said plainly, with when it comes.
+/// What isn't here yet: said plainly, without a promise it can't keep.
 pub fn later(text: &str) -> gtk::Label {
     let l = label(text, &["wb-later"]);
     l.set_wrap(true);

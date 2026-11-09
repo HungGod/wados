@@ -97,10 +97,10 @@ pub fn dump_labels(w: &gtk::Widget) -> String {
 }
 
 /// What a panel that isn't here yet says.
-// Every panel's built now (phase 8): kept for one that's added later.
+// Every panel's built: kept for one that's added later.
 #[allow(dead_code)]
 pub fn being_built(label: &str) -> String {
-    format!("{label} is being built")
+    format!("{label} isn't here yet")
 }
 
 /// A panel that isn't here yet: its page says so (and which of its pages was asked for).
@@ -122,11 +122,7 @@ impl Placeholder {
 impl Panel for Placeholder {
     fn build(&self, _: &Ctx) -> gtk::Widget {
         let page = kit::Page::new(self.info.label, false);
-        let e = Empty::new(
-            self.info.icon,
-            &being_built(self.info.label),
-            "It comes with the rest of Settings, in phase 8.",
-        );
+        let e = Empty::new(self.info.icon, &being_built(self.info.label), "It comes with a later version of Settings.");
         e.root.set_vexpand(true);
         e.root.set_valign(gtk::Align::Center);
         let sub = kit::label("", &["kit-group-desc"]);

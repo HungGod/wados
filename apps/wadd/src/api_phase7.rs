@@ -60,11 +60,11 @@ pub trait Streams: Send + Sync + 'static {
     async fn stop_peer(&self, peer: &str, ws: &str) -> Result<StreamInfo, ApiError>;
 }
 
-/// None here: 501, "comes in phase 7" (what the machine answered before streams.rs).
+/// None here: 501, "isn't here yet" (what the machine answered before streams.rs).
 pub struct NotYet;
 
 fn not_yet<T>(what: &str) -> Result<T, ApiError> {
-    Err(ApiError::not_implemented(format!("{what} comes in phase 7")))
+    Err(ApiError::not_implemented(format!("{what} isn't here yet")))
 }
 
 #[async_trait]

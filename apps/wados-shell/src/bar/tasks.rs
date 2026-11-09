@@ -61,13 +61,12 @@ impl MachineApp {
         }
     }
 
-    /// What starts it, and the phase it comes in while it isn't on the
-    /// machine (none: the Builder, the shell's own window).
-    pub fn launch(self) -> Option<(&'static [&'static str], u8)> {
+    /// What starts it (none: the Builder, the shell's own window).
+    pub fn launch(self) -> Option<&'static [&'static str]> {
         match self {
-            MachineApp::Settings => Some((&["wados-settings"], 8)),
-            MachineApp::Files => Some((&["wados-files"], 8)),
-            MachineApp::Browser => Some((&["wadbrowser"], 5)),
+            MachineApp::Settings => Some(&["wados-settings"]),
+            MachineApp::Files => Some(&["wados-files"]),
+            MachineApp::Browser => Some(&["wadbrowser"]),
             MachineApp::Builder => None,
         }
     }

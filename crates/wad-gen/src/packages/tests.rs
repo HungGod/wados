@@ -180,6 +180,7 @@ fn ci_builds_the_catalog_in_waves() {
             "nodejs",
             "rust",
             "claude-code",
+            "ori",
             "dolphin",
             "steam",
             "vscode",
@@ -200,6 +201,7 @@ fn ci_builds_the_catalog_in_waves() {
     assert_eq!(wave_of("rpm-krita"), Some(0));
     assert_eq!(wave_of("rust"), Some(1));
     assert_eq!(wave_of("claude-code"), Some(1));
+    assert_eq!(wave_of("ori"), Some(0));
     // It stands on the command line, so it's a wave later than other extensions.
     assert_eq!(wave_of("ext-anthropic.claude-code"), Some(2));
     assert_eq!(waves.len(), 3);

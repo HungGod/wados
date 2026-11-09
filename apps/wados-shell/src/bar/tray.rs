@@ -12,7 +12,7 @@
 //! Streams tile, how many are live; the Streams flyout: each one, its Link
 //! and Stop), read-only the network,
 //! Bluetooth and the battery, and the volume and the brightness as their
-//! keys leave them. The rest says which phase brings it.
+//! keys leave them. What isn't here yet says so.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -551,7 +551,7 @@ impl Tray {
             "bluetooth" => self.bluetooth_content(&col, &st),
             "clipboard" => {
                 col.append(&head("Clipboard", None));
-                col.append(&later("What you copy, kept here (the last 25), comes in phase 8."));
+                col.append(&later("Your copied items aren't kept yet."));
             }
             "agents" => {
                 self.agents_content(&col);

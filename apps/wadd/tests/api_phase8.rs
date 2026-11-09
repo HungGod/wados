@@ -368,7 +368,7 @@ async fn the_machines_answer_501_until_phase_8_is_made() {
     ];
     for e in all {
         assert_eq!(e.status, 501, "{}", e.message);
-        assert!(e.message.ends_with("comes in phase 8"), "{}", e.message);
+        assert!(e.message.ends_with("isn't here yet"), "{}", e.message);
     }
 }
 

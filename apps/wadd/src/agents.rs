@@ -552,12 +552,18 @@ impl MachineAgents {
         Ok(())
     }
 
-    /// The switch went off: its socket goes.
+    /// The switch went off: its socket goes, and its folder.
     pub fn unserve(&self, ws: &str) {
         if let Some(t) = self.served.lock().unwrap().remove(ws) {
             t.abort();
         }
-        let _ = std::fs::remove_file(self.run_dir.join(ws).join(SOCKET));
+        if !crate::store::safe_id(ws) {
+            return;
+        }
+        let dir = self.run_dir.join(ws);
+        let _ = std::fs::remove_file(dir.join(SOCKET));
+        // Left behind, it's one empty folder per wadspace that ever had agents.
+        let _ = std::fs::remove_dir(&dir);
     }
 
     /// Follows every wadspace's switch.
@@ -573,8 +579,24 @@ impl MachineAgents {
                     self.unserve(&w.id);
                 }
             }
+            // One gone for good (purged) never reaches the loop above: its
+            // folder has no wadspace to turn the switch off for, so clear
+            // what's left of it here.
+            for id in self.stray_dirs(&lib) {
+                self.unserve(&id);
+            }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
+    }
+
+    /// The folders in `run_dir` no wadspace of `lib` has any more.
+    fn stray_dirs(&self, lib: &wad_model::edit::Library) -> Vec<String> {
+        let Ok(entries) = std::fs::read_dir(&self.run_dir) else { return vec![] };
+        entries
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|id| crate::store::safe_id(id) && lib.wadspace(id).is_none())
+            .collect()
     }
 
     /// A tool, called from `ws`: a refusal shows in the job's work too.

@@ -443,6 +443,6 @@ mod tests {
 
     #[test]
     fn a_panel_not_built_yet_says_so() {
-        assert_eq!(panel::being_built("Wi-Fi"), "Wi-Fi is being built");
+        assert_eq!(panel::being_built("Wi-Fi"), "Wi-Fi isn't here yet");
     }
 }

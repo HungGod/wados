@@ -162,6 +162,51 @@ impl MachineDiscs {
         });
         Ok(())
     }
+
+    /// Disc `id` gone from this machine: its file (and a part of it left by a
+    /// copy), and any Dolphin variant that was it. One pushed stays in the
+    /// account's packages (its image is nothing of this machine's).
+    pub async fn remove(&self, id: &str) -> Result<(), ApiError> {
+        if !crate::store::safe_id(id) {
+            return Err(ApiError::not_found(format!("no disc {id:?}")));
+        }
+        let Some(disc) = self.docs.snapshot().discs.get(id).cloned() else {
+            return Err(ApiError::not_found(format!("no disc {id:?}")));
+        };
+        // Its wadspaces stop having it first: a named variant's id is
+        // `ext:<app>:<id>` (variants.rs).
+        for ws in self.docs.snapshot().wadspaces.iter().filter(|x| {
+            x.exts.iter().any(|e| {
+                e.app == wad_model::AppId::Dolphin && (e.id == disc.id || e.name.as_deref() == Some(&disc.name))
+            })
+        }) {
+            let variant = ws.exts.iter().find_map(|e| {
+                let same =
+                    (e.id == disc.id || e.name.as_deref() == Some(&disc.name)) && e.app == wad_model::AppId::Dolphin;
+                same.then(|| format!("ext:{}:{}", e.app, e.id))
+            });
+            if let Some(variant) = variant {
+                let _ = self.docs.apply(Op::RemoveVariant { ws: ws.id.clone(), variant });
+            }
+        }
+        self.docs.apply(Op::ForgetDisc { id: id.to_string() })?;
+        let dir = self.dir.join(id);
+        std::fs::remove_dir_all(&dir).map_err(|e| ApiError::internal(format!("{}: {e}", dir.display())))?;
+        self.bus.publish(Event::Notice {
+            level: Level::Ok,
+            title: format!("{} removed", disc.name),
+            undo: None,
+            body: Some(if disc.reference.is_empty() {
+                "Its file is deleted.".into()
+            } else {
+                "Its file is deleted. The copy in your packages stays.".into()
+            }),
+            icon: Some("disc-3".into()),
+            action: None,
+            toast: true,
+        });
+        Ok(())
+    }
 }
 
 /// The machine's: the GitHub account, and podman on the command line. The

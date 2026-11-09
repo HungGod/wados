@@ -64,6 +64,18 @@ pub fn send_all(shell: &Rc<Shell>, ops: Vec<Op>) {
 pub fn act(b: &Rc<Builder>, anchor: &gtk::Widget, a: &Act) {
     match a {
         Act::Ops(ops) => send_all(&b.shell, ops.clone()),
+        Act::RemoveDisc { id } => {
+            let (shell, id) = (b.shell.clone(), id.clone());
+            let s = shell.clone();
+            shell.link.call(
+                move |w| async move { w.disc_remove(&id).await },
+                move |r| {
+                    if let Err(e) = r {
+                        s.toast(wad_proto::Level::Warn, &e.message, None);
+                    }
+                },
+            );
+        }
         Act::NewKey { kind, then } => {
             let (shell, kind, then) = (b.shell.clone(), *kind, then.clone());
             ask(

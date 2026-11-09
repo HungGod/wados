@@ -111,7 +111,7 @@ pub static APPS: [(AppId, Recipe); 13] = [
 
 /// The command line's tools: each a feature script (its package is its id).
 /// What each script installs on Fedora 44 is noted beside it.
-pub static TOOLS: [(&str, Recipe); 9] = [
+pub static TOOLS: [(&str, Recipe); 10] = [
     // dnf: gcc gcc-c++ make cmake ninja-build gdb pkgconf-pkg-config clang-tools-extra (clang-format)
     ("cpp", feature("cpp", &[], "cmake --version")),
     // dnf: python3 python3-pip python3-devel (venv is python3's own)
@@ -125,12 +125,27 @@ pub static TOOLS: [(&str, Recipe); 9] = [
     ("rust", feature("rust", &["cpp"], "rustc --version")),
     ("android", Recipe::Todo("Java, Gradle, adb and the Android SDK's command-line tools, as v1's feature")),
     ("claude-code", feature("claude-code", &["nodejs"], "claude --version")),
+    // A standalone binary from OpenRouter's GitHub releases (downloaded, not
+    // the API: no token). It signs in with `ori login`.
+    (
+        "ori",
+        Recipe::Feature(Feature {
+            name: "ori",
+            needs: &[],
+            desktop: None,
+            // `ori --version` answers JSON: its version line, as it prints it.
+            probe: Some(
+                "ORI_NO_UPDATE_CHECK=1 ori --version | sed -n 's/.*\"version\": *\"\\([^\"]*\\)\".*/\\1/p' | head -n1",
+            ),
+            github: false,
+        }),
+    ),
     ("hplip", Recipe::Todo("Fedora's hplip and cups-client (a feature)")),
 ];
 
 /// Features in the order they stack: what others need first, the big,
 /// common ones low. (Each one once: a test checks.)
-pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "claude-code", "dolphin", "steam", "vscode"];
+pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "claude-code", "ori", "dolphin", "steam", "vscode"];
 
 /// An app's recipe (every app has one, if only a `Todo`).
 pub fn app(id: AppId) -> &'static Recipe {

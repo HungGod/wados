@@ -68,11 +68,11 @@ pub trait Accounts: Send + Sync + 'static {
     async fn github_repos(&self) -> Result<Vec<Repo>, ApiError>;
 }
 
-/// The machine's, until they're made: 501, "comes in phase 6".
+/// The machine's, until they're made: 501, "isn't here yet".
 pub struct NotYet;
 
 fn not_yet<T>(what: &str) -> Result<T, ApiError> {
-    Err(ApiError::not_implemented(format!("{what} comes in phase 6")))
+    Err(ApiError::not_implemented(format!("{what} isn't here yet")))
 }
 
 #[async_trait]
@@ -213,9 +213,20 @@ async fn github_repos(State(app): State<Arc<AppState>>) -> Answer<Vec<Repo>> {
 /// The library's web keys, each with its folder (made if it's new): the
 /// machine's WadBrowser keeps a key's cookies there (crate::keys).
 async fn web_keys(State(app): State<Arc<AppState>>) -> Answer<Vec<WebKey>> {
-    let keys = app.docs.snapshot().keys;
+    let lib = app.docs.snapshot();
+    // A folder stays while any wadspace names its key, even one the library
+    // has dropped: nothing validates those references, and removing the
+    // folder is what losing the cookies would mean.
+    let mut in_use: Vec<String> = lib.keys.iter().map(|k| k.id.clone()).collect();
+    for x in &lib.wadspaces {
+        for k in x.secrets.by_slot.values() {
+            in_use.push(k.id.clone());
+        }
+        in_use.extend(x.secrets.groups.iter().map(|g| g.key.id.clone()));
+    }
+    let keys = lib.keys;
     let app = app.clone();
-    let web = tokio::task::spawn_blocking(move || app.keys.web(&keys))
+    let web = tokio::task::spawn_blocking(move || app.keys.web(&keys, &in_use))
         .await
         .map_err(|e| ApiError::internal(format!("the keys' folders: {e}")))?;
     Ok(Json(web))

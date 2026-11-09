@@ -43,7 +43,7 @@ and what belongs to the person's session stays in the session.
   `btPrompt` event. Looking for devices stops by itself unless it's asked again. Turning it on with no controller is
   refused with "This machine has no Bluetooth".
 - **Updates** (`updates.rs`):
-  - **bootc's timer stays off,** because it would reboot. wadd checks every 12 hours, downloads what it finds and
+  - **bootc's timer stays off,** because it would reboot. wadd checks every 15 minutes, downloads what it finds and
     stages it. **Restarting is always the person's.**
   - **Cancelling** undeploys a staged update and remembers its digest as turned down, so the next check doesn't fetch
     it again. Download on the page still does.

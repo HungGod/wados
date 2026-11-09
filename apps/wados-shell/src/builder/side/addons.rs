@@ -9,7 +9,8 @@
 //!
 //! Lit: in it. A click adds one (its app comes along) or takes it out
 //! (Undo's in the toast); drag one onto a stack or a wadspace, or open
-//! desktop.
+//! desktop. A disc's pill right-clicked has a menu of its own: remove it
+//! from this machine (its file, and every gamespace's copy of it).
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -25,6 +26,7 @@ use wad_model::{AppId, BuildCommand, CommandKind, Wadspace};
 
 use super::addon_list::{self, Group, GroupId, Item, focus, focus_toggle, toggle};
 use super::ctl::{self, Row};
+use super::keys::Act;
 use super::kit::{self, Field};
 use crate::builder::{Builder, Tab};
 use crate::dnd::{self, Held};
@@ -233,8 +235,20 @@ impl Panel {
             let gid = *id;
             part.pills.set(&keyed, |i| item_pill(&me, gid, i), |_, _| {});
             for (k, w) in part.pills.keyed() {
-                if let Some(i) = items.get(&(gid, k)) {
-                    paint_item(&w, i, editable);
+                if let Some(i) = items.get(&(gid, k.clone())) {
+                    paint_item(&w, i, editable, gid == GroupId::Dolphin);
+                }
+                // A disc's pill, right-clicked: take it off this machine.
+                if gid == GroupId::Dolphin {
+                    let (p, w2, key) = (me.clone(), w.clone(), k.to_string());
+                    let g = gtk::GestureClick::builder().button(gtk::gdk::BUTTON_SECONDARY).build();
+                    g.connect_pressed(move |g, _, x, y| {
+                        g.set_state(gtk::EventSequenceState::Claimed);
+                        if let Some(p) = p.upgrade() {
+                            p.disc_menu(&w2, &key, (x, y));
+                        }
+                    });
+                    w.add_controller(g);
                 }
             }
             if let Some(f) = &part.focus {
@@ -282,6 +296,35 @@ impl Panel {
         if let (Some(x), Some(i)) = (x, i) {
             self.act(toggle(&x, &i));
         }
+    }
+
+    /// A disc's pill, right-clicked: its menu (off this machine, and where
+    /// it's used). Not an edit of the wadspace, so it isn't `editable`.
+    fn disc_menu(&self, anchor: &gtk::Widget, key: &str, at: (f64, f64)) {
+        let Some(b) = self.builder.upgrade() else { return };
+        let Some(id) = key.strip_prefix("dolphin:") else { return };
+        let lib = b.shell.store.library();
+        let Some(d) = lib.discs.get(id).cloned() else { return };
+        let choices = addon_list::disc_menu(&lib, &d);
+        let (wb, wa) = (self.builder.clone(), anchor.downgrade());
+        kit::menu(anchor, Some(at), &format!("addon:{key}"), choices, move |p: &crate::builder::side::keys::Pick| {
+            let (Some(b), Some(a)) = (wb.upgrade(), wa.upgrade()) else { return };
+            // A disc's file is deleted for good (no Undo), so it's asked first.
+            if let Act::RemoveDisc { id } = &p.act {
+                let name = b.shell.store.library().discs.get(id).map(|d| d.name.clone()).unwrap_or_default();
+                confirm_remove(&a, &name, {
+                    let (b, a, id) = (wb.clone(), wa.clone(), id.clone());
+                    move || {
+                        // The Builder may have gone while the dialog was up.
+                        if let (Some(b), Some(a)) = (b.upgrade(), a.upgrade()) {
+                            kit::act(&b, &a, &Act::RemoveDisc { id: id.clone() });
+                        }
+                    }
+                });
+                return;
+            }
+            kit::act(&b, &a, &p.act);
+        });
     }
 
     /// A disc from this computer. It stays on this machine unless the person
@@ -433,7 +476,7 @@ impl ctl::Rows for Panel {
                 out.push(Row::new(format!("suggest:{k}"), &w, label_of(&w)));
             }
         }
-        for (_, p) in &self.parts {
+        for (gid, p) in &self.parts {
             if !p.card.is_visible() {
                 continue;
             }
@@ -441,7 +484,21 @@ impl ctl::Rows for Panel {
                 out.push(Row::new("focus", f, "Focus").lit(f.has_css_class("in")));
             }
             for (k, w) in p.pills.keyed() {
-                out.push(Row::new(format!("addon:{k}"), &w, label_of(&w)).lit(w.has_css_class("in")));
+                let row = Row::new(format!("addon:{k}"), &w, label_of(&w)).lit(w.has_css_class("in"));
+                // A disc's pill, right-clicked: take it off this machine
+                // (and `wadsctl side menu` can open its menu too).
+                let row = if *gid == GroupId::Dolphin {
+                    let (me2, w2, key) = (self.me.clone(), w.clone(), k.clone());
+                    let menu: Rc<dyn Fn()> = Rc::new(move || {
+                        if let Some(p) = me2.upgrade() {
+                            p.disc_menu(&w2, &key, (0.0, 0.0));
+                        }
+                    });
+                    row.menu(menu)
+                } else {
+                    row
+                };
+                out.push(row);
             }
         }
         let card_of = |g: GroupId| self.parts.iter().find(|(id, _)| *id == g).is_some_and(|(_, p)| p.card.is_visible());
@@ -542,6 +599,24 @@ fn label_of(w: &gtk::Widget) -> String {
     name_label(w).map(|l| l.label().to_string()).unwrap_or_default()
 }
 
+/// Asks before a disc's file is deleted for good (no Undo): `then`, if they
+/// mean it.
+fn confirm_remove(anchor: &gtk::Widget, name: &str, then: impl Fn() + 'static) {
+    let ask = gtk::AlertDialog::builder()
+        .message(format!("Remove {name} from this machine?"))
+        .detail("Its file is deleted. A copy kept in your packages stays.")
+        .buttons(["Cancel", "Remove"])
+        .cancel_button(0)
+        .default_button(0)
+        .build();
+    let window = anchor.root().and_downcast::<gtk::Window>();
+    ask.choose(window.as_ref(), gtk::gio::Cancellable::NONE, move |pick| {
+        if pick == Ok(1) {
+            then();
+        }
+    });
+}
+
 fn suggest_pill(me: &Weak<Panel>, s: &Suggestion) -> gtk::Widget {
     let b = gtk::Button::builder().css_classes(["side-pill"]).build();
     b.set_widget_name(&format!("suggest:{}", s.item));
@@ -592,7 +667,7 @@ fn item_pill(me: &Weak<Panel>, g: GroupId, i: &Item) -> gtk::Widget {
     b.upcast()
 }
 
-fn paint_item(w: &gtk::Widget, i: &Item, editable: bool) {
+fn paint_item(w: &gtk::Widget, i: &Item, editable: bool, a_disc: bool) {
     lit(w, i.lit.is_some());
     if let Some(l) = name_label(w)
         && l.label() != i.name
@@ -605,6 +680,9 @@ fn paint_item(w: &gtk::Widget, i: &Item, editable: bool) {
         None if i.lit.is_some() => format!("{}: in it (click to take it out)", i.name),
         None => format!("Add {}", i.name),
     };
+    // A disc's click adds it here; its right-click is the only way to take
+    // it off the machine, so the tooltip says so.
+    let tip = if a_disc { format!("{tip} (right-click to remove it from this machine)") } else { tip };
     w.set_tooltip_text(Some(&tip));
 }
 

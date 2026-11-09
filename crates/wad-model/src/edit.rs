@@ -437,6 +437,10 @@ pub enum Op {
     /// A disc on this machine, new or pushed (wadd's discs.rs).
     #[serde(rename = "discs.keep")]
     KeepDisc { disc: DiscImage },
+    /// A disc no wadspace has any more, forgotten here (its file's removed
+    /// by the caller; one pushed stays in the account's packages).
+    #[serde(rename = "discs.forget")]
+    ForgetDisc { id: String },
     #[serde(rename = "space.addDisc")]
     AddDisc { ws: String, file: String },
 
@@ -806,6 +810,13 @@ impl Tx<'_> {
             }
             Op::KeepDisc { disc } => {
                 self.lib.discs.insert(disc.id.clone(), disc);
+                Ok(())
+            }
+
+            Op::ForgetDisc { id } => {
+                if self.lib.discs.shift_remove(&id).is_none() {
+                    return Err(not_found("disc", &id));
+                }
                 Ok(())
             }
 

@@ -102,11 +102,11 @@ pub trait Storage: Send + Sync + 'static {
     async fn cleanup(&self) -> Result<JobInfo, ApiError>;
 }
 
-/// None here: 501, "comes in phase 8".
+/// None here: 501, "isn't here yet".
 pub struct NotYet;
 
 fn not_yet<T>(what: &str) -> Result<T, ApiError> {
-    Err(ApiError::not_implemented(format!("{what} comes in phase 8")))
+    Err(ApiError::not_implemented(format!("{what} isn't here yet")))
 }
 
 #[async_trait]

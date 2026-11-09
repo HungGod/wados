@@ -38,7 +38,7 @@ use axum::http::StatusCode;
 use axum::middleware::{self, Next};
 use axum::response::sse::{self, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use futures_util::stream::{self, Stream, StreamExt};
 use tokio::net::UnixListener;
@@ -171,6 +171,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/focus", get(focus).post(focus_start))
         .route("/v1/server", get(server).post(server_set))
         .route("/v1/discs", post(disc_add))
+        .route("/v1/discs/{id}", delete(disc_remove))
         .route("/v1/agents", get(agents).post(agent_send))
         .route("/v1/agents/{id}/{action}", post(agent_act))
         .route("/v1/sandboxes/{id}/mark", post(sandbox_mark))
@@ -375,6 +376,12 @@ async fn disc_add(
     Json(req): Json<wad_proto::DiscAdd>,
 ) -> Result<Json<JobInfo>, Failure> {
     Ok(Json(app.discs.add(req).await?))
+}
+
+/// A disc off this machine (its file; one pushed stays in the packages).
+async fn disc_remove(State(app): State<Arc<AppState>>, Path(id): Path<String>) -> Result<Json<()>, Failure> {
+    app.discs.remove(&id).await?;
+    Ok(Json(()))
 }
 
 async fn server(State(app): State<Arc<AppState>>) -> Json<wad_proto::Server> {

@@ -113,9 +113,10 @@ static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
         })
         .collect();
     let extensions = raw.extensions.into_iter().filter(|e| !retired(AppId::Vscode, &e.id)).collect();
-    // v1's other command-line downloads (its images' features beyond the catalog's tools: claude-code.sh, hplip.sh), as tools here too.
+    // v1's other command-line downloads (its images' features beyond the catalog's tools: claude-code.sh, hplip.sh), as tools here too, and Ori (OpenRouter's agent).
     let more = [
         ("claude-code", "Claude Code", "Anthropic’s claude command, from npm (adds Node.js)"),
+        ("ori", "Ori", "OpenRouter’s command-line coding agent: Claude Code, Codex and more, through OpenRouter"),
         ("hplip", "HP printer tools", "hplip (hp-setup, hp-info) and the CUPS client commands"),
     ];
     let tools = raw
@@ -484,7 +485,7 @@ mod tests {
     #[test]
     fn has_v1s_other_downloads_as_tools_and_not_what_it_dropped() {
         let tools: Vec<_> = tools().iter().map(|t| t.id.as_str()).collect();
-        for id in ["rust", "claude-code", "hplip"] {
+        for id in ["rust", "claude-code", "ori", "hplip"] {
             assert!(tools.contains(&id), "{id}");
         }
         assert!(!tools.contains(&"go") && !tools.contains(&"git-lfs"));

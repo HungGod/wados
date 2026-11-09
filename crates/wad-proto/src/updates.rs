@@ -78,7 +78,7 @@ pub struct UpdateProgress {
     pub total_bytes: u64,
 }
 
-/// `GET /v1/bases`: the base images wadspaces are built on, refreshed every 12 hours.
+/// `GET /v1/bases`: the base images wadspaces are built on, refreshed every 15 minutes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bases {

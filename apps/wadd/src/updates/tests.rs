@@ -326,7 +326,9 @@ fn up_with(m: Machine, images: FakeImages, f: impl FnOnce(&mut FakeBootc, &mut S
     let mut settings = Settings {
         state_dir: dir.path().join("state"),
         auth_file: dir.path().join("run/ostree/auth.json"),
-        every: EVERY,
+        // Not the machine's cadence: these tests drive `due()` themselves,
+        // and a scheduler running behind them would check again mid-test.
+        every: Duration::from_secs(3600),
         first: Duration::from_millis(1),
         tick: Duration::from_millis(5),
         schedule: true,
@@ -535,12 +537,13 @@ async fn a_laptop_doesnt_update_through_bootc() {
 
 #[tokio::test]
 async fn the_schedule_checks_when_its_due_and_remembers() {
-    let up = up();
+    // On the real cadence, for the one test that's about the schedule.
+    let up = up_with(machine(), FakeImages::default(), |_, s| s.every = EVERY);
     up.u.due().await;
     up.until(|u| u.staged.is_some() && u.job.is_none()).await;
     let checks = || up.calls().iter().filter(|c| *c == "bootc upgrade --check").count();
     assert_eq!(checks(), 1);
-    // Not due again for 12 hours.
+    // Not due again for 15 minutes.
     up.u.due().await;
     tokio::time::sleep(Duration::from_millis(20)).await;
     assert_eq!(checks(), 1);

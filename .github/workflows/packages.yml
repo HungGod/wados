@@ -46,6 +46,8 @@ on:
       - crates/wad-gen/src/index.rs
       - crates/wad-gen/src/bin/wados-pkgs/main.rs
       - crates/wad-model/data/catalog.json
+      # The tools the catalog adds beside v1's (the `more` list: claude-code, ori, hplip).
+      - crates/wad-model/src/catalog.rs
       - .github/workflows/packages.yml
       - .github/workflows/package.yml
       - .github/workflows/wados-pkgs.yml

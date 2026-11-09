@@ -465,13 +465,13 @@ impl Apps {
 
 /// Starts a machine app (the Builder: its window opened), or says when it comes.
 pub fn launch(shell: &Shell, app: MachineApp) {
-    let Some((argv, phase)) = app.launch() else {
+    let Some(argv) = app.launch() else {
         if let Some(b) = shell.builder() {
             b.present();
         }
         return;
     };
     if !ui::spawn(argv) {
-        shell.toast(wad_proto::Level::Info, &format!("{} comes in phase {phase}", app.name()), None);
+        shell.toast(wad_proto::Level::Warn, &format!("{} couldn't open", app.name()), None);
     }
 }

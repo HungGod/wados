@@ -53,6 +53,9 @@ pub enum Act {
     Ops(Vec<Op>),
     /// A new key of `kind`, named first (`secrets.create`); then these things sign in with it.
     NewKey { kind: SecretKind, then: SignIns },
+    /// A disc off this machine (`DELETE /v1/discs/{id}`: not an edit of a
+    /// wadspace, which is why it isn't an Op).
+    RemoveDisc { id: String },
 }
 
 /// Things of a wadspace that sign in with a key once it's made: each a
@@ -371,7 +374,7 @@ mod tests {
     fn ops(p: &Pick) -> Vec<Op> {
         match &p.act {
             Act::Ops(o) => o.clone(),
-            Act::NewKey { .. } => panic!("not edits"),
+            Act::NewKey { .. } | Act::RemoveDisc { .. } => panic!("not edits"),
         }
     }
 

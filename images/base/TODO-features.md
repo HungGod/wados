@@ -1,7 +1,9 @@
 # Features still to port
 
 Phase 1 ported `cpp`, `rust`, `nodejs`, `python` and `vscode`
-(`root/usr/local/lib/wadspaces/features/`). Krita isn't a feature: it is the
+(`root/usr/local/lib/wadspaces/features/`), and phase 11 `claude-code`; `ori`
+(OpenRouter's coding agent, a standalone release binary) is a feature of the
+catalog's own, not v1's. Krita isn't a feature: it is the
 RPM app `rpm-krita` (`wadspaces-dnf krita --desktop org.kde.krita.desktop
 krita`). Each script's `need` lines must match `crates/wad-gen/src/recipes.rs`,
 which has a test that checks them. The table lists v1's other features
@@ -13,7 +15,7 @@ phases. `firebase` and `go` (retired from the catalog) are not coming back.
 | `git` | git + git-lfs | No wad-gen recipe yet. The base has git-core; add `git-lfs` if a recipe asks for it |
 | `electron-deps` | Electron's libraries on a minimal Debian | Only needed for AppImages and tarballs, since Fedora's RPMs bring their own: nss, gtk3, alsa-lib, mesa-libgbm, libsecret, libnotify, libXScrnSaver, cups-libs, at-spi2-atk |
 | `chrome` | Google's .deb + `--no-sandbox` wrapper | Google's RPM repository (dl.google.com/linux/chrome/rpm), the same wrapper (`wadspaces-wrap-electron`) |
-| `claude-code` | `npm install -g` + its icon | needs `nodejs`; bring v1's `usr/share/wadspaces/claude-code.png` back with it |
+| `claude-code` | `npm install -g` + its icon | done (phase 11): needs `nodejs` |
 | `obsidian` | AppImage, extracted to /opt | the same, `need electron-deps` |
 | `tiled` | AppImage | Fedora's `tiled` (`rpm-tiled`) |
 | `libresprite` | AppImage | the same AppImage |

@@ -41,6 +41,12 @@ impl Wadd {
         self.post("/v1/discs", &wad_proto::DiscAdd { path: path.into(), push }).await
     }
 
+    /// A disc off this machine (`DELETE /v1/discs/{id}`): its file, and the
+    /// gamespaces' variants of it. One pushed stays in the account's packages.
+    pub async fn disc_remove(&self, id: &str) -> Result<(), Failure> {
+        self.act(reqwest::Method::DELETE, &format!("/v1/discs/{id}"), None::<&()>).await
+    }
+
     /// The Steam accounts signed in here (`GET /v1/steam`).
     pub async fn steam(&self) -> Result<Vec<wad_proto::SteamAccount>, Failure> {
         self.get("/v1/steam").await
