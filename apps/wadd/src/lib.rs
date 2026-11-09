@@ -24,8 +24,10 @@
 //! keys' sign-in flows, devices, the network, install, server mode and focus.
 
 pub mod access;
+pub mod account;
 pub mod agents;
 pub mod api;
+pub mod api_account;
 pub mod api_phase6;
 pub mod api_phase7;
 pub mod api_phase8;
@@ -58,6 +60,7 @@ pub mod proxy;
 pub mod remote;
 pub mod runs;
 pub mod screen;
+pub mod secret_files;
 pub mod selinux;
 pub mod server;
 pub mod setup;
@@ -260,12 +263,24 @@ impl Server {
             ),
         };
         let keys = keys::MachineKeys::new(&config);
+        // The projects' secret files, and the account they're kept in.
+        let secret_files =
+            secret_files::SecretFiles::machine(parts.backend.clone(), docs.clone(), bus.clone(), &config);
+        let account = account::AccountService::new(
+            account::Settings::new(&config),
+            parts.backend.clone(),
+            bus.clone(),
+            machine.clone(),
+            secret_files.clone(),
+            tailnet.as_ref().map(|t| t.tailnet.clone()),
+        );
         let projects = projects::Projects::new(
             projects::Settings::new(&config, profile),
             parts.backend.clone(),
             jobs.clone(),
             net.clone(),
-        );
+        )
+        .with_secret_files(secret_files.clone());
         let runs = runs::Runs::new(
             parts.backend.clone(),
             docs.clone(),
@@ -427,6 +442,8 @@ impl Server {
             discs,
             steam,
             agents,
+            account,
+            secret_files,
         });
         Ok(Self {
             listener,
@@ -463,6 +480,8 @@ impl Server {
             tokio::spawn(watch_screen(app.clone())),
             tokio::spawn(app.focus.clone().run()),
             tokio::spawn(app.agents.clone().run()),
+            tokio::spawn(app.secret_files.clone().run()),
+            tokio::spawn(app.account.clone().run()),
         ];
         if let Some(t) = &self.tailnet {
             loops.extend(t.start(app.clone()));

@@ -401,7 +401,7 @@ async fn a_private_repository_without_a_sign_in_is_left_out_and_says_so() {
     h.open(&ws).await;
     let j = h.job(&ws);
     let s = stage(&j, &format!("project:{pid}"));
-    assert_eq!((s.state, s.error.as_deref()), (PartState::Error, Some("It's private: sign in to GitHub first")));
+    assert_eq!((s.state, s.error.as_deref()), (PartState::Error, Some("It's private: sign in to WadSpaces first")));
     assert_eq!(j.job.status, JobStatus::Done);
     assert!(!h.unit(&ws).contains("/config/Desktop/"));
     assert_eq!(h.projects_json(&ws)["projects"], serde_json::json!([]));
@@ -410,7 +410,7 @@ async fn a_private_repository_without_a_sign_in_is_left_out_and_says_so() {
         .into_iter()
         .filter_map(|e| if let Event::Notice { title, .. } = e { Some(title) } else { None })
         .collect();
-    assert_eq!(notices, ["Hidden: It's private: sign in to GitHub first"]);
+    assert_eq!(notices, ["Hidden: It's private: sign in to WadSpaces first"]);
 }
 
 #[tokio::test]

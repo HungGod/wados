@@ -382,7 +382,7 @@ mod tests {
     #[test]
     fn sign_ins_open_reuse_show_and_close() {
         let gh = WindowSpec::sign_in(Provider::Github, "https://github.com/login/device", Some("A-B".into()));
-        assert_eq!(gh.title(None), "Sign in to GitHub");
+        assert_eq!(gh.title(None), "Sign in to WadSpaces");
         assert_eq!(gh.app_id(), APP_ID);
         assert!(!gh.private && gh.profile.is_none() && !gh.has_urlbar() && !gh.saved_in_session());
 
@@ -403,7 +403,7 @@ mod tests {
 
         let show = req(&["--signin", "github", "--show"]);
         assert_eq!(plan(&show, &cx(&open)), Plan::Tabs { window: 9, urls: vec![] });
-        assert!(matches!(plan(&show, &cx(&[])), Plan::Nothing { why } if why.contains("GitHub")));
+        assert!(matches!(plan(&show, &cx(&[])), Plan::Nothing { why } if why.contains("WadSpaces")));
         // Closed: opened again where it was.
         let saved = |p: Provider| {
             (p == Provider::Github).then(|| signin::Saved {

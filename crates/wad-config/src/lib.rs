@@ -40,7 +40,43 @@ pub struct Config {
     pub tailnet: Tailnet,
     pub packages: Packages,
     pub github: Github,
+    pub account: Account,
     pub radios: Radios,
+}
+
+/// The WadSpaces account (Firebase): the machine's link to its owner's
+/// account, which lists it for the owner's phone and other machines and
+/// keeps the projects' secret files. Signing in to GitHub links it.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct Account {
+    /// The account's Firebase web configuration (its project, auth domain,
+    /// functions' region and web key: public, it's the web app's, never a
+    /// sign-in): `/etc/wados/firebase.toml`, which the installer stick puts
+    /// there (never the image's: it's public). None there: no account.
+    pub firebase: PathBuf,
+    /// Firebase's APIs: empty for Google's; the emulators' or a test's.
+    pub identity: String,
+    pub firestore: String,
+    pub functions: String,
+    /// How often the machine tells the account it's on (its tailnet
+    /// address, for the phone).
+    pub heartbeat_s: u64,
+    /// How often the account's secret files are fetched.
+    pub sync_s: u64,
+}
+
+impl Default for Account {
+    fn default() -> Self {
+        Self {
+            firebase: "/etc/wados/firebase.toml".into(),
+            identity: String::new(),
+            firestore: String::new(),
+            functions: String::new(),
+            heartbeat_s: 60,
+            sync_s: 600,
+        }
+    }
 }
 
 /// The network and Bluetooth (Settings ▸ Wi-Fi, Network, Bluetooth):
@@ -431,6 +467,7 @@ impl Config {
             tailnet: Tailnet::for_profile(profile),
             packages: Packages::default(),
             github: Github::default(),
+            account: Account::default(),
             radios: Radios::for_profile(profile),
         }
     }
@@ -552,8 +589,10 @@ mod tests {
         let c = Config::defaults(Profile::System);
         assert!(c.streaming.host.is_empty());
         let text = toml::to_string(&c).unwrap();
-        // The TURN key is its file's (`turn`), never a value here; v1's [cloud] (Firebase) is gone.
-        for word in ["token", "api_key", "password", "secret", "firebase", "[cloud]"] {
+        // The TURN key is its file's (`turn`), never a value here; the
+        // account's Firebase configuration is its file's too (`firebase`),
+        // and its sign-in is wadd's state, never the configuration's.
+        for word in ["token", "api_key", "password", "secret", "project_id", "[cloud]"] {
             assert!(!text.contains(word), "{word} in the defaults");
         }
         // Cloudflare's TURN API is only where to ask, with the key from that file.

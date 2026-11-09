@@ -206,6 +206,8 @@ pub struct Projects {
     drive: Arc<dyn Drive>,
     dav: Dav,
     copies: Copies,
+    /// The projects' secret files, put in each GitHub clone as it's made or found.
+    secret_files: Option<Arc<crate::secret_files::SecretFiles>>,
 }
 
 impl Projects {
@@ -218,7 +220,12 @@ impl Projects {
         });
         let copies = Copies::new(&s.state_dir, s.owner());
         let git = wad_git::Git::default().with_github(&s.github);
-        Self { s, backend, jobs, net, git, drive, dav: Dav::new(), copies }
+        Self { s, backend, jobs, net, git, drive, dav: Dav::new(), copies, secret_files: None }
+    }
+
+    /// The secret files put in each GitHub clone as a wadspace opens.
+    pub fn with_secret_files(self, secret_files: Arc<crate::secret_files::SecretFiles>) -> Self {
+        Self { secret_files: Some(secret_files), ..self }
     }
 
     /// Mounting with `drive` instead of rclone (tests).
@@ -330,7 +337,13 @@ impl Projects {
 
     async fn make(&self, ws: &Wadspace, p: &Project, o: &Opening, stage: &str) -> Result<Got, String> {
         match &p.kind {
-            ProjectKind::Github { repo, .. } => self.github(ws, p, repo, &o.job, stage).await,
+            ProjectKind::Github { repo, .. } => {
+                let got = self.github(ws, p, repo, &o.job, stage).await?;
+                if let Some(f) = &self.secret_files {
+                    f.place(ws, &p.id).await;
+                }
+                Ok(got)
+            }
             ProjectKind::Mount { source, make } => {
                 let path = first(source, &p.as_name)?;
                 if self.here(source) {
@@ -712,7 +725,7 @@ pub fn clone_failed(repo: &str, signed_in: bool, e: &str) -> String {
     .iter()
     .any(|w| l.contains(w));
     match (unseen, signed_in) {
-        (true, false) => "It's private: sign in to GitHub first".into(),
+        (true, false) => "It's private: sign in to WadSpaces first".into(),
         (true, true) => format!("{repo} isn't on GitHub, or your GitHub account can't see it"),
         (false, _) => format!("Couldn't clone {repo}: {e}"),
     }
@@ -782,7 +795,7 @@ mod tests {
     #[test]
     fn why_a_clone_failed() {
         let no_user = "git clone https://github.com/o/r.git failed: fatal: could not read Username for 'https://github.com': terminal prompts disabled";
-        assert_eq!(clone_failed("o/r", false, no_user), "It's private: sign in to GitHub first");
+        assert_eq!(clone_failed("o/r", false, no_user), "It's private: sign in to WadSpaces first");
         let missing = "git clone failed: remote: Repository not found.";
         assert_eq!(clone_failed("o/r", true, missing), "o/r isn't on GitHub, or your GitHub account can't see it");
         let net = "git clone failed: fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com";

@@ -234,7 +234,10 @@ async fn a_device_code_for_the_apps_scopes() {
     let asked = s.received_requests().await.unwrap();
     assert_eq!(
         form(&asked[0]),
-        [("client_id".into(), "Ov23lia8qVymk05q5E4i".into()), ("scope".into(), "repo workflow read:org".into())]
+        [
+            ("client_id".into(), "Ov23lia8qVymk05q5E4i".into()),
+            ("scope".into(), "repo workflow read:org user:email".into())
+        ]
     );
 }
 

@@ -3474,6 +3474,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "wad-firebase"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "reqwest",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "wad-proto",
+ "wiremock",
+]
+
+[[package]]
 name = "wad-gen"
 version = "0.1.0"
 dependencies = [
@@ -3749,6 +3762,7 @@ dependencies = [
  "wad-bt",
  "wad-cloudflare",
  "wad-config",
+ "wad-firebase",
  "wad-gen",
  "wad-git",
  "wad-github",

@@ -570,7 +570,7 @@ mod tests {
         assert_eq!(os_name("android"), "Android");
         assert_eq!(os_name("iOS"), "iOS");
         assert_eq!(os_name("plan9"), "plan9");
-        assert_eq!(in_browser_text("GitHub"), "Finish signing in to GitHub in the browser window.");
+        assert_eq!(in_browser_text("WadSpaces"), "Finish signing in to WadSpaces in the browser window.");
         assert_eq!(state_icon(PartState::Done), "check");
     }
 }

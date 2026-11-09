@@ -220,14 +220,14 @@ async fn a_sign_in_keeps_the_token_then_whose_it_is_its_repos_and_a_sign_out() {
     // Signed out: no account, no repos.
     assert_eq!(w.github().await.unwrap(), None);
     let e = w.github_repos().await.unwrap_err();
-    assert_eq!((e.status, e.message.as_str()), (401, "Sign in to GitHub first"));
+    assert_eq!((e.status, e.message.as_str()), (401, "Sign in to WadSpaces first"));
 
     let job = w.github_signin(&SignInRequest::default()).await.unwrap();
     assert_eq!(job.job.kind, JobKind::Github);
     let labels: Vec<&str> = job.job.stages.iter().map(|s| s.label.as_str()).collect();
     assert_eq!(
         labels,
-        ["Opening GitHub's sign-in in the browser", "Signing in to GitHub in the browser", "Saving the sign-in"]
+        ["Opening GitHub's sign-in in the browser", "Signing in to WadSpaces in the browser", "Saving the sign-in"]
     );
     let done = ended(w, &job).await;
     assert_eq!(done.job.status, JobStatus::Done, "{:?}", done.job.error);

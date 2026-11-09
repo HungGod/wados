@@ -90,6 +90,9 @@ struct Rig {
     install: MachineInstall,
 }
 
+/// What host/stick-files writes: the web app's keys alone.
+const FIREBASE: &str = "api_key = \"web-key\"\nproject_id = \"wad-test\"\n";
+
 fn rig(name: &str, api: Option<&str>, keys: bool, result: &'static str) -> Rig {
     let base = std::env::temp_dir().join(format!("wadd-install-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&base);
@@ -102,6 +105,7 @@ fn rig(name: &str, api: Option<&str>, keys: bool, result: &'static str) -> Rig {
     std::fs::write(state.join("installer/installer.toml"), file).unwrap();
     if keys {
         std::fs::write(state.join("installer/cloudflare.toml"), KEYS).unwrap();
+        std::fs::write(state.join("installer/firebase.toml"), FIREBASE).unwrap();
     }
     let bus = Bus::new(wad_proto::MachineInfo {
         id: "m".into(),
@@ -177,6 +181,8 @@ async fn the_machine_gets_its_files_and_never_the_sticks_keys() {
     let wadd = file(&seen, "provision/wadd.toml").unwrap();
     assert!(wadd.contains("id = \"studio\"") && wadd.contains("host = \"studio.wadspaces.com\""));
     assert!(file(&seen, "provision/turn.toml").unwrap().contains("turn-key"));
+    // The account's web app: from the stick, never the image.
+    assert_eq!(file(&seen, "provision/firebase.toml"), Some(FIREBASE));
     for (name, bytes) in seen.iter() {
         let t = String::from_utf8_lossy(bytes);
         assert!(!t.contains("dns-key") && !t.contains("tunnel-key"), "{name} has a stick's key");
@@ -210,6 +216,7 @@ async fn a_stick_without_keys_installs_a_machine_without_an_address() {
     assert!(file(&seen, "request").unwrap().contains("ENCRYPT=0\n"));
     assert!(file(&seen, "provision/cloudflared-token").is_none());
     assert!(file(&seen, "provision/turn.toml").is_none());
+    assert!(file(&seen, "provision/firebase.toml").is_none());
     assert!(!file(&seen, "provision/wadd.toml").unwrap().contains("streaming"));
 }
 

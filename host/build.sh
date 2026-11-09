@@ -43,7 +43,9 @@
 # wadspaces.der, or one .priv and one .der): it's handed to podman as build
 # secrets, which only the stage that signs the modules sees. Without it the
 # nvidia variant is skipped. The stick's `installer` reads cloudflare.toml
-# from the same folder, onto the stick only. Nothing else here reads that folder.
+# and firebase.toml (the WadSpaces account's web app) from the same folder,
+# onto the stick only: the image is public, and neither is ever in it.
+# Nothing else here reads that folder.
 #
 # The image's version (org.opencontainers.image.version, which bootc and the
 # Updates page show): 44.<the day, UTC>.<hour and minute>, or WADOS_VERSION.
@@ -371,6 +373,13 @@ installer() {
         log "no ${keys}: machines this installs have no public address"
         keys=""
     fi
+    local firebase="${SECRETS}/firebase.toml"
+    if [[ -f "${firebase}" ]]; then
+        log "machines will link to the WadSpaces account: ${firebase} goes on the stick"
+    else
+        log "no ${firebase}: machines this installs have no WadSpaces account"
+        firebase=""
+    fi
     sudo -v
     log "copying ${image} into root's container storage"
     podman image scp "${USER}@localhost::${image}" root@localhost::
@@ -394,7 +403,7 @@ installer() {
     [[ -n "${root}" ]] || die "no root partition on ${dev}"
     sudo mount "${root}" "${mnt}"
     var="$(sudo find "${mnt}/ostree/deploy" -mindepth 2 -maxdepth 2 -name var -type d | head -1)"
-    sudo "${HERE}/stick-files" "${var}" "${target}" "${keys}"
+    sudo "${HERE}/stick-files" "${var}" "${target}" "${keys}" "" "${firebase}"
     sudo umount "${mnt}"
     rmdir "${mnt}"
     sync

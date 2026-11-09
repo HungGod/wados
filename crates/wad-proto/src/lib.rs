@@ -5,6 +5,7 @@
 //! over the wire as it's saved. Edits are [`wad_model::edit::Op`]s, applied
 //! by wadd (`POST /v1/ops`), so every surface edits the same way.
 
+pub mod account;
 pub mod bluetooth;
 mod error;
 pub mod github;
@@ -18,6 +19,10 @@ pub mod streams;
 pub mod tailnet;
 pub mod updates;
 
+pub use account::{
+    AccountLink, AccountState, SecretFile, SecretFileAnswer, SecretFileAsk, SecretFileAskKind, SecretFileKeep,
+    SecretFiles, SecretOrigin,
+};
 pub use bluetooth::{Bluetooth, BtAnswer, BtAsk, BtDevice, BtKind, BtPrompt};
 pub use error::{ApiError, ErrorCode};
 pub use github::{GithubAccount, Repo, SignInRequest};
@@ -247,6 +252,10 @@ pub enum Event {
     Github {
         account: Option<GithubAccount>,
     },
+    /// The machine's link to its WadSpaces account, as `GET /v1/account` has it.
+    Account(AccountLink),
+    /// The secret files and what's asked about them, as `GET /v1/secret-files` has them.
+    SecretFiles(SecretFiles),
     /// A sign-in waiting in the browser: the shell opens `url` in WadBrowser
     /// (`code`: the one to type there, GitHub's device code). The present until its `signInDone`.
     SignIn {
@@ -302,6 +311,8 @@ impl Event {
             Event::Tailnet(_) => Some("tailnet".into()),
             Event::Peers { .. } => Some("peers".into()),
             Event::Github { .. } => Some("github".into()),
+            Event::Account(_) => Some("account".into()),
+            Event::SecretFiles(_) => Some("secretFiles".into()),
             Event::SignIn { provider, .. } => Some(format!("signIn:{provider}")),
             Event::Streams { .. } => Some("streams".into()),
             Event::Network(_) => Some("network".into()),

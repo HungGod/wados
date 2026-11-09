@@ -420,7 +420,7 @@ impl Accounts for Sample {
             .iter()
             .map(|(id, label)| (*id, if *id == "signin" { signin.held_label() } else { label.to_string() }))
             .collect();
-        self.0.job(JobKind::Github, "Signing in to GitHub", "github", &stages, |me, job| async move {
+        self.0.job(JobKind::Github, "Signing in to WadSpaces", "github", &stages, |me, job| async move {
             let (url, code) = ("https://github.com/login/device", "WADS-0601");
             me.stage(&job, "open", false, 1).await;
             me.jobs.update(&job, true, |j| {
@@ -458,7 +458,7 @@ impl Accounts for Sample {
 
     async fn github_repos(&self) -> Result<Vec<Repo>, ApiError> {
         if self.0.st.lock().unwrap().github.is_none() {
-            return Err(ApiError::new(ErrorCode::Unauthorized, "Sign in to GitHub first"));
+            return Err(ApiError::new(ErrorCode::Unauthorized, "Sign in to WadSpaces first"));
         }
         Ok(repos(now_ms()))
     }

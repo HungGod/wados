@@ -272,7 +272,8 @@ impl Store {
                 Change::Bluetooth
             }
             // Pairing's prompts are Settings' (pairing starts there).
-            Event::BtPrompt { .. } | Event::Storage(_) => {
+            // The account and its secret files are Settings' too.
+            Event::BtPrompt { .. } | Event::Storage(_) | Event::Account(_) | Event::SecretFiles(_) => {
                 return;
             }
         };

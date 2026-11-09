@@ -10,7 +10,7 @@
 //!   1. "Opening GitHub's sign-in in the browser": GitHub gives a device
 //!      code for the app's scopes (and the asked ones, and the ones the
 //!      token has already), and the job's params get its `url` and `code`;
-//!   2. "Signing in to GitHub in the browser" (held): `signIn` with the
+//!   2. "Signing in to WadSpaces in the browser" (held): `signIn` with the
 //!      device page and the code (the shell opens it in WadBrowser) while
 //!      wadd polls for the token; `signInDone` when that's over, however
 //!      it ends (cancelling the job stops the polling and closes it);
@@ -61,7 +61,7 @@ pub const WHO_FOR: Duration = Duration::from_secs(300);
 /// Each call to GitHub, at most.
 const CALL_TIMEOUT: Duration = Duration::from_secs(20);
 const WHO_FILE: &str = "github.json";
-const SIGNED_OUT: &str = "Sign in to GitHub first";
+const SIGNED_OUT: &str = "Sign in to WadSpaces first";
 
 /// The job's stages: (id, label).
 pub const STAGES: [(&str, &str); 3] =
@@ -394,7 +394,7 @@ impl Accounts for GithubService {
             .iter()
             .map(|(id, label)| (id.to_string(), if *id == "signin" { signin.clone() } else { label.to_string() }))
             .collect();
-        let id = me.jobs.create(JobKind::Github, "Signing in to GitHub", "github", &stages);
+        let id = me.jobs.create(JobKind::Github, "Signing in to WadSpaces", "github", &stages);
         me.jobs.update(&id, true, |j| {
             j.params.insert("scopes".into(), Value::from(scopes.clone()));
         });

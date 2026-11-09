@@ -18,7 +18,7 @@
 //!     when it wasn't open.
 //! ```
 //!
-//! Providers: `github` ("Sign in to GitHub") and `tailscale` ("Sign in to
+//! Providers: `github` ("Sign in to WadSpaces", with GitHub) and `tailscale` ("Sign in to
 //! Tailscale"). A sign-in window is like a web app's: no address bar, the
 //! sign-in's title, its own window (one per provider), in the default
 //! profile, so what it signs in to stays signed in in the browser. It isn't
@@ -63,10 +63,10 @@ impl Provider {
         }
     }
 
-    /// Its name, as people know it.
+    /// Its name, as people know it (GitHub's is WadSpaces' sign-in).
     pub fn name(self) -> &'static str {
         match self {
-            Provider::Github => "GitHub",
+            Provider::Github => "WadSpaces",
             Provider::Tailscale => "Tailscale",
         }
     }
@@ -195,7 +195,7 @@ mod tests {
         assert_eq!(Provider::parse("tailscale"), Some(Provider::Tailscale));
         assert_eq!(Provider::parse("steam"), None);
         assert_eq!(Provider::parse("GitHub"), None);
-        assert_eq!(Provider::Github.title(), "Sign in to GitHub");
+        assert_eq!(Provider::Github.title(), "Sign in to WadSpaces");
         assert_eq!(Provider::Tailscale.title(), "Sign in to Tailscale");
     }
 

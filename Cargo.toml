@@ -27,6 +27,7 @@ wad-cloudflare = { path = "crates/wad-cloudflare" }
 wad-net = { path = "crates/wad-net" }
 wad-bt = { path = "crates/wad-bt" }
 wad-desk = { path = "crates/wad-desk" }
+wad-firebase = { path = "crates/wad-firebase" }
 
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

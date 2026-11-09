@@ -34,6 +34,7 @@ tracing-subscriber.workspace = true
 wad-bt.workspace = true
 wad-cloudflare.workspace = true
 wad-config.workspace = true
+wad-firebase.workspace = true
 wad-gen.workspace = true
 wad-git.workspace = true
 wad-github.workspace = true

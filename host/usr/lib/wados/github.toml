@@ -5,9 +5,13 @@
 # [github] app says where it is.
 client_id = "Ov23lia8qVymk05q5E4i"
 
+# The same app is the WadSpaces account's GitHub sign-in (Firebase Auth has
+# its client ID and secret, in the Firebase console): wadd links the machine
+# to the account with the token this sign-in gives.
+#
 # What the first sign-in asks a token to be able to do: clone, pull and push
-# repos (private ones too), push changes to .github/workflows, and read the
-# account's orgs (`gh repo list <org>`). write:packages (pushing games and
-# discs to ghcr.io) comes from a second, short sign-in the first time a push
-# needs it.
-scopes = ["repo", "workflow", "read:org"]
+# repos (private ones too), push changes to .github/workflows, read the
+# account's orgs (`gh repo list <org>`), and read its email (the account
+# reads it). write:packages (pushing games and discs to ghcr.io) comes from a
+# second, short sign-in the first time a push needs it.
+scopes = ["repo", "workflow", "read:org", "user:email"]

@@ -81,7 +81,7 @@ impl fmt::Debug for Token {
 /// What went wrong, in words for the person (a job's error says this).
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("GitHub rejected the token (it may have been revoked): sign in to GitHub again")]
+    #[error("GitHub rejected the token (it may have been revoked): sign in to WadSpaces again")]
     BadToken,
     #[error("Couldn't reach GitHub: {0}")]
     Network(#[source] reqwest::Error),

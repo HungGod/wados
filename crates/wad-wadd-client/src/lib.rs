@@ -11,6 +11,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use wad_proto::Event;
 
+mod account;
 mod open_with;
 mod phase6;
 mod phase7;

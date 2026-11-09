@@ -11,9 +11,11 @@
 
 use serde::{Deserialize, Serialize};
 
-/// What the first sign-in asks for. `write:packages` comes from a second,
-/// short sign-in the first time a push needs it.
-pub const FIRST_SCOPES: [&str; 3] = ["repo", "workflow", "read:org"];
+/// What the first sign-in asks for (`user:email`: the WadSpaces account,
+/// which Firebase Auth makes from the same sign-in, reads the account's
+/// email). `write:packages` comes from a second, short sign-in the first
+/// time a push needs it.
+pub const FIRST_SCOPES: [&str; 4] = ["repo", "workflow", "read:org", "user:email"];
 
 /// The GitHub account wadd has a token for.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

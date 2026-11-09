@@ -19,7 +19,7 @@
 //! | `POST /v1/peers/{id}/wadspaces/{ws}/copy` | a CopyWadspace job (`space.import`) → [`JobInfo`] | tailnet & peers |
 //! | `GET /v1/github` | the account, or null ([`GithubAccount`]) | accounts |
 //! | `POST /v1/github/signin` | signs in ([`SignInRequest`], optional): a Github job → [`JobInfo`] | accounts |
-//! | `DELETE /v1/github` | signs out → null | accounts |
+//! | `DELETE /v1/github` | signs out (and unlinks the WadSpaces account) → null | accounts |
 //! | `GET /v1/github/repos` | its repositories ([`Repo`]) | accounts |
 //! | `GET /v1/keys/web` | the web keys and their folders, for the machine's browser ([`WebKey`]) | accounts |
 //!
@@ -115,7 +115,7 @@ impl Accounts for NotYet {
         not_yet("GitHub")
     }
     async fn github_signin(&self, _: SignInRequest) -> Result<JobInfo, ApiError> {
-        not_yet("Signing in to GitHub")
+        not_yet("Signing in to WadSpaces")
     }
     async fn github_signout(&self) -> Result<(), ApiError> {
         not_yet("Signing out of GitHub")
@@ -196,8 +196,13 @@ async fn github_signin(State(app): State<Arc<AppState>>, body: Option<Json<SignI
     Ok(Json(app.accounts.github_signin(req).await?))
 }
 
+/// Signing out is of WadSpaces: GitHub's sign-in goes, and the machine leaves
+/// the account it linked (its sign-in, and the account's secret files here).
 async fn github_signout(State(app): State<Arc<AppState>>) -> Answer<Option<GithubAccount>> {
     app.accounts.github_signout().await?;
+    if app.account.view().state == wad_proto::AccountState::Linked {
+        app.account.unlink().await?;
+    }
     Ok(Json(None))
 }
 

@@ -2,8 +2,9 @@
 
 Phase 6. A WadOS machine signs in to GitHub and Tailscale. It knows your other machines, and lets devices you
 trust reach its wadspaces. It copies a wadspace from another machine, and keeps folders, files and repositories
-in a wadspace. There's no cloud: v1's Firebase account is gone. Everything between machines goes over the
-tailnet, so the other machine has to be online.
+in a wadspace. Everything between machines goes over the tailnet, so the other machine has to be online. (v1's Firebase
+account was dropped here, and came back later as a directory and a vault, never a relay: 0013. A linked machine
+trusts its owner's phone by the account's ID token; everything below still holds.)
 
 ## Who's calling
 

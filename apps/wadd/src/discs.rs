@@ -18,9 +18,9 @@ use wad_proto::{ApiError, DiscAdd, Event, JobInfo, Level};
 use crate::jobs::{Jobs, now_ms};
 use crate::library::Docs;
 
-pub const NEEDS_GITHUB: &str = "Link GitHub first: keeping it in your packages needs your account";
+pub const NEEDS_GITHUB: &str = "Sign in to WadSpaces first: keeping it in your packages needs your account";
 /// A first push: the token from the first sign-in can't write packages.
-pub const NEEDS_PACKAGES: &str = "GitHub hasn’t said this machine may push packages: sign in to GitHub once more";
+pub const NEEDS_PACKAGES: &str = "GitHub hasn’t said this machine may push packages: sign in to WadSpaces once more";
 
 /// An account that may be pushed as.
 #[derive(Clone)]

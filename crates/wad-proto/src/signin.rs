@@ -36,10 +36,11 @@ impl SignInProvider {
         }
     }
 
-    /// As the person reads it ('GitHub').
+    /// As the person reads it: GitHub's sign-in is WadSpaces' (its only
+    /// way in), so 'WadSpaces'.
     pub fn name(self) -> &'static str {
         match self {
-            SignInProvider::Github => "GitHub",
+            SignInProvider::Github => "WadSpaces",
             SignInProvider::Tailscale => "Tailscale",
         }
     }
@@ -86,7 +87,7 @@ mod tests {
         for p in [SignInProvider::Github, SignInProvider::Tailscale] {
             assert_eq!(serde_json::to_value(p).unwrap(), p.as_str());
         }
-        assert_eq!(SignInProvider::Github.held_label(), "Signing in to GitHub in the browser");
+        assert_eq!(SignInProvider::Github.held_label(), "Signing in to WadSpaces in the browser");
     }
 
     #[test]

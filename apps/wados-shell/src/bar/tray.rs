@@ -1170,7 +1170,7 @@ mod tests {
             error: None,
         };
         let mut j: Job = serde_json::from_value(serde_json::json!({
-            "id": "j1", "kind": "github", "status": "running", "title": "Signing in to GitHub",
+            "id": "j1", "kind": "github", "status": "running", "title": "Signing in to WadSpaces",
             "progress": 0.3, "cursor": 1, "startedAt": 1, "source": "machine", "visible": true
         }))
         .unwrap();

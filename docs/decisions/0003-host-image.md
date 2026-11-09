@@ -4,7 +4,9 @@ Phase 4. `host/Containerfile` is the machine's own OS: Fedora 44 bootc, booting 
 the shell, with wadd running the wadspaces on root's podman. `host/build.sh image` builds it as
 `localhost/wados-host:latest`; `host/Containerfile.nvidia` adds NVIDIA's own driver
 (`localhost/wados-host-nvidia:latest`). It's v1's host image (`wadspaces-old/host/`) ported, without sway, the
-Tauri client, the HUD, Firebase, the kiosk and admin users, and what belongs to later phases.
+Tauri client, the HUD, Firebase, the kiosk and admin users, and what belongs to later phases. (The account's
+Firebase web app came back, but never in the image, which is public: the installer stick gives each machine
+`/etc/wados/firebase.toml`. 0013.)
 
 ## What's in it
 

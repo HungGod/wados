@@ -145,7 +145,7 @@ fn secret_owner(name: &str) -> Option<&str> {
 // ------------------------------------------------------------ secrets
 
 /// `n` bytes from the kernel's randomness.
-fn random_bytes(n: usize) -> Vec<u8> {
+pub(crate) fn random_bytes(n: usize) -> Vec<u8> {
     let mut b = vec![0u8; n];
     let mut got = 0;
     while got < n {

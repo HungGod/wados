@@ -240,7 +240,8 @@ RUN systemctl enable greetd.service podman.socket wadd.socket wadd.service wados
 
 # Checks: every binary loads (all its libraries and symbols are here), the
 # tools are there, the firmware is there, and greetd's config is made right
-# for a machine with its person and one without.
+# for a machine with its person and one without. And no firebase.toml: the
+# image is public, and the account's web app is the stick's to give (0013).
 RUN set -e; \
     for b in /usr/bin/wadd /usr/bin/wados-shell /usr/bin/wadsctl /usr/libexec/wados/wadspaces-clipboard \
              /usr/bin/wadbrowser /usr/bin/wados-settings /usr/bin/wados-files /usr/bin/wados-installer /usr/bin/wados-agents /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \
@@ -283,6 +284,7 @@ RUN set -e; \
     rpm -q --whatprovides ppd-service > /dev/null; test -f /usr/share/hwdata/pci.ids; \
     test -f /usr/share/wados/assets/wallpapers/art/silk.svg; \
     python3 -c 'import tomllib; tomllib.load(open("/usr/lib/wados/wadd.toml", "rb"))'; \
+    if find /usr /etc -name firebase.toml | grep -q .; then echo "a firebase.toml in the public image" >&2; exit 1; fi; \
     mkdir -p /tmp/fake; \
     printf '#!/bin/sh\n[ "$2" = 1000 ] && echo "sam:x:1000:1000:Sam:/var/home/sam:/bin/bash"\n' > /tmp/fake/getent; \
     chmod 755 /tmp/fake/getent; \

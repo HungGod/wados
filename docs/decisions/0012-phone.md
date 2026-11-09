@@ -12,9 +12,13 @@ opens one on a machine's screen.
 - **Kept from the old app:** the stream player (`StreamActivity`, `NativeVideo`, `native-video.js`), the theme (dark
   only now), the HTTP client, the `onTailnet` check, the build scripts, the debug fake mode.
 - **Dropped:** Firebase (sign-in, Firestore, `wadspaces.properties`, the `FIREBASE_*` build fields), the client-side
-  board (design B) and its goldens, v1's sets and layers, the wadspace password.
+  board (design B) and its goldens, v1's sets and layers, the wadspace password. Firebase came back later: the
+  account's sign-in, its machines and secret files (0013).
 
 ## Finding machines with no account
+
+Signed in to the account (0013), the phone reads the account's machines instead, and its ID token is its trust.
+This is how it finds a machine outside the account.
 
 Android doesn't let an app read the Tailscale app's devices. The first time, the person types one machine's name
 (MagicDNS) or tailnet address; it answers with my other machines (`GET /v1/remote/peers`), and the phone keeps the list.

@@ -32,6 +32,13 @@
 //! | `POST /v1/remote/restart` → 202: restarts into a staged update (nothing else) | my machines and trusted devices |
 //! | `GET /v1/remote/trust` → [`TrustBook`] | my machines |
 //! | `POST /v1/remote/trust` ([`TrustAnswer`]) → [`TrustBook`] | my machines |
+//! | `GET`/`POST /v1/remote/secret-files`, `DELETE /v1/remote/secret-files/{name}`, `POST /v1/remote/secret-files/asks/{id}` → as the socket's (api_account.rs) | my machines and trusted devices |
+//!
+//! A device calling with `Authorization: Bearer <ID token>`, the
+//! machine's owner's sign-in to the WadSpaces account (the phone's), is
+//! trusted as the owner's without asking (account.rs checks the token with
+//! Firebase), unless the machine denied it; any other token counts for
+//! nothing (the device is seen as without one).
 //!
 //! Anything else past the gate is 403 to a device that isn't trusted (it
 //! asks, unless it was denied), and 404 when there's no such route. Building,
@@ -108,7 +115,12 @@ pub async fn gate(
     } else {
         Need::Trusted
     };
-    let caller = match r.net.identify(conn.peer, need).await {
+    let owner = match bearer(&req) {
+        Some(t) if need != Need::Machine => r.app.account.is_owner(&t).await,
+        _ => false,
+    };
+    let found = if owner { r.net.identify_owner(conn.peer).await } else { r.net.identify(conn.peer, need).await };
+    let caller = match found {
         Ok(c) => c,
         Err(refusal) => {
             tracing::warn!(peer = %conn.peer, %path, "remote: refused ({refusal:?})");
@@ -135,6 +147,13 @@ pub async fn gate(
     next.run(req).await
 }
 
+/// The request's bearer token, if it has one.
+fn bearer(req: &Request) -> Option<String> {
+    let h = req.headers().get(axum::http::header::AUTHORIZATION)?.to_str().ok()?;
+    let t = h.strip_prefix("Bearer ").or_else(|| h.strip_prefix("bearer "))?.trim();
+    (!t.is_empty()).then(|| t.to_string())
+}
+
 pub fn router(r: Arc<Remote>) -> Router {
     Router::new()
         .route(HELLO, get(hello))
@@ -159,6 +178,9 @@ pub fn router(r: Arc<Remote>) -> Router {
         .route("/v1/remote/update/check", post(update_check))
         .route("/v1/remote/restart", post(restart))
         .route(TRUST, get(trust_book).post(trust_answer))
+        .route("/v1/remote/secret-files", get(secret_files).post(secret_file_keep))
+        .route("/v1/remote/secret-files/{name}", axum::routing::delete(secret_file_remove))
+        .route("/v1/remote/secret-files/asks/{id}", post(secret_file_answer))
         .fallback(|| async { Failure(ApiError::not_found("no such endpoint")) })
         .layer(axum::extract::DefaultBodyLimit::max(BODY))
         .layer(middleware::from_fn_with_state(r.clone(), gate))
@@ -374,6 +396,40 @@ async fn trust_answer(
         tracing::info!("remote: {} says {} is {:?}", c.name, a.name, a.answer);
     }
     Ok(Json(r.net.tailnet.book()))
+}
+
+// ------------------------------------------------------------ secret files
+
+async fn secret_files(State(r): State<Arc<Remote>>) -> Json<wad_proto::SecretFiles> {
+    Json(r.app.secret_files.status())
+}
+
+async fn secret_file_keep(
+    State(r): State<Arc<Remote>>,
+    Extension(c): Extension<Caller>,
+    Json(k): Json<wad_proto::SecretFileKeep>,
+) -> Answer<wad_proto::SecretFile> {
+    let f = crate::api_account::keep_file(&r.app, k).await?;
+    notice(&r, format!("{} kept {} for {}", c.name, f.path, f.repo));
+    Ok(Json(f))
+}
+
+async fn secret_file_remove(
+    State(r): State<Arc<Remote>>,
+    Extension(c): Extension<Caller>,
+    Path(name): Path<String>,
+) -> Result<StatusCode, Failure> {
+    crate::api_account::remove_file(&r.app, &name).await?;
+    notice(&r, format!("{} removed a secret file", c.name));
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn secret_file_answer(
+    State(r): State<Arc<Remote>>,
+    Path(id): Path<String>,
+    Json(a): Json<wad_proto::SecretFileAnswer>,
+) -> Answer<wad_proto::SecretFiles> {
+    Ok(Json(r.app.secret_files.answer(&id, a.keep).await?))
 }
 
 // ------------------------------------------------------------ this machine

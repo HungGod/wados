@@ -5,6 +5,9 @@
 //! off and the routes say 404. `cloudflare.toml` beside it, only on a stick
 //! written with the secrets, holds Cloudflare's keys; without it the machine
 //! just has no public address (a stick is built without them for tests).
+//! `firebase.toml`, also only there, is the WadSpaces account's web app: each
+//! machine installed gets it, and without it has no account. Neither is in
+//! the image, which is public.
 //!
 //! An install is one Install job:
 //!
@@ -13,7 +16,8 @@
 //! 2. **the job's folder** on tmpfs (0700): `request`, `passphrase` (0600,
 //!    no newline), and `provision/`, what first boot puts in place: the
 //!    hostname, the account (its name and the password's hash), `wadd.toml`,
-//!    the tunnel's token, the TURN key, `setup.json` ([`write_provision`]);
+//!    the tunnel's token, the TURN key, the account's web app, `setup.json`
+//!    ([`write_provision`]);
 //! 3. **`install-to-disk`**, a systemd unit of its own, outside wadd's
 //!    sandbox: `STEP n/N` lines in its log are the job's stages.
 //!
@@ -83,6 +87,8 @@ fn api() -> String {
 struct Inner {
     stick: Stick,
     keys: Option<Keys>,
+    /// The stick's `firebase.toml`, as it is (checked when read).
+    firebase: Option<String>,
     jobs_dir: PathBuf,
     hands: Arc<dyn Hands>,
     jobs: Arc<Jobs>,
@@ -115,9 +121,13 @@ impl MachineInstall {
             },
             Err(_) => None,
         };
+        let firebase_file = dir.join("firebase.toml");
+        let firebase = crate::account::FirebaseApp::read(&firebase_file)
+            .and_then(|_| std::fs::read_to_string(&firebase_file).ok());
         Some(Self(Arc::new(Inner {
             stick,
             keys,
+            firebase,
             jobs_dir: jobs_dir.to_path_buf(),
             hands,
             jobs,
@@ -131,6 +141,7 @@ impl MachineInstall {
         Self(Arc::new(Inner {
             stick,
             keys: None,
+            firebase: None,
             jobs_dir: jobs_dir.to_path_buf(),
             hands: Arc::new(SampleHands { step }),
             jobs,
@@ -170,6 +181,7 @@ pub fn write_provision(
     hash: &str,
     address: Option<&Address>,
     keys: Option<&Keys>,
+    firebase: Option<&str>,
 ) -> std::io::Result<()> {
     write_file(&dir.join("hostname"), format!("{}\n", req.name).as_bytes(), 0o644)?;
     write_file(&dir.join("account"), format!("{}\n{hash}\n", req.username).as_bytes(), 0o600)?;
@@ -181,6 +193,9 @@ pub fn write_provision(
     write_file(&dir.join("wadd.toml"), wadd.as_bytes(), 0o644)?;
     if let Some(turn) = keys.and_then(Keys::turn_file) {
         write_file(&dir.join("turn.toml"), turn.as_bytes(), 0o600)?;
+    }
+    if let Some(f) = firebase {
+        write_file(&dir.join("firebase.toml"), f.as_bytes(), 0o600)?;
     }
     write_file(&dir.join("setup.json"), br#"{"step":"welcome"}"#, 0o600)
 }
@@ -229,7 +244,7 @@ impl Inner {
         std::fs::DirBuilder::new().mode(0o700).create(&dir)?;
         let provision = dir.join("provision");
         std::fs::DirBuilder::new().mode(0o700).create(&provision)?;
-        write_provision(&provision, req, hash, address, self.keys.as_ref())?;
+        write_provision(&provision, req, hash, address, self.keys.as_ref(), self.firebase.as_deref())?;
         let request = format!(
             "DISK={}\nSIZE={}\nSERIAL={}\nTARGET={}\nENCRYPT={}\n",
             req.by_id,

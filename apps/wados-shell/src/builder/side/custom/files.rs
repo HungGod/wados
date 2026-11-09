@@ -314,10 +314,10 @@ mod tests {
     #[test]
     fn without_github_or_folders_it_says_why() {
         let x = studio();
-        let c = choices(&x, "m-here", &[], &Err("Sign in to GitHub first".into()), &[]);
+        let c = choices(&x, "m-here", &[], &Err("Sign in to WadSpaces first".into()), &[]);
         let it = items(&c);
         assert_eq!(it[0], ("files-here".to_string(), Some("Your home has none yet".to_string())));
-        assert_eq!(it[1], ("files-repos".to_string(), Some("Sign in to GitHub first".to_string())));
+        assert_eq!(it[1], ("files-repos".to_string(), Some("Sign in to WadSpaces first".to_string())));
         let none = choices(&x, "m-here", &[], &Ok(vec![]), &[]);
         assert_eq!(items(&none)[1].1.as_deref(), Some("Your GitHub account has none"));
     }

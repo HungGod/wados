@@ -79,6 +79,21 @@ async fn machine_on(
     refuse_drive: bool,
     fake: Arc<Fake>,
 ) -> Machine {
+    machine_as(net, node, id, ip, port, refuse_drive, fake, |_, _| {}).await
+}
+
+/// With `tweak` to its config (given its folder) first.
+#[allow(clippy::too_many_arguments)]
+async fn machine_as(
+    net: &FakeTailnet,
+    node: &str,
+    id: &str,
+    ip: &'static str,
+    port: u16,
+    refuse_drive: bool,
+    fake: Arc<Fake>,
+    tweak: impl FnOnce(&mut Config, &std::path::Path),
+) -> Machine {
     let dir = tempfile::tempdir().unwrap();
     let ts = dir.path().join("tailscaled.sock");
     let tailscaled = net.serve(node, &ts).unwrap();
@@ -104,6 +119,7 @@ async fn machine_on(
     // Streams: no public listener (the machines share an address space), no VM runtime.
     config.streaming.listen = vec![];
     config.streaming.secure_runtime = String::new();
+    tweak(&mut config, dir.path());
     let parts = wadd::Parts {
         backend: fake,
         hands: Arc::new(FakeHands::default()),
@@ -142,8 +158,27 @@ impl Device {
 
     /// `path` on `m`'s remote API with `method` and a JSON body: the status and the answer.
     async fn send(&self, m: &Machine, port: u16, method: reqwest::Method, path: &str, body: &Value) -> (u16, Value) {
+        self.send_as(m, port, method, path, body, None).await
+    }
+
+    /// As `send`, with a Firebase ID token (`Authorization: Bearer`): the phone signed in.
+    async fn send_as(
+        &self,
+        m: &Machine,
+        port: u16,
+        method: reqwest::Method,
+        path: &str,
+        body: &Value,
+        token: Option<&str>,
+    ) -> (u16, Value) {
         let to = SocketAddr::new(m.ip.parse().unwrap(), port);
-        let req = self.0.request(method, format!("http://{to}{path}")).json(body);
+        let mut req = self.0.request(method, format!("http://{to}{path}"));
+        if !body.is_null() {
+            req = req.json(body);
+        }
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
         let res = req.timeout(Duration::from_secs(5)).send().await.unwrap();
         let status = res.status().as_u16();
         (status, res.json().await.unwrap_or(Value::Null))
@@ -652,4 +687,149 @@ async fn a_trusted_phone_does_what_the_app_needs() {
     let (status, _) = phone.send(&desk, port, Method::POST, "/v1/remote/restart", &Value::Null).await;
     assert_ne!(status, 202);
     drop(laptop);
+}
+
+/// A mock Firebase (Auth, Firestore, enrollMachine) for an account of uid
+/// u1: the machine signed in to GitHub links to it, and an ID token is u1's
+/// ("phone-of-u1"), u2's ("phone-of-u2"), or no good.
+/// A mock Firebase (Auth, Firestore, enrollMachine) for an account of uid
+/// u1: the machine signed in to GitHub links to it, and an ID token is u1's
+/// ("phone-of-u1"), u2's ("phone-of-u2"), or no good.
+async fn firebase() -> wiremock::MockServer {
+    use serde_json::json;
+    use wiremock::matchers::{body_partial_json, method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let fb = MockServer::start().await;
+    let ok = |v: Value| ResponseTemplate::new(200).set_body_json(v);
+    Mock::given(method("POST"))
+        .and(path("/identitytoolkit/accounts:signInWithIdp"))
+        .respond_with(ok(json!({"localId": "u1", "idToken": "person-id", "refreshToken": "person-rt",
+            "expiresIn": "3600", "screenName": "owner"})))
+        .mount(&fb)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/fn/enrollMachine"))
+        .respond_with(ok(json!({"result": {"machineId": "mach1", "ownerUid": "u1", "customToken": "custom-tok",
+            "projectId": "wad-test", "relink": false}})))
+        .mount(&fb)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/identitytoolkit/accounts:signInWithCustomToken"))
+        .respond_with(ok(json!({"idToken": "machine-id", "refreshToken": "machine-rt", "expiresIn": "3600"})))
+        .mount(&fb)
+        .await;
+    Mock::given(method("POST")).and(path_regex(":commit$")).respond_with(ok(json!({}))).mount(&fb).await;
+    Mock::given(method("GET")).and(path_regex("/users/u1/secrets$")).respond_with(ok(json!({}))).mount(&fb).await;
+    // A secret file kept (PATCH, by the machine's own token) and removed.
+    for m in ["PATCH", "DELETE"] {
+        Mock::given(method(m))
+            .and(path_regex("/users/u1/secrets/f-[0-9a-f]{12}$"))
+            .and(wiremock::matchers::header("authorization", "Bearer machine-id"))
+            .respond_with(ok(json!({})))
+            .mount(&fb)
+            .await;
+    }
+    for (token, uid) in [("phone-of-u1", "u1"), ("phone-of-u2", "u2")] {
+        Mock::given(method("POST"))
+            .and(path("/identitytoolkit/accounts:lookup"))
+            .and(body_partial_json(json!({"idToken": token})))
+            .respond_with(ok(json!({"users": [{"localId": uid}]})))
+            .mount(&fb)
+            .await;
+    }
+    Mock::given(method("POST"))
+        .and(path("/identitytoolkit/accounts:lookup"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(json!({"error": {"message": "INVALID_ID_TOKEN"}})))
+        .mount(&fb)
+        .await;
+    fb
+}
+
+#[tokio::test]
+async fn the_owners_phone_signed_in_is_trusted_without_asking() {
+    use base64::Engine;
+    use reqwest::Method;
+    let net = tailnet();
+    let port = free_port();
+    let fb = firebase().await;
+    let fake = Arc::new(Fake::new());
+    fake.state.lock().unwrap().secrets.insert("github_token".into(), "gho_test".into());
+    let uri = fb.uri();
+    let desk = machine_as(&net, "nDesk", "m-desk", "127.0.0.1", port, false, fake, |c, dir| {
+        let app = dir.join("firebase.toml");
+        std::fs::write(&app, "api_key = \"k\"\nproject_id = \"wad-test\"\n").unwrap();
+        c.account.firebase = app;
+        c.account.identity = uri.clone();
+        c.account.firestore = uri.clone();
+        c.account.functions = format!("{uri}/fn");
+        c.github.app = dir.join("no-github.toml");
+    })
+    .await;
+    until("running", async || (desk.w.tailnet().await.unwrap().state == TailnetState::Running).then_some(())).await;
+    until("linked", async || (desk.w.account().await.unwrap().state == wad_proto::AccountState::Linked).then_some(()))
+        .await;
+    let get = async |d: &Device, path: &str, token: Option<&str>| {
+        d.send_as(&desk, port, Method::GET, path, &Value::Null, token).await.0
+    };
+
+    // The phone, signed in as the machine's owner: trusted at once, never asked about.
+    let phone = Device::at("127.0.0.3");
+    assert_eq!(get(&phone, "/v1/remote/peers", Some("phone-of-u1")).await, 200);
+    assert_eq!(get(&phone, "/v1/remote/library", Some("phone-of-u1")).await, 200);
+    assert!(!desk.w.tailnet().await.unwrap().asks.iter().any(|a| a.id == "nPhone"), "never an ask");
+    // Without its token it's a device like any other (it asks).
+    assert_eq!(get(&phone, "/v1/remote/peers", None).await, 403);
+    // Someone else's account, or a token made up: no.
+    let friend = Device::at("127.0.0.5");
+    assert_eq!(get(&friend, "/v1/remote/peers", Some("phone-of-u2")).await, 403);
+    assert_eq!(get(&friend, "/v1/remote/peers", Some("forged")).await, 403);
+
+    // Its secret files: kept, listed, removed.
+    let value = base64::engine::general_purpose::STANDARD.encode("A=1\n");
+    let keep = serde_json::json!({"repo": "HungGod/wados", "path": ".env", "value": value});
+    let (status, kept) =
+        phone.send_as(&desk, port, Method::POST, "/v1/remote/secret-files", &keep, Some("phone-of-u1")).await;
+    assert_eq!(status, 200, "{kept}");
+    assert_eq!((kept["path"].as_str(), kept["origin"].as_str()), (Some(".env"), Some("account")));
+    assert!(kept.get("value").is_none(), "a file's contents never come back: {kept}");
+    let (status, list) =
+        phone.send_as(&desk, port, Method::GET, "/v1/remote/secret-files", &Value::Null, Some("phone-of-u1")).await;
+    assert_eq!((status, list["account"].as_bool()), (200, Some(true)), "{list}");
+    assert_eq!(list["files"][0]["name"], kept["name"]);
+    // For the phone app's tests, beside its hand-written secret-file*.json (never over them).
+    if let Ok(dir) = std::env::var("WADOS_PHONE_FIXTURES") {
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, v) in [("secret-file-kept", &kept), ("secret-files-kept", &list)] {
+            std::fs::write(dir.join(format!("{name}.json")), serde_json::to_string_pretty(v).unwrap()).unwrap();
+        }
+    }
+    let (status, refused) =
+        friend.send_as(&desk, port, Method::GET, "/v1/remote/secret-files", &Value::Null, Some("phone-of-u2")).await;
+    assert_eq!(status, 403, "{refused}");
+    let too_big = serde_json::json!({"repo": "HungGod/wados", "path": ".env",
+        "value": base64::engine::general_purpose::STANDARD.encode(vec![b'x'; 70_000])});
+    let (status, _) =
+        phone.send_as(&desk, port, Method::POST, "/v1/remote/secret-files", &too_big, Some("phone-of-u1")).await;
+    assert!(status == 400 || status == 413, "{status}");
+    let path = format!("/v1/remote/secret-files/{}", kept["name"].as_str().unwrap());
+    let (status, _) = phone.send_as(&desk, port, Method::DELETE, &path, &Value::Null, Some("phone-of-u1")).await;
+    assert_eq!(status, 204);
+
+    // A device denied here stays denied, whoever it says it is.
+    friend.get(&desk, port, "/v1/remote/hello").await;
+    until("the friend's ask", async || desk.w.tailnet().await.unwrap().asks.into_iter().find(|a| a.id == "nFriend"))
+        .await;
+    desk.w.deny_ask("nFriend").await.unwrap();
+    assert_eq!(get(&friend, "/v1/remote/peers", Some("phone-of-u1")).await, 403);
+    // The account kept the file, and let it go.
+    let to_account: Vec<String> = fb
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|r| r.url.path().contains("/secrets/f-"))
+        .map(|r| r.method.to_string())
+        .collect();
+    assert_eq!(to_account, ["PATCH", "DELETE"]);
 }

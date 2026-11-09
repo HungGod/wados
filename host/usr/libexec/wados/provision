@@ -10,6 +10,7 @@
 #   wadd.toml        /etc/wados/wadd.toml ([machine] id, [streaming] host)
 #   cloudflared-token  /etc/cloudflared/token
 #   turn.toml        /etc/wados/turn.toml
+#   firebase.toml    /etc/wados/firebase.toml (the WadSpaces account's web app)
 #   nm/*.nmconnection  Wi-Fi the stick knew
 #   setup.json       /var/lib/wados/setup.json (Set up WadSpaces hasn't run)
 #   live             /etc/wados/live (the stick itself: WadSpaces Live)
@@ -67,6 +68,7 @@ fi
 put wadd.toml /etc/wados/wadd.toml 0644
 put cloudflared-token /etc/cloudflared/token 0600
 put turn.toml /etc/wados/turn.toml 0600
+put firebase.toml /etc/wados/firebase.toml 0644
 put setup.json /var/lib/wados/setup.json 0600
 put live /etc/wados/live 0644
 

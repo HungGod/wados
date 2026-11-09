@@ -1,8 +1,16 @@
 //! Settings ▸ Accounts (the spike's `panels/AccountsPanel.svelte`):
 //!
-//! - **GitHub:** credentials to clone projects and save your work. Not
-//!   signed in: Sign in with GitHub (a Github job, in the browser); signed
-//!   in: who, and Sign out.
+//! - **WadSpaces:** the one sign-in, with GitHub (WadSpaces' only way in).
+//!   Its GitHub credentials clone projects and save your work, and it links
+//!   this machine to your account: your phone lists it, and your secret
+//!   files follow you. Not signed in: Sign in to WadSpaces (a Github job, in
+//!   the browser); signed in: who, how the link is, Link again when it
+//!   isn't, and Sign out (which leaves the account too). On a WadOS with no
+//!   account (no firebase.toml), it's the GitHub credentials alone.
+//! - **Secret files:** your projects' files kept out of git, put in every
+//!   clone of their repository on every machine of the account, with Remove;
+//!   and what's asking about files in this machine's clones (a likely one to
+//!   keep, or a kept one changed here), with its answers.
 //! - **Tailscale:** where this machine is with the tailnet (a chip), Join
 //!   (a Tailnet job, in the browser) or Leave the Tailnet; this machine's
 //!   name and address on it; Taildrive, and what the tailnet's policy needs
@@ -23,8 +31,9 @@ use indexmap::IndexMap;
 use wad_gtk::kit::{self, Group, Row, Tone, Variant};
 use wad_model::{JobKind, JobStatus};
 use wad_proto::{
-    DeviceKind, DriveState, Event, GithubAccount, JobInfo, MachineInfo, SignInProvider, SignInRequest, Tailnet,
-    TailnetAsk, TailnetDevice, TailnetState,
+    AccountLink, AccountState, DeviceKind, DriveState, Event, GithubAccount, JobInfo, MachineInfo, SecretFile,
+    SecretFileAsk, SecretFileAskKind, SecretFiles, SecretOrigin, SignInProvider, SignInRequest, Tailnet, TailnetAsk,
+    TailnetDevice, TailnetState,
 };
 use wad_wadd_client::{Failure, Incoming};
 
@@ -48,6 +57,9 @@ pub struct State {
     /// The Steam accounts here, and the games ticked to push.
     pub steam: Vec<wad_proto::SteamAccount>,
     pub ticked: HashSet<String>,
+    /// The machine's link to its WadSpaces account, and the secret files.
+    pub account: Option<AccountLink>,
+    pub secret_files: Option<SecretFiles>,
 }
 
 impl State {
@@ -57,6 +69,8 @@ impl State {
             Event::Machine(m) => self.machine = Some(m),
             Event::Tailnet(t) => self.tailnet = Some(t),
             Event::Github { account } => self.github = Some(account),
+            Event::Account(a) => self.account = Some(a),
+            Event::SecretFiles(f) => self.secret_files = Some(f),
             Event::Job { job } if matches!(job.job.kind, JobKind::Github | JobKind::Tailnet | JobKind::SteamLogin) => {
                 self.jobs.insert(job.job.id.clone(), *job);
             }
@@ -80,25 +94,100 @@ impl State {
 
 // ------------------------------------------------------------ what it says
 
-/// GitHub's group's description (Set up's words for what it's for).
-pub const GITHUB_DESC: &str = "Credentials to clone projects and save your work";
+/// The sign-in's group's description (Set up's words for what it's for).
+pub const WADSPACES_DESC: &str = "One sign-in, with GitHub: your projects clone here and push your work back, your \
+     phone lists this machine, and your secret files follow you.";
+/// The same on a WadOS with no account to link to.
+pub const WADSPACES_DESC_NO_ACCOUNT: &str = "Sign in with GitHub to clone your projects here and push your work back.";
+pub const SECRETS_DESC: &str = "Your projects' files kept out of git (.env, keys, local config): put in every clone \
+     of their repository, on every machine of your account. A file changed in a clone is never written over.";
 pub const TAILSCALE_DESC: &str = "Your private network: your machines and your phone reach each other over it.";
 pub const ASKS_DESC: &str = "Devices on your tailnet that want to open, stream and build your wadspaces from here.";
 pub const DEVICES_DESC: &str = "On your tailnet. Trusted ones can manage this machine.";
 /// What signing out does (and doesn't: WadOS can't revoke the token without its app's secret).
-pub const SIGN_OUT_NOTE: &str = "Signing out here forgets the sign-in on this machine; GitHub still lists WadOS under your authorized apps until you revoke it there.";
+pub const SIGN_OUT_NOTE: &str = "Signing out forgets the sign-in on this machine and takes it off your WadSpaces \
+     account. GitHub still lists WadOS under your authorized apps until you revoke it there.";
 
-/// GitHub's row: its title and subtitle, signed in or not.
-/// A Steam account's line (the spike's).
+/// A Steam account's line: how many games, and how many are here.
 pub fn steam_line(a: &wad_proto::SteamAccount) -> String {
     let here = a.games.iter().filter(|g| g.installed).count();
     format!("Signed in · {} games · {here} downloaded here", a.games.len())
 }
 
-pub fn github_row(a: Option<&GithubAccount>) -> (String, String) {
-    match a {
-        Some(a) => (a.name.clone(), format!("Signed in as @{}", a.login)),
-        None => ("Not signed in".into(), "Sign in to clone your repositories here and push your work back".into()),
+/// The sign-in's row: its title and subtitle. `github`: who's signed in here;
+/// `account`: the machine's link (None until wadd says, or Off: no account).
+pub fn signin_row(github: Option<&GithubAccount>, account: Option<&AccountLink>, now_ms: i64) -> (String, String) {
+    let account = account.filter(|a| a.state != AccountState::Off);
+    let Some(gh) = github else {
+        let sub = match account {
+            Some(_) => {
+                "Sign in to clone your repositories, reach this machine from your phone, and keep your secret files"
+            }
+            None => "Sign in to clone your repositories here and push your work back",
+        };
+        return ("Not signed in".into(), sub.into());
+    };
+    let title = if gh.name.is_empty() { gh.login.clone() } else { gh.name.clone() };
+    let who = format!("Signed in as @{}", gh.login);
+    let sub = match account {
+        None => who,
+        Some(a) => match a.state {
+            AccountState::Linking => format!("{who} · Joining your account…"),
+            AccountState::Linked => match a.last_seen {
+                Some(t) => format!("{who} · Your account heard from it {}", kit::ago(now_ms, t)),
+                None => format!("{who} · Your phone lists this machine"),
+            },
+            _ => format!("{who} · Not linked to your account"),
+        },
+    };
+    (title, sub)
+}
+
+/// A size in words (a secret file is at most 64 KB).
+pub fn size_words(n: u64) -> String {
+    match n {
+        0..1024 => format!("{n} bytes"),
+        _ => format!("{:.1} KB", n as f64 / 1024.0),
+    }
+}
+
+/// A secret file's subtitle: its repository, size, and where it's used.
+pub fn secret_subtitle(f: &SecretFile) -> String {
+    let mut s = format!("{} · {}", f.repo, size_words(f.size));
+    match f.used_by.len() {
+        0 => s.push_str(" · No clone here"),
+        1 => s.push_str(" · In 1 wadspace here"),
+        n => s.push_str(&format!(" · In {n} wadspaces here")),
+    }
+    if f.origin == SecretOrigin::Local {
+        s.push_str(" · This machine only, until it's linked");
+    }
+    s
+}
+
+/// An ask's title, subtitle, and its two answers (no, then yes).
+pub fn secret_ask_words(a: &SecretFileAsk) -> (String, String, &'static str, &'static str) {
+    let place = format!("{} in {}", a.project_name, a.wadspace_name);
+    match a.kind {
+        SecretFileAskKind::New => (
+            format!("Keep {}?", a.path),
+            format!(
+                "{place} has it ({}) and git ignores it; kept, every clone of {} gets it",
+                size_words(a.size),
+                a.repo
+            ),
+            "Leave it",
+            "Keep",
+        ),
+        SecretFileAskKind::Changed => (
+            format!("{} changed", a.path),
+            format!(
+                "{place} has another version ({}): keep it for every machine, or for this clone only",
+                size_words(a.size)
+            ),
+            "This clone only",
+            "Every machine",
+        ),
     }
 }
 
@@ -300,7 +389,10 @@ impl Accounts {
             return;
         }
         self.column.append(&self.note);
-        self.column.append(&self.github(&st).root);
+        self.column.append(&self.wadspaces(&st).root);
+        if let Some(g) = self.secret_files(&st) {
+            self.column.append(&g.root);
+        }
         self.column.append(&self.tailscale(&st).root);
         if self.steam.get() {
             self.column.append(&self.steam(&st).root);
@@ -395,8 +487,8 @@ impl Accounts {
         });
         row.ctl.append(&b);
         g.add(&row.root);
-        if self.note.label().contains("sign in to GitHub once more") {
-            let again = kit::button("Sign in to GitHub for packages", Variant::Secondary, Some("log-in"), true);
+        if self.note.label().contains("sign in to WadSpaces once more") {
+            let again = kit::button("Sign in again for packages", Variant::Secondary, Some("log-in"), true);
             let w = self.me.clone();
             again.connect_clicked(move |_| {
                 if let Some(m) = w.upgrade() {
@@ -409,17 +501,36 @@ impl Accounts {
         g
     }
 
-    fn github(&self, st: &State) -> Group {
-        let g = Group::new("GitHub", GITHUB_DESC);
-        g.root.set_widget_name("group-github");
-        let account = st.github.clone().flatten();
+    fn wadspaces(&self, st: &State) -> Group {
+        let link = st.account.clone().filter(|a| a.state != AccountState::Off);
+        let desc = if link.is_some() { WADSPACES_DESC } else { WADSPACES_DESC_NO_ACCOUNT };
+        let g = Group::new("WadSpaces", desc);
+        g.root.set_widget_name("group-wadspaces");
+        let github = st.github.clone().flatten();
         let job = st.latest(JobKind::Github);
         let running = job.is_some_and(|j| j.job.status == JobStatus::Running);
-        let (title, sub) = github_row(account.as_ref());
-        match &account {
+        let (title, sub) = signin_row(github.as_ref(), link.as_ref(), now_ms());
+        match &github {
             Some(_) => {
-                let row = Row::new(Some("user"), Tone::Accent, &title, &sub).named("github");
+                let linked = link.as_ref().is_some_and(|a| a.state == AccountState::Linked);
+                let tone = if linked || link.is_none() { Tone::Accent } else { Tone::Plain };
+                let row = Row::new(Some("user"), tone, &title, &sub).named("signin");
+                // Signed in but not linked (unlinked, removed, or it failed): Link again.
+                if let Some(a) = link.as_ref().filter(|a| a.state != AccountState::Linked) {
+                    let busy = self.busy("account") || a.state == AccountState::Linking;
+                    let b = kit::button(if busy { "Linking…" } else { "Link" }, Variant::Primary, Some("link"), true);
+                    b.set_widget_name("account-link");
+                    b.set_sensitive(!busy);
+                    let w = self.me.clone();
+                    b.connect_clicked(move |_| {
+                        if let Some(m) = w.upgrade() {
+                            m.ask("account".into(), |wadd| async move { wadd.account_link().await });
+                        }
+                    });
+                    row.ctl.append(&b);
+                }
                 let out = kit::button("Sign out", Variant::Quiet, None, true);
+                out.set_widget_name("signout");
                 out.set_sensitive(!self.busy("signout"));
                 let w = self.me.clone();
                 out.connect_clicked(move |_| {
@@ -429,19 +540,23 @@ impl Accounts {
                 });
                 row.ctl.append(&out);
                 g.add(&row.root);
+                if let Some(e) = link.as_ref().and_then(|a| a.error.as_ref()) {
+                    g.add(&Row::new(Some("triangle-alert"), Tone::Warn, e, "").named("account-error").root);
+                }
                 let note = gtk::Box::builder().css_classes(["kit-inset"]).build();
                 note.append(&kit::label(SIGN_OUT_NOTE, &["kit-row-sub"]));
                 g.add(&note);
             }
             None => {
-                let row = Row::new(Some("user"), Tone::Plain, &title, &sub).named("github");
+                let row = Row::new(Some("user"), Tone::Plain, &title, &sub).named("signin");
                 let busy = running || self.busy("signin");
                 let b = kit::button(
-                    if busy { "Signing in…" } else { "Sign in with GitHub" },
+                    if busy { "Signing in…" } else { "Sign in to WadSpaces" },
                     Variant::Primary,
                     Some("log-in"),
                     true,
                 );
+                b.set_widget_name("signin-button");
                 b.set_sensitive(!busy);
                 let w = self.me.clone();
                 b.connect_clicked(move |_| {
@@ -457,11 +572,62 @@ impl Accounts {
             }
         }
         if let Some(j) =
-            job.filter(|j| matches!(j.job.status, JobStatus::Running | JobStatus::Error) && account.is_none())
+            job.filter(|j| matches!(j.job.status, JobStatus::Running | JobStatus::Error) && github.is_none())
         {
             g.add(&self.stages(j, SignInProvider::Github));
         }
         g
+    }
+
+    /// None until wadd says, or when nothing's kept or asking.
+    fn secret_files(&self, st: &State) -> Option<Group> {
+        let f = st.secret_files.clone()?;
+        if f.files.is_empty() && f.asks.is_empty() {
+            return None;
+        }
+        let g = Group::new("Secret Files", SECRETS_DESC);
+        g.root.set_widget_name("group-secret-files");
+        for a in &f.asks {
+            let (title, sub, no, yes) = secret_ask_words(a);
+            let row = Row::new(Some("file-search"), Tone::Warn, &title, &sub).named(&format!("secret-ask-{}", a.id));
+            let key = format!("secret-ask:{}", a.id);
+            for (label, keep) in [(no, false), (yes, true)] {
+                let b = kit::button(label, if keep { Variant::Primary } else { Variant::Ghost }, None, true);
+                b.set_sensitive(!self.busy(&key));
+                let (w, id, key) = (self.me.clone(), a.id.clone(), key.clone());
+                b.connect_clicked(move |_| {
+                    let Some(m) = w.upgrade() else { return };
+                    let id = id.clone();
+                    m.ask(key.clone(), move |wadd| async move { wadd.secret_file_answer(&id, keep).await });
+                });
+                row.ctl.append(&b);
+            }
+            g.add(&row.root);
+        }
+        for file in &f.files {
+            let row = Row::new(Some("key-round"), Tone::Accent, &file.path, &secret_subtitle(file))
+                .named(&format!("secret-{}", file.name));
+            let key = format!("secret:{}", file.name);
+            let b = kit::button("Remove", Variant::Quiet, None, true);
+            b.set_sensitive(!self.busy(&key));
+            let (w, name) = (self.me.clone(), file.name.clone());
+            b.connect_clicked(move |_| {
+                let Some(m) = w.upgrade() else { return };
+                let name = name.clone();
+                m.ask(format!("secret:{name}"), move |wadd| async move { wadd.secret_file_remove(&name).await });
+            });
+            row.ctl.append(&b);
+            g.add(&row.root);
+        }
+        if !f.account && !f.files.is_empty() {
+            let note = gtk::Box::builder().css_classes(["kit-inset"]).build();
+            note.append(&kit::label(
+                "These are on this machine only: linking it to your account takes them there.",
+                &["kit-row-sub"],
+            ));
+            g.add(&note);
+        }
+        Some(g)
     }
 
     fn tailscale(&self, st: &State) -> Group {
@@ -696,7 +862,7 @@ pub fn make(ctx: &Ctx) -> Rc<dyn Panel> {
     Rc::new(AccountsPanel(Accounts::new(ctx.link.clone())))
 }
 
-/// Accounts as Set up WadSpaces' step: GitHub and Tailscale, no Steam.
+/// Accounts as Set up WadSpaces' step: the WadSpaces sign-in and Tailscale, no Steam.
 pub fn make_for_setup(ctx: &Ctx) -> Rc<dyn Panel> {
     let a = Accounts::new(ctx.link.clone());
     a.steam.set(false);
@@ -755,12 +921,31 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn github_says_who_or_how_to_sign_in() {
-        let a = GithubAccount { login: "hunggod".into(), name: "Hung".into(), scopes: vec![] };
-        assert_eq!(github_row(Some(&a)), ("Hung".into(), "Signed in as @hunggod".into()));
-        assert_eq!(github_row(None).0, "Not signed in");
-        // GitHub is for clones and packages now, not the spike's account.
-        assert_eq!(GITHUB_DESC, "Credentials to clone projects and save your work");
+    fn the_wadspaces_sign_in_says_who_and_how_the_link_is() {
+        let gh = GithubAccount { login: "hunggod".into(), name: "Hung".into(), scopes: vec![] };
+        let mut a = AccountLink { state: AccountState::Unlinked, ..AccountLink::default() };
+        // Signed out: one sign-in, for the clones and the account both.
+        assert_eq!(signin_row(None, Some(&a), 0).0, "Not signed in");
+        assert!(signin_row(None, Some(&a), 0).1.contains("phone"));
+        // A WadOS with no account: GitHub's credentials alone.
+        let off = AccountLink { state: AccountState::Off, ..AccountLink::default() };
+        assert_eq!(
+            signin_row(None, Some(&off), 0).1,
+            "Sign in to clone your repositories here and push your work back"
+        );
+        assert_eq!(signin_row(Some(&gh), Some(&off), 0), ("Hung".into(), "Signed in as @hunggod".into()));
+        assert_eq!(signin_row(Some(&gh), None, 0).1, "Signed in as @hunggod");
+        assert_eq!(signin_row(Some(&gh), Some(&a), 0).1, "Signed in as @hunggod · Not linked to your account");
+        a.state = AccountState::Linking;
+        assert_eq!(signin_row(Some(&gh), Some(&a), 0).1, "Signed in as @hunggod · Joining your account…");
+        a = AccountLink { state: AccountState::Linked, last_seen: Some(1_000_000), ..AccountLink::default() };
+        assert_eq!(
+            signin_row(Some(&gh), Some(&a), 1_060_000).1,
+            "Signed in as @hunggod · Your account heard from it 1 min ago"
+        );
+        a.last_seen = None;
+        assert_eq!(signin_row(Some(&gh), Some(&a), 0).1, "Signed in as @hunggod · Your phone lists this machine");
+        assert!(SIGN_OUT_NOTE.contains("off your WadSpaces account"));
     }
 
     #[test]
@@ -806,6 +991,29 @@ mod tests {
     }
 
     #[test]
+    fn the_secret_files_in_words() {
+        assert_eq!(size_words(512), "512 bytes");
+        assert_eq!(size_words(2048), "2.0 KB");
+        let f: SecretFile = serde_json::from_value(json!({
+            "name": "f-0123456789ab", "repo": "HungGod/wados", "path": ".env", "size": 12,
+            "usedBy": ["w1"], "origin": "local"
+        }))
+        .unwrap();
+        assert_eq!(
+            secret_subtitle(&f),
+            "HungGod/wados · 12 bytes · In 1 wadspace here · This machine only, until it's linked"
+        );
+        let ask: SecretFileAsk = serde_json::from_value(json!({
+            "id": "a-0123456789ab", "kind": "changed", "wadspace": "w1", "wadspaceName": "Work",
+            "project": "p1", "projectName": "wados", "repo": "HungGod/wados", "path": ".env", "size": 20
+        }))
+        .unwrap();
+        let (title, sub, no, yes) = secret_ask_words(&ask);
+        assert_eq!((title.as_str(), no, yes), (".env changed", "This clone only", "Every machine"));
+        assert!(sub.starts_with("wados in Work has another version (20 bytes)"), "{sub}");
+    }
+
+    #[test]
     fn the_state_takes_the_accounts_events_only() {
         let mut s = State::default();
         assert!(s.apply(Event::Github { account: None }));
@@ -814,6 +1022,10 @@ mod tests {
         assert!(s.signins.contains(&SignInProvider::Github));
         assert!(s.apply(Event::SignInDone { provider: SignInProvider::Github }));
         assert!(s.signins.is_empty());
+        assert!(s.apply(Event::Account(AccountLink { state: AccountState::Linked, ..AccountLink::default() })));
+        assert_eq!(s.account.as_ref().map(|a| a.state), Some(AccountState::Linked));
+        assert!(s.apply(Event::SecretFiles(SecretFiles::default())));
+        assert!(s.secret_files.is_some());
         assert!(!s.apply(Event::WadspaceGone { id: "x".into() }));
         assert_eq!(show_argv(SignInProvider::Tailscale)[1..], ["--signin", "tailscale", "--show"]);
     }

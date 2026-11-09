@@ -750,6 +750,24 @@ impl TailnetPeers {
         Ok(self.tailnet.caller(&w, ip, machine, true))
     }
 
+    /// Who's calling with the machine's owner's account sign-in (the
+    /// phone's, its ID token checked): trusted as one of the owner's own
+    /// devices, without asking, unless the machine denied it; one of my
+    /// machines stays one.
+    pub async fn identify_owner(&self, addr: SocketAddr) -> Result<Caller, Refusal> {
+        let me = self.tailnet.me().ok_or(Refusal::Down)?;
+        let w = self.tailnet.whois(addr).await?.ok_or(Refusal::NotOnTailnet)?;
+        if matches!(tailnet::classify(&me, &w), Class::ThisMachine) {
+            return Err(Refusal::ThisMachine);
+        }
+        let machine = self.peers.known(&w.node.stable_id) == Some(true);
+        let mut c = self.tailnet.caller(&w, addr.ip(), machine, false);
+        if c.trust == wad_proto::RemoteTrust::Asked {
+            c.trust = wad_proto::RemoteTrust::Trusted;
+        }
+        Ok(c)
+    }
+
     fn answered(&self, (view, answer): (View, Option<TrustAnswer>)) -> View {
         if let Some(a) = answer {
             self.peers.push(a);

@@ -93,6 +93,9 @@ pub struct AppState {
     pub discs: Arc<crate::discs::MachineDiscs>,
     pub steam: Arc<crate::steam::MachineSteam>,
     pub agents: Arc<crate::agents::MachineAgents>,
+    /// The WadSpaces account and the projects' secret files ([`crate::api_account`]).
+    pub account: Arc<crate::account::AccountService>,
+    pub secret_files: Arc<crate::secret_files::SecretFiles>,
 }
 
 /// An ApiError as an HTTP response.
@@ -176,6 +179,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/v1/steam/signin", post(steam_signin))
         .route("/v1/steam/push", post(steam_push))
         .route("/v1/steam/{account}/pull/{game}", post(steam_pull))
+        .merge(crate::api_account::routes())
         .merge(crate::api_phase6::routes())
         .merge(crate::api_phase7::routes())
         .merge(crate::api_phase8::routes())
