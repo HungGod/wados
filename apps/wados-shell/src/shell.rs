@@ -279,8 +279,8 @@ impl Shell {
         spaces.into_iter().filter(|y| wad_model::tags::tag_of(&tags, y) == tag).map(|y| y.id).collect()
     }
 
-    /// Opened in the Builder with the rest of its group, it selected (a
-    /// wadspace double-clicked on the desktop, its menu's Edit).
+    /// Opened in the Builder with the rest of its group, it selected (its
+    /// menu's Edit).
     pub fn edit(&self, id: &str) {
         if let Some(b) = self.builder() {
             b.open_group(&self.group_of(id), id);

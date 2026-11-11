@@ -27,7 +27,7 @@ exec > >(tee -a "${JOB}/log") 2>&1
 MNT=/run/wados/install-target
 IMAGE=localhost/wados-install:latest
 MAPPER=""
-STEPS=7
+STEPS=8
 n=0
 
 step() {
@@ -155,6 +155,52 @@ for f in /etc/NetworkManager/system-connections/*.nmconnection; do
     install -D -m 0600 "${f}" "${VAR}/lib/wados/provision/nm/${f##*/}"
 done
 shopt -u nullglob
+
+step "Copying WadSpaces' offline images and project (if the stick has them)"
+# A stick made with `host/build.sh installer … --include …` carries the
+# images for the offline test scenarios in root's podman storage, and
+# images.list with their names; and the wados repo, at project/wados. Copied
+# onto the disk, so the machines it installs build and launch offline too.
+if [[ -f /var/lib/wados/images.list ]]; then
+    refs=()
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%%#*}"
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+        [[ -n "${line}" ]] && refs+=("${line}")
+    done < /var/lib/wados/images.list
+    missing=()
+    for ref in ${refs[@]+"${refs[@]}"}; do
+        podman image exists "${ref}" || missing+=("${ref}")
+    done
+    ((${#missing[@]} == 0)) || fail "the stick is missing offline images: ${missing[*]}"
+    if ((${#refs[@]})); then
+        echo "carrying ${#refs[@]} images"
+        mkdir -p "${VAR}/lib/containers"
+        if ! podman save --format docker-archive "${refs[@]}" \
+            | unshare --mount --propagation private bash -euo pipefail -c '
+                mkdir -p /var/lib/containers /run/containers /run/libpod
+                mount --bind "$1" /var/lib/containers
+                mount -t tmpfs tmpfs /run/containers
+                mount -t tmpfs tmpfs /run/libpod
+                podman load --quiet
+                restorecon -R /var/lib/containers 2>/dev/null || true
+            ' _ "${VAR}/lib/containers"; then
+            fail "couldn't copy the stick's offline images onto the disk"
+        fi
+    else
+        echo "images.list is empty: nothing to copy"
+    fi
+else
+    echo "no offline images on the stick: skipping"
+fi
+if [[ -d /var/lib/wados/project ]]; then
+    echo "copying the project folder to the disk (/var/lib/wados/project/wados)"
+    mkdir -p "${VAR}/lib/wados"
+    cp -a /var/lib/wados/project "${VAR}/lib/wados/project"
+    chown -R 1000:1000 "${VAR}/lib/wados/project"
+    restorecon -R "${VAR}/lib/wados/project" 2>/dev/null || true
+fi
 
 step "Finishing"
 sync

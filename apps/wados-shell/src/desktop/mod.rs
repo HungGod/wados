@@ -13,7 +13,7 @@
 //!   wadspace or folder new on the desktop goes after everything there.
 //! - **Selecting** ([`select`]): a box across the background (Ctrl or Shift
 //!   adds), Ctrl/Shift-clicks, Ctrl+A, Esc. Delete puts the selection in the
-//!   Trash; Enter opens one; F2 renames one.
+//!   Trash; Enter opens one in a window; F2 renames one.
 //! - **Tag folders** (`TagFolder.svelte`): double-click (or Enter) opens one
 //!   beside its icon; Esc or a click elsewhere closes it. Drop a wadspace on
 //!   a folder (or it open) to tag it; drag one out onto the desktop to untag
@@ -753,7 +753,7 @@ impl Desktop {
             Hit::Inside(id) if n >= 2 => {
                 self.s.borrow_mut().open_tag = None;
                 self.lay_panel();
-                self.shell.edit(&id);
+                self.open_space_as(&id, SessionDisplay::Window);
             }
             Hit::Inside(_) | Hit::Panel => {}
             Hit::Background => {
@@ -1451,12 +1451,13 @@ impl Desktop {
 
     // ------------------------------------------------------------ doing things
 
-    /// Opened (double-click, Enter): a wadspace, a folder shown, a folder of
+    /// Opened (double-click, Enter): a wadspace, building it first if it has
+    /// to be (in a window), a folder shown, a folder of
     /// files in Files, a file with the app that opened its kind last (in a
     /// space that has it), else in Files' viewer (the spike's `shell.open`).
     fn open_key(&self, key: &str) {
         if let Some(id) = key.strip_prefix("ws:") {
-            self.shell.edit(id);
+            self.open_space_as(id, SessionDisplay::Window);
         } else if let Some(tag) = key.strip_prefix("folder:") {
             self.open_folder(tag);
         } else if let Some(e) = self.entry(key) {
@@ -1523,8 +1524,8 @@ impl Desktop {
         self.show_menu(x, y, entries, keys.first().cloned(), true);
     }
 
-    /// Up on the screen as `display` (shown, if it's running): its menu's
-    /// Open. A double-click opens it in the Builder instead (`Shell::edit`).
+    /// Up as `display` (shown, if it's running): its menu's Open and Open in
+    /// window. A double-click on the desktop opens it in a window too.
     fn open_space_as(&self, id: &str, display: SessionDisplay) {
         if self.shell.store.is_running(id) {
             self.shell.show(id);
@@ -1896,8 +1897,7 @@ impl Desktop {
                 let i = i.clone();
                 self.on(move |m| m.shell.edit(&i))
             })
-            .hint("What's in it, to change (or double-click it)")
-            .key("Enter")
+            .hint("What's in it, to change")
             .entry(),
         );
         out.push(

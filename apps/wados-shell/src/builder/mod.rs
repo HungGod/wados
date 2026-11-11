@@ -7,7 +7,8 @@
 //! one's name, Build, Delete, In a window and Open (Show, when it runs).
 //!
 //! Its state is the stacks open, the one selected and the sidebar's tab.
-//! A wadspace double-clicked on the desktop brings its group (the desktop's
+//! A wadspace opened to edit (its desktop menu's Edit in the Builder) brings
+//! its group (the desktop's
 //! loose ones, or its tag folder's), it selected; one made in it (New, or
 //! from a piece of another) gets a stack of its own, beside where it came
 //! from. Closing the window forgets them; the wadspaces stay.

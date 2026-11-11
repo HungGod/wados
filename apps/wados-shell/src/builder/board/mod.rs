@@ -139,7 +139,7 @@ impl Board {
             .can_target(false)
             .build();
         empty.append(&wad_gtk::Icon::new("mouse-pointer-click", 18));
-        empty.append(&gtk::Label::new(Some("Double-click a wadspace on the desktop to open it here.")));
+        empty.append(&gtk::Label::new(Some("Right-click a wadspace on the desktop and choose Edit in the Builder.")));
         root.add_overlay(&empty);
 
         let slot = gtk::Box::builder()

@@ -744,7 +744,10 @@ impl TextField {
             let click = gtk::GestureClick::new();
             click.connect_pressed(move |_, _, _, _| {
                 if !t.has_focus() {
-                    t.grab_focus();
+                    // Not `grab_focus`: it selects everything typed (a GTK
+                    // text field selects all on focus), so typing would
+                    // overwrite what's already there.
+                    t.grab_focus_without_selecting();
                 }
             });
             input.add_controller(click);
@@ -820,8 +823,13 @@ impl TextField {
         self.text.connect_activate(move |t| f(&t.text()));
     }
 
+    /// Puts the caret in it, without selecting what's typed. A GTK text
+    /// field selects all of its text when focused, so re-grabbing the focus
+    /// (the Wi-Fi panel does this whenever its page is drawn again, once per
+    /// keystroke) would select the whole field and the next character typed
+    /// would overwrite it.
     pub fn focus(&self) {
-        self.text.grab_focus();
+        self.text.grab_focus_without_selecting();
     }
 
     /// A password field showing what's typed.

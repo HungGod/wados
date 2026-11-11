@@ -15,6 +15,10 @@
 #                                    on it, with the secrets folder's cloudflare.toml
 #                                    on it and nowhere else. Without that file,
 #                                    machines it installs have no public address
+#   host/build.sh installer /dev/sdX --include wados dolphin steam
+#                                    the same stick, carrying the offline test
+#                                    scenarios (below): a space-separated list,
+#                                    in any order
 #
 #   --variant host|nvidia[,...]      which image (host unless told); qcow2, iso
 #                                    and raw take one
@@ -22,6 +26,27 @@
 #                                    key made in .build/mok-test/ (to try the
 #                                    signing path); that image is tagged
 #                                    :test-key and is never pushed
+#
+# --include carries the offline test scenarios onto the stick (and from the
+# stick onto machines installed from it), so a Surface Book 2 with a bad
+# connection can build and launch them without downloading anything:
+#   wados     the WadOS wadspace: the wadspaces base, every package CI builds
+#             (images/README.md, wad_gen::packages::all()), and this repo at
+#             /var/lib/wados/project/wados (what the WadOS Wadspace works on)
+#   dolphin   the Dolphin app, as it runs in a wadspace
+#   steam     the Steam app, as it runs in a wadspace. Its first run still
+#             downloads Proton and client updates from Valve: no image can
+#             carry those.
+# The base and the stream sidecar are always included, and always from this
+# machine's own builds (images/build.sh) — the stick never carries CI's of
+# those, so what it tests is what's here. The list after --include is
+# space-separated, in any order (--include wados steam). If either of the two is
+# missing the build stops before anything is touched. The packages are CI's
+# (pulled; or this machine's builds, used as they are) before the stick is
+# wiped.
+# On the stick they land in root's podman storage, and
+# host/usr/libexec/wados/install-to-disk copies them (and the project, if
+# there is one) onto machines it installs.
 #
 # The variants:
 #   host    the open graphics drivers (Intel, AMD, nouveau/NVK): the Surface,
@@ -75,7 +100,7 @@ VERSION="${WADOS_VERSION:-44.$(date -u +%Y%m%d).$((10#$(date -u +%H%M)))}"
 
 log() { echo ">> $*"; }
 die() { echo "host/build.sh: $*" >&2; exit "${2:-1}"; }
-usage() { sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'; }
 
 TARGET="${1:-}"
 [[ -n "${TARGET}" ]] || { usage; exit 2; }
@@ -356,16 +381,109 @@ push() {
 # ------------------------------------------------------------ the stick
 # The image installed on the stick with bootc (a stick is a machine that
 # boots to WadSpaces Live), then host/stick-files. No ISO: an install copies
-# the stick's own system to the disk.
+# the stick's own system to the disk. --include carries the offline test
+# scenarios: the images are resolved (and pulled, if not here) before the
+# stick is wiped, and land in its root podman storage, where wadd finds them
+# without a network; install-to-disk copies them onto machines installed from
+# the stick. host/usr/libexec/wados/install-to-disk.
 installer() {
-    local where="${1:-}" file="${2:-}" image="${IMAGE_BASE}:latest" dev
+    local where="" file="" image="${IMAGE_BASE}:latest" dev
     local target="ghcr.io/hunggod/wados-host:latest"
+    # --include's list, and where the stick goes: parsed and validated
+    # before anything is touched, so a typo stops before --wipe runs.
+    local include_words=() use_wados=0 use_dolphin=0 use_steam=0
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --include)
+                shift
+                local found=0
+                while [[ $# -gt 0 && "$1" =~ ^[a-z]+$ ]]; do
+                    include_words+=("$1"); shift; found=1
+                done
+                if ((found == 0)); then
+                    die "--include takes a list: --include wados dolphin steam" 2
+                fi
+                ;;
+            --include=*)
+                local one="${1#--include=}"
+                [[ "${one}" =~ ^[a-z]+$ ]] || die "--include takes a list: --include wados dolphin steam" 2
+                include_words+=("${one}"); shift
+                ;;
+            --image)
+                [[ -n "${2:-}" ]] || die "--image takes a file" 2
+                where=--image file="$2"; shift 2 ;;
+            /dev/*) where="$1"; shift ;;
+            dev/*) where="/$1"; shift ;;   # the same without the leading slash
+            -h|--help) usage; exit 0 ;;
+            *) die "installer: unknown argument: $1" 2 ;;
+        esac
+    done
+    [[ -n "${where}" ]] || die "installer /dev/sdX | --image FILE [--include wados dolphin steam]" 2
+    for w in ${include_words[@]+"${include_words[@]}"}; do
+        case "${w}" in
+            wados) use_wados=1 ;;
+            dolphin) use_dolphin=1 ;;
+            steam) use_steam=1 ;;
+            *) die "unknown --include: ${w} (the scenarios are wados, dolphin, steam)" 2 ;;
+        esac
+    done
     podman image exists "${image}" || die "${image} isn't built: host/build.sh image"
     case "${where}" in
         --image) [[ -n "${file}" ]] || die "--image FILE" 2 ;;
         /dev/*) [[ -b "${where}" ]] || die "${where} isn't a disk" 2 ;;
         *) die "installer /dev/sdX | --image FILE" 2 ;;
     esac
+    # What the stick carries: the base and the stream sidecar, as this
+    # machine built them (images/build.sh) — never CI's, so what the stick
+    # tests is what's here. Nothing is pulled for them: missing either one is
+    # a stop before anything is touched. The packages are CI's, and pull.
+    local carry=()
+    if ((use_wados + use_dolphin + use_steam > 0)); then
+        local base=localhost/wados-base:44 stream=localhost/wados-stream:44
+        podman image exists "${base}" \
+            || die "${base} isn't here — the stick carries this machine's base, not CI's: build it (images/build.sh)" 2
+        podman image exists "${stream}" \
+            || die "${stream} isn't here — the stick carries this machine's stream sidecar, not CI's: build it (images/build.sh)" 2
+        carry+=("${base}" "${stream}")
+        local abi
+        abi="$(podman image inspect --format '{{index .Labels "io.wadspaces.abi"}}' "${base}" 2>/dev/null || true)"
+        [[ -n "${abi}" ]] || abi=fedora44.1
+        log "the base's ABI: ${abi}"
+        local pkgs=()
+        if ((use_wados)); then
+            # Everything CI builds (wad_gen::packages::all()): the WadOS
+            # wadspace's, and the rest. Kept in sync by hand with
+            # crates/wad-gen/src/packages.rs — update both together.
+            pkgs=(cpp python nodejs rust claude-code podman vscode)
+        else
+            ((use_dolphin)) && pkgs+=(dolphin)
+            ((use_steam)) && pkgs+=(steam)
+        fi
+        local p ref
+        for p in "${pkgs[@]}"; do
+            ref="ghcr.io/hunggod/wados-pkg-${p}:${abi}"
+            if podman image exists "${ref}"; then
+                log "${ref}: here already"
+            elif podman image exists "localhost/wados-pkg-${p}:latest"; then
+                # built on this machine (images/build.sh pkg): wadd finds a
+                # package by its labels, whatever it's called
+                ref="localhost/wados-pkg-${p}:latest"
+                log "${ref}: built on this machine"
+            else
+                log "pulling ${ref}"
+                podman pull "${ref}" \
+                    || die "couldn't pull ${ref} — needed for --include; the stick hasn't been touched (check the connection)" 2
+            fi
+            carry+=("${ref}")
+        done
+        local bytes=0 size
+        for ref in "${carry[@]}"; do
+            size="$(podman image inspect --format '{{.Size}}' "${ref}" 2>/dev/null || echo 0)"
+            [[ "${size}" =~ ^[0-9]+$ ]] || size=0
+            bytes=$((bytes + size))
+        done
+        log "the stick will carry ${#carry[@]} images ($((bytes / 1048576)) MB of layers)"
+    fi
     local keys="${SECRETS}/cloudflare.toml"
     if [[ -f "${keys}" ]]; then
         log "machines will get a public address: ${keys} goes on the stick"
@@ -389,8 +507,9 @@ installer() {
     if [[ "${where}" == --image ]]; then
         truncate -s 32G "${file}"
         file="$(realpath "${file}")"
-        dev="$(sudo losetup -fP --show "${file}")"
-        trap 'sudo losetup -d "${dev}" 2> /dev/null || true' EXIT
+        STICK_DEV="$(sudo losetup -fP --show "${file}")"
+        trap '[[ -n "${STICK_DEV:-}" ]] && { sudo losetup -d "${STICK_DEV}" 2> /dev/null || true; }' EXIT
+        dev="${STICK_DEV}"
     else
         dev="${where}"
         log "${dev} is erased: $(lsblk -ndo SIZE,MODEL "${dev}")"
@@ -404,6 +523,32 @@ installer() {
     sudo mount "${root}" "${mnt}"
     var="$(sudo find "${mnt}/ostree/deploy" -mindepth 2 -maxdepth 2 -name var -type d | head -1)"
     sudo "${HERE}/stick-files" "${var}" "${target}" "${keys}" "" "${firebase}"
+    if ((${#carry[@]})); then
+        log "copying ${#carry[@]} offline images onto the stick (root's podman storage)"
+        sudo mkdir -p "${var}/lib/containers"
+        if ! podman save --format docker-archive "${carry[@]}" \
+            | sudo unshare --mount --propagation private bash -euo pipefail -c '
+                mkdir -p /var/lib/containers /run/containers /run/libpod
+                mount --bind "$1" /var/lib/containers
+                mount -t tmpfs tmpfs /run/containers
+                mount -t tmpfs tmpfs /run/libpod
+                podman load --quiet
+                restorecon -R /var/lib/containers 2>/dev/null || true
+            ' _ "${var}/lib/containers"; then
+            die "couldn't copy the images onto the stick (${var}/lib/containers)"
+        fi
+        printf '%s\n' "${carry[@]}" | sudo tee "${var}/lib/wados/images.list" > /dev/null
+        sudo chmod 0644 "${var}/lib/wados/images.list"
+    fi
+    if ((use_wados)); then
+        log "copying this repo onto the stick: /var/lib/wados/project/wados"
+        sudo install -d -m 0755 "${var}/lib/wados/project/wados"
+        (cd "${ROOT}" && tar --exclude='./target' --exclude='./.build' --exclude='./output' \
+            --exclude='./host/secrets' --exclude='./secrets' --exclude='node_modules' --exclude='./site/dist' \
+            -cf - .) | sudo tar -xf - -C "${var}/lib/wados/project/wados"
+        sudo chown -R 1000:1000 "${var}/lib/wados/project"
+        sudo restorecon -R "${var}/lib/wados/project" 2> /dev/null || true
+    fi
     sudo umount "${mnt}"
     rmdir "${mnt}"
     sync
