@@ -149,11 +149,7 @@ impl Link {
         self.call(
             move |w| async move { w.screen_session(&socket, uid, monitors).await },
             |r| match r {
-                Ok(s) => tracing::info!(
-                    "wadd puts wadspaces on this screen ({:?}), {} display(s)",
-                    s.from,
-                    s.monitors
-                ),
+                Ok(s) => tracing::info!("wadd puts wadspaces on this screen ({:?}), {} display(s)", s.from, s.monitors),
                 Err(e) => tracing::warn!("couldn't tell wadd where the screen is: {e}"),
             },
         );

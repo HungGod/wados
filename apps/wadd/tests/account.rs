@@ -223,6 +223,28 @@ async fn a_machine_signed_in_to_github_links_itself_and_follows_the_account() {
     assert!(app.secret_files.status().files.is_empty());
     assert!(!app.account.is_owner("phone-of-u1").await);
 
+    // Linked again, then removed from the account (its document deleted):
+    // the rules answer its heartbeat with 403 (an update of a missing
+    // document is a create), a read of it finds nothing, and it unlinks.
+    assert_eq!(app.account.link().await.unwrap().state, AccountState::Linked);
+    Mock::given(method("POST"))
+        .and(path(format!("{DOCS}:commit")))
+        .respond_with(ResponseTemplate::new(403).set_body_json(json!({"error": {"status": "PERMISSION_DENIED"}})))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .mount(&fb)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!("{DOCS}/users/u1/machines/mach1")))
+        .respond_with(ResponseTemplate::new(404).set_body_json(json!({"error": {"status": "NOT_FOUND"}})))
+        .with_priority(1)
+        .up_to_n_times(1)
+        .mount(&fb)
+        .await;
+    app.account.heartbeat().await.unwrap();
+    assert_eq!(app.account.view().state, AccountState::Unlinked);
+    assert!(!fake.state.lock().unwrap().secrets.contains_key("wados_account"));
+
     // Linked again, then signed out: one sign-in, so it leaves the account too.
     assert_eq!(app.account.link().await.unwrap().state, AccountState::Linked);
     wad_wadd_client::Wadd::new(dir.path().join("wadd.sock")).github_signout().await.unwrap();

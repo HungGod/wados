@@ -243,8 +243,15 @@ impl Server {
         // The tailnet, my other machines and the remote API (the sample's instead, with it).
         let tailnet = parts.sample.is_none().then(|| {
             let person = person_of(screen.clone(), profile, d.projects_uid);
-            let t =
-                peers::TailnetPeers::new(&config, &machine, bus.clone(), jobs.clone(), docs.clone(), builds.clone(), person);
+            let t = peers::TailnetPeers::new(
+                &config,
+                &machine,
+                bus.clone(),
+                jobs.clone(),
+                docs.clone(),
+                builds.clone(),
+                person,
+            );
             // A notice told here reaches my other machines' bells too (an
             // agent asking a question on one is heard on every screen).
             bus.relay_through(t.peers.clone());

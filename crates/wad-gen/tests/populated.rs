@@ -63,14 +63,14 @@ fn what_each_wadspace_is_made_of() {
     let lib = library();
     let pk = |id: &str| packages::packages_of(ws(&lib, id));
     let un = |id: &str| packages::unpackaged(ws(&lib, id));
-    assert_eq!(pk("wadspaces"), ["cpp", "nodejs", "rust", "claude-code", "vscode", "ext-anthropic.claude-code"]);
+    assert_eq!(pk("wadspaces"), ["cpp", "rust", "claude-code", "vscode", "ext-anthropic.claude-code"]);
     assert!(un("wadspaces").is_empty());
     assert_eq!(
         pk("intelligencequest"),
-        ["cpp", "nodejs", "rust", "claude-code", "vscode", "ext-anthropic.claude-code", "ext-rust-lang.rust-analyzer"]
+        ["cpp", "rust", "claude-code", "vscode", "ext-anthropic.claude-code", "ext-rust-lang.rust-analyzer"]
     );
     assert_eq!(un("intelligencequest"), ["app:libresprite", "app:tiled"]);
-    assert_eq!(pk("vanua-academy"), ["nodejs", "claude-code", "vscode", "ext-anthropic.claude-code"]);
+    assert_eq!(pk("vanua-academy"), ["claude-code", "vscode", "ext-anthropic.claude-code"]);
     assert_eq!(un("vanua-academy"), ["terminal:firebase"]);
     assert!(pk("cosmic-bodybuilding").is_empty());
     assert_eq!(un("cosmic-bodybuilding"), ["app:obsidian"]);

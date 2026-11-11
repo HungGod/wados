@@ -69,11 +69,8 @@ impl Wadd {
 
     /// A job for a wadspace's Claude Code (`POST /v1/agents`).
     pub async fn agent_send(&self, ws: &str, text: &str) -> Result<wad_model::agents::Agent, Failure> {
-        self.post(
-            "/v1/agents",
-            &wad_proto::AgentSend { ws: ws.into(), text: text.into(), display: Default::default() },
-        )
-        .await
+        self.post("/v1/agents", &wad_proto::AgentSend { ws: ws.into(), text: text.into(), display: Default::default() })
+            .await
     }
 
     /// `stop`, `deny` or `ship` (an `allow` is [`Wadd::agent_allow`]).

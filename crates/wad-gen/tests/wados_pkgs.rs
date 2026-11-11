@@ -35,3 +35,23 @@ fn it_prints_one_answer_or_fails_with_a_reason() {
     assert!(o.stdout.is_empty());
     assert!(text(&o.stderr).contains("usage: wados-pkgs"), "{}", text(&o.stderr));
 }
+
+#[test]
+fn the_starters_set_is_what_a_stick_carries_for_wados() {
+    let o = wados_pkgs(&["starter", "sha256:0123456789abcdef"]);
+    assert_eq!(o.status.code(), Some(0), "{}", text(&o.stderr));
+    let set: serde_json::Value = serde_json::from_slice(&o.stdout).expect("JSON");
+    let ids: Vec<&str> = set["packages"].as_array().expect("packages").iter().filter_map(|p| p.as_str()).collect();
+    // VS Code and its Claude Code extension (on the native claude), Rust (on
+    // C/C++), Python, podman: what the WadOS wadspace has. Ori and Node.js
+    // aren't in it.
+    for id in ["vscode", "ext-anthropic.claude-code", "claude-code", "rust", "cpp", "python", "podman"] {
+        assert!(ids.contains(&id), "{id}: {ids:?}");
+    }
+    assert!(!ids.contains(&"ori") && !ids.contains(&"nodejs"), "{ids:?}");
+    let key = set["key"].as_str().expect("a key");
+    assert_eq!(set["image"], format!("localhost/wados-set-{key}:latest"));
+
+    let o = wados_pkgs(&["starter"]);
+    assert_eq!(o.status.code(), Some(2));
+}

@@ -5,7 +5,7 @@ renamed `wadspaces-android-old` to it.
 
 ## What it is
 
-The spike's phone (`src/surfaces/phone/`): the gates (Join your tailnet, a first machine, trust), then four tabs, Home,
+The spike's phone (`src/surfaces/phone/`): the gates (signing in, Join your tailnet, trust), then four tabs, Home,
 Builder, Machines and Activity, under the WAD|SPACES app bar. It streams, builds, stops and edits wadspaces; it never
 opens one on a machine's screen.
 
@@ -15,21 +15,22 @@ opens one on a machine's screen.
   board (design B) and its goldens, v1's sets and layers, the wadspace password. Firebase came back later: the
   account's sign-in, its machines and secret files (0013).
 
-## Finding machines with no account
+## Finding machines: the account only
 
-Signed in to the account (0013), the phone reads the account's machines instead, and its ID token is its trust.
-This is how it finds a machine outside the account.
+Android doesn't let an app read the Tailscale app's devices. At first the person typed one machine's name (MagicDNS) or
+tailnet address, and a machine that trusted the phone named the others (`GET /v1/remote/peers`), with Tailscale's WhoIs
+as the trust. That's gone: the user decided the account (0013) is the only way the phone knows a machine. Signed in,
+it reads the account's machines, and its ID token is its trust; signed out, it knows none and opens on the sign-in
+page. Names are looked up each time, and only a tailnet address is ever called.
 
-Android doesn't let an app read the Tailscale app's devices. The first time, the person types one machine's name
-(MagicDNS) or tailnet address; it answers with my other machines (`GET /v1/remote/peers`), and the phone keeps the list.
-Names are looked up each time, and only a tailnet address is ever called. Trust is Tailscale's WhoIs, as between
-machines: the phone holds no token.
+One of the account's machines whose wadd doesn't take the token (signed out there, or signed in to another account)
+can still be asked to trust the phone on its own screen: that's wadd's own trust ask, which it keeps for other devices.
 
 ## wadd's remote API, for the phone
 
 New routes, for my machines and trusted devices (`apps/wadd/src/remote.rs`), each the socket's own code:
 
-- `peers`, `library`, `runs`, `builds`, `jobs`, `streams`, `streams/{id}/share` (its players' links too);
+- `peers` (the phone no longer reads it: the account lists its machines), `library`, `runs`, `builds`, `jobs`, `streams`, `streams/{id}/share` (its players' links too);
 - `ops` and `undo/{id}`: the Builder's edits, as the machine's Builder sends them (`api::apply_op`, `apply_undo`);
 - `notices`: the last 50, kept by the event bus as they're published (the shell keeps its own);
 - `update`, `update/check`, and `restart`, which only restarts into a staged update, and only on a machine's own wadd.

@@ -314,11 +314,20 @@ impl Inner {
             .map_err(|e| format!("GitHub gave a token, but it wasn't kept: {e}"))?;
         *self.repos.lock().unwrap() = None;
         jobs.line(job, &format!("The token is kept (the podman secret {GITHUB_SECRET})"));
-        let mut account = self
-            .gh
-            .user(&granted.token)
-            .await
-            .map_err(|e| format!("The token is kept, but GitHub didn't say whose it is: {e}"))?;
+        // Whose it is: asked again on a bad connection (the token's kept
+        // already, so giving up here would show signed out while it isn't).
+        let mut tries = 0;
+        let mut account = loop {
+            match self.gh.user(&granted.token).await {
+                Ok(a) => break a,
+                Err(e) if tries < 3 => {
+                    tries += 1;
+                    tracing::warn!("GitHub's user, try {tries}: {e}");
+                    tokio::time::sleep(Duration::from_secs(2 * tries)).await;
+                }
+                Err(e) => return Err(format!("The token is kept, but GitHub didn't say whose it is: {e}")),
+            }
+        };
         if account.scopes.is_empty() {
             account.scopes = granted.scopes;
         }

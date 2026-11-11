@@ -159,8 +159,9 @@ shopt -u nullglob
 step "Copying WadSpaces' offline images and project (if the stick has them)"
 # A stick made with `host/build.sh installer … --include …` carries the
 # images for the offline test scenarios in root's podman storage, and
-# images.list with their names; and the wados repo, at project/wados. Copied
-# onto the disk, so the machines it installs build and launch offline too.
+# images.list with their names; and the wados repo, where wadd keeps the
+# WadOS wadspace's clone (projects/wadspaces/wadspaces). Copied onto the
+# disk, so the machines it installs build and launch offline too.
 if [[ -f /var/lib/wados/images.list ]]; then
     refs=()
     while IFS= read -r line || [[ -n "${line}" ]]; do
@@ -177,7 +178,9 @@ if [[ -f /var/lib/wados/images.list ]]; then
     if ((${#refs[@]})); then
         echo "carrying ${#refs[@]} images"
         mkdir -p "${VAR}/lib/containers"
-        if ! podman save --format docker-archive "${refs[@]}" \
+        # -m: every image, each as itself (without it the others are saved
+        # as more names for the first).
+        if ! podman save -m --format docker-archive "${refs[@]}" \
             | unshare --mount --propagation private bash -euo pipefail -c '
                 mkdir -p /var/lib/containers /run/containers /run/libpod
                 mount --bind "$1" /var/lib/containers
@@ -194,12 +197,18 @@ if [[ -f /var/lib/wados/images.list ]]; then
 else
     echo "no offline images on the stick: skipping"
 fi
-if [[ -d /var/lib/wados/project ]]; then
-    echo "copying the project folder to the disk (/var/lib/wados/project/wados)"
-    mkdir -p "${VAR}/lib/wados"
-    cp -a /var/lib/wados/project "${VAR}/lib/wados/project"
-    chown -R 1000:1000 "${VAR}/lib/wados/project"
-    restorecon -R "${VAR}/lib/wados/project" 2>/dev/null || true
+# The WadOS wadspace's clone (projects.rs' clone_dir), as the stick has it
+# now: the projects folder root's and passable (0711), the wadspace's
+# folder and the clone the projects user's.
+CLONE=/var/lib/wados/projects/wadspaces/wadspaces
+if [[ -d "${CLONE}" ]]; then
+    echo "copying the WadOS wadspace's clone to the disk (${CLONE})"
+    install -d -m 0711 "${VAR}/lib/wados/projects"
+    install -d -m 0700 -o 1000 -g 1000 "${VAR}/lib/wados/projects/wadspaces"
+    rm -rf "${VAR}${CLONE#/var}"
+    cp -a "${CLONE}" "${VAR}${CLONE#/var}"
+    chown -R 1000:1000 "${VAR}${CLONE#/var}"
+    restorecon -R "${VAR}/lib/wados/projects" 2>/dev/null || true
 fi
 
 step "Finishing"

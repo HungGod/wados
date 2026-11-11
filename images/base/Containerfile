@@ -111,6 +111,9 @@ RUN \
   usermod -s /bin/bash abc && \
   echo "abc ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/abc && \
   chmod 440 /etc/sudoers.d/abc && \
+  echo "**** newuidmap/newgidmap's file capabilities (Fedora's rpm has them; this base lost them): rootless podman (the podman tool) maps abc's subordinate ids with them ****" && \
+  setcap cap_setuid=ep /usr/bin/newuidmap && \
+  setcap cap_setgid=ep /usr/bin/newgidmap && \
   echo "**** cleanup ****" && \
   dnf clean all && \
   rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*

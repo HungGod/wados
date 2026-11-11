@@ -184,7 +184,13 @@ view() {
     pid=$!
     for _ in $(seq 40); do curl -sf -o /dev/null "http://127.0.0.1:${lport}/ws-${GUID}/api/health" && break; sleep 0.25; done
     local rc=0
-    node "${HERE}/view.mjs" "http://localhost:${lport}/ws-${GUID}/#token=${key}" "${out}" "${secs}" || rc=$?
+    # WADOS_KRUN_VIEWER: a browser viewer taking URL OUT.png SECONDS (the
+    # Node one, view.mjs, went with the v2 spike's Playwright).
+    if [[ -n "${WADOS_KRUN_VIEWER:-}" ]]; then
+        ${WADOS_KRUN_VIEWER} "http://localhost:${lport}/ws-${GUID}/#token=${key}" "${out}" "${secs}" || rc=$?
+    else
+        echo "   no browser viewer (WADOS_KRUN_VIEWER): not looked at"
+    fi
     kill "${pid}" 2> /dev/null || true
     wait "${pid}" 2> /dev/null || true
     echo "   ${out}"

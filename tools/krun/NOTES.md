@@ -147,5 +147,5 @@ Public secure would add `Annotation=krun.use_passt=1`, `Volume=/usr/bin/passt:/u
 | `prototype.sh` | wad-gen's units, the host's guest side and the real stream image, in a test VM without wadd: `setup`, `plain`, `up [--check]`, `view`, `check`, `down`, `vm-stop` |
 | `check-secure.sh` | a private secure stream through wadd, start to nothing left, for `tools/vm/`'s checks |
 | `guest/check/90-krun-check.sh` | `up --check` only: the tone, and the folder both ways |
-| `view.mjs` | Playwright on the stream: screenshots, the Start click, audio and video frames per second |
+| (`view.mjs`) | Playwright on the stream: screenshots, the Start click, audio and video frames per second. Gone with the v2 spike's Playwright (and Node.js); `WADOS_KRUN_VIEWER` takes its place |
 | `wavstat.py` | how loud the guest's recording was |

@@ -789,25 +789,19 @@ impl UpdatesPage {
         let what = [
             (UpdateSource::Github, "GitHub", "The builds CI makes (ghcr.io/hunggod/wados-host)"),
             (UpdateSource::Local, "This machine", "What the WadOS wadspace builds here (host/build.sh image)"),
-            (
-                UpdateSource::Pushed,
-                "Pushed to GitHub",
-                "What the WadOS wadspace pushed to ghcr.io/hunggod/wados-host",
-            ),
+            (UpdateSource::Pushed, "Pushed to GitHub", "What the WadOS wadspace pushed to ghcr.io/hunggod/wados-host"),
         ];
         for (source, name, tip) in what {
-            let b = kit::button(
-                name,
-                if u.source == source { Variant::Primary } else { Variant::Quiet },
-                None,
-                true,
-            );
+            let b = kit::button(name, if u.source == source { Variant::Primary } else { Variant::Quiet }, None, true);
             b.set_tooltip_text(Some(tip));
-            b.set_widget_name(&format!("update-source-{}", match source {
-                UpdateSource::Github => "github",
-                UpdateSource::Local => "local",
-                UpdateSource::Pushed => "pushed",
-            }));
+            b.set_widget_name(&format!(
+                "update-source-{}",
+                match source {
+                    UpdateSource::Github => "github",
+                    UpdateSource::Local => "local",
+                    UpdateSource::Pushed => "pushed",
+                }
+            ));
             if u.source != source {
                 self.act(&b, "source", move |w| async move { w.update_source(source).await });
             }

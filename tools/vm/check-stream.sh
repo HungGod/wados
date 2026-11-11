@@ -38,8 +38,9 @@
 #      the quick host, turnDown as expected, the shell's list; its share
 #      (kept in a private folder, never printed); its folder, files, units
 #      and ICE servers (their kinds only); a clock in it, moving
-#   6. viewers from the laptop (tools/vm/stream-view.mjs, Playwright's
-#      Chromium), through the tunnel: the routes without a key (308, the
+#   6. viewers from the laptop (a browser viewer: WADOS_STREAM_VIEWER, a
+#      command taking view()'s JSON options on stdin and printing what it saw
+#      as JSON; without one, the viewers' checks are skipped), through the tunnel: the routes without a key (308, the
 #      card, 401, the open health, the expired page). In WebRTC mode (as
 #      Selkies' public mode starts): the one-tap link and the user and
 #      password, and the transport each ends up with (with --turn: they
@@ -73,15 +74,15 @@
 # **stream-phone**: the phone test, with a person. One VM, a quick tunnel,
 # real TURN (--turn), a public stream of a wadspace with a clock running in it; it
 # prints the one-tap link (and a QR code of it in the terminal: qrencode, or
-# the spike's node qrcode), the plain link with its user and password, and
+# none), the plain link with its user and password, and
 # waits for Enter (STREAM_PHONE_WAIT seconds at most, 1800), saying every
 # 15 s who's watching and how. Then the stream's stats (viewers, transport,
-# Selkies' status) and everything goes. STREAM_PHONE_VIEWER=playwright: the
+# Selkies' status) and everything goes. STREAM_PHONE_VIEWER=browser (with WADOS_STREAM_VIEWER): the
 # laptop's Chromium stands in for the phone (a test of the test), and no
 # Enter is waited for.
 #
 # Secrets: WADOS_SECRETS, a folder with cloudflare.toml (or the file), by
-# default ../wadspaces-old/host/secrets; only [cloudflare.turn] is read. All
+# default host/secrets; only [cloudflare.turn] is read. All
 # this prints goes through turn-secret.py mask. wadd mints the TURN
 # credentials; this never asks Cloudflare for them.
 #
@@ -93,7 +94,9 @@ S_NAME=stream
 S_UNIT=wados-quick-tunnel
 S_PROTO="${ROOT}/crates/wad-proto/src/streams.rs"
 S_TUNNEL_RS="${ROOT}/apps/wadd/src/tunnel.rs"
-S_VIEW="${HERE}/stream-view.mjs"
+# A browser viewer (none: the checks that need one are skipped). The Node and
+# Playwright one went with the v2 spike.
+S_VIEW="${WADOS_STREAM_VIEWER:-}"
 S_SECRET="${HERE}/turn-secret.py"
 
 ok() { printf 'ok    %s\n' "$*"; }
@@ -302,7 +305,7 @@ stream_main() {
 stream_preflight() {
     local free_mb
     [[ -f "${VM}/wados.qcow2" ]] || { fail "no ${VM}/wados.qcow2: tools/vm.sh disk"; return 1; }
-    command -v node > /dev/null || { fail "no node (Playwright's viewer)"; return 1; }
+    [[ -n "${S_VIEW}" ]] || note "no browser viewer (WADOS_STREAM_VIEWER): what a viewer sees is skipped"
     free_mb="$(awk '/^MemAvailable:/ { a = $2 } /^SwapFree:/ { s = $2 } END { print int((a + s / 2) / 1024) }' /proc/meminfo)"
     note "the laptop has about ${free_mb} MB to spare (available, and half the free swap) for ${MEM} MB"
     ((free_mb < MEM + 512)) && note "WARNING: that's tight; other VMs or builds may be running"
@@ -496,7 +499,7 @@ stream_check() {
     step_time
 
     say "6. viewers, from the laptop, through the tunnel"
-    viewers_check
+    if [[ -n "${S_VIEW}" ]]; then viewers_check; else skip "no browser viewer (WADOS_STREAM_VIEWER)"; fi
     step_time
 
     say "7. adopted after wadd restarts"
@@ -807,12 +810,12 @@ EOF
     return 0
 }
 
-# A viewer (stream-view.mjs), with options from jq over the share: view
+# A viewer (WADOS_STREAM_VIEWER), with options from jq over the share: view
 # NAME 'jq filter' (the filter makes the options from the share).
 view() {
     local name="$1" filter="$2" r
     jq -c --arg out "${SHOTS}/${name}.png" "${filter} + {out: \$out}" "${S_PRIV}/share.json" |
-        timeout 240 node "${S_VIEW}" > "${SHOTS}/${name}.json" 2> "${SHOTS}/${name}.err"
+        timeout 240 ${S_VIEW} > "${SHOTS}/${name}.json" 2> "${SHOTS}/${name}.err"
     r=$?
     VIEW="$(cat "${SHOTS}/${name}.json")"
     note "${name}: $(jq -c '{page, oneTap, card, signIn, signInPost, refused, secure, streaming, transport, candidates, held, iceServers, colours, stddev, tokenInAddress, errors, error}' <<< "${VIEW}" 2> /dev/null || head -c 300 <<< "${VIEW}")"
@@ -1004,7 +1007,8 @@ adopt_check() {
     wait_for 60 eval '[[ "$(stream_of "${WS}" | jq -r .live)" == true ]]'
     after="$(stream_of "${WS}" | jq -c '{link, live, mode}')"
     if [[ -n "${before}" && "${before}" == "${after}" ]]; then ok "after systemctl restart wadd, the stream is adopted: ${after}"; else fail "adopted? before ${before}, after ${after:-none}"; fi
-    if view 7-adopted '{url: .openLink, expect: "stream", wait: 60}'; then ok "and its one-tap link still streams"; else fail "after the restart, it doesn't stream"; fi
+    if [[ -z "${S_VIEW}" ]]; then skip "its one-tap link streams (no browser viewer)"
+    elif view 7-adopted '{url: .openLink, expect: "stream", wait: 60}'; then ok "and its one-tap link still streams"; else fail "after the restart, it doesn't stream"; fi
 }
 
 # The secrets a stream has, kept in the VM (root's, 0600, in /run) to look
@@ -1062,7 +1066,9 @@ stop_check() {
     page="$(curl -s -m 15 -w '\n%{http_code}' "https://${QHOST}/ws-${GUID}/")"
     code="${page##*$'\n'}"
     if [[ "${code}" == 404 && "${page}" == *"This link has expired"* ]]; then ok "its link, through the tunnel: the expired page (404, \"This link has expired\")"; else fail "its link after the stop: ${code} $(head -c 200 <<< "${page}")"; fi
-    if view 8-expired '{url: .openLink, expect: "none", wait: 6}' && [[ "$(jq -r .page <<< "${VIEW}")" == 404 ]]; then
+    if [[ -z "${S_VIEW}" ]]; then
+        skip "a viewer gets the expired page (no browser viewer)"
+    elif view 8-expired '{url: .openLink, expect: "none", wait: 6}' && [[ "$(jq -r .page <<< "${VIEW}")" == 404 ]]; then
         ok "a viewer opening the one-tap link now gets the expired page and nothing streams (${SHOTS}/8-expired.png)"
     else
         fail "the one-tap link after the stop: $(jq -c '{page, streaming, error}' <<< "${VIEW}")"
@@ -1161,7 +1167,8 @@ idle_check() {
             # Without TURN, viewers here get it over WebSockets.
             [[ -z "${S_TURN}" ]] && switch_to websockets
             # Watched for longer than idle_minutes (1): it must stay.
-            if view 10-watched '{url: .openLink, expect: "stream", wait: 60, hold: 90}'; then ok "watched for 90 s: $(jq -c .held <<< "${VIEW}")"; else fail "watching it: $(jq -c '{streaming, error}' <<< "${VIEW}")"; fi
+            if [[ -z "${S_VIEW}" ]]; then skip "watched for 90 s (no browser viewer): it may end, unwatched"
+            elif view 10-watched '{url: .openLink, expect: "stream", wait: 60, hold: 90}'; then ok "watched for 90 s: $(jq -c .held <<< "${VIEW}")"; else fail "watching it: $(jq -c '{streaming, error}' <<< "${VIEW}")"; fi
             info="$(stream_of "${ws}")"
             if [[ "$(jq -r .live <<< "${info}")" == true ]]; then ok "still live after being watched past idle_minutes (1 min)"; else fail "it ended while it was watched: ${info:-gone}"; fi
         fi
@@ -1234,15 +1241,8 @@ stream_phone() {
     echo
     if command -v qrencode > /dev/null; then
         jq -r .openLink "${S_PRIV}/share.json" | qrencode -t ANSIUTF8 -m 2
-    elif qr="$(jq -r .openLink "${S_PRIV}/share.json" | node -e '
-const { createRequire } = require("node:module");
-const q = createRequire(process.argv[1])("qrcode");
-let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () =>
-  q.toString(s.trim(), { type: "terminal", small: true }, (e, t) => { if (e) process.exit(1); process.stdout.write(t); }));
-' "${ROOT}/../wadspaces-v2-spike/package.json" 2> /dev/null)"; then
-        printf '%s\n' "${qr}"
     else
-        echo "   (no qrencode or the spike's qrcode: the link above only)"
+        echo "   (no qrencode: the link above only)"
     fi
     echo
     echo " Or the link, signing in:"
@@ -1252,8 +1252,8 @@ let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () =>
     echo
 
     local limit=$(($(now) + ${STREAM_PHONE_WAIT:-1800})) line=""
-    if [[ "${STREAM_PHONE_VIEWER:-}" == playwright ]]; then
-        note "STREAM_PHONE_VIEWER=playwright: the laptop's Chromium stands in for the phone"
+    if [[ "${STREAM_PHONE_VIEWER:-}" == browser && -n "${S_VIEW}" ]]; then
+        note "STREAM_PHONE_VIEWER=browser: the laptop's viewer (WADOS_STREAM_VIEWER) stands in for the phone"
         if view phone-stand-in '{url: .openLink, expect: "stream", wait: 60, hold: 20}'; then ok "the stand-in streams ($(jq -r .transport <<< "${VIEW}"), $(jq -c .candidates <<< "${VIEW}"))"; else fail "the stand-in doesn't stream"; fi
     else
         echo "Press Enter when you're done (at most $(((limit - $(now)) / 60)) minutes)."

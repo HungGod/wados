@@ -323,8 +323,12 @@ mod tests {
         let web = group(&gs, GroupId::Web);
         assert_eq!(item(web, "gmail").lit.as_deref(), Some("ext:wadbrowser:gmail"));
         assert_eq!(item(web, "youtube").lit, None);
-        // Calendar, the machine's browser's own web app, is one of the usual sites already.
-        assert!(!web.items.iter().any(|i| i.key.starts_with("own:")));
+        // Calendar, the machine's browser's own web app, isn't one of the catalog's sites: it's offered as its own.
+        assert!(
+            web.items.iter().any(|i| i.key.starts_with("own:")),
+            "{:?}",
+            web.items.iter().map(|i| &i.key).collect::<Vec<_>>()
+        );
         let tools = group(&gs, GroupId::Tools);
         for t in ["claude-code", "ori", "hplip", "rust"] {
             item(tools, t);

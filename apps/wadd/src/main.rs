@@ -59,6 +59,21 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum TunnelCmd {
+    /// A machine's public address made (or found again: the same id reuses
+    /// its tunnel and record), and what its first boot puts in place written
+    /// to `--out`: `cloudflared-token`, `wadd.toml` (`[machine] id`,
+    /// `[streaming] host`) and `turn.toml` (when the keys have TURN's).
+    /// host/build.sh installer gives WadSpaces Live its own this way.
+    Provision {
+        /// The machine's id (`<id>.wadspaces.com`).
+        id: String,
+        /// The secrets folder's cloudflare.toml.
+        #[arg(long)]
+        secrets: PathBuf,
+        /// A folder (made if it isn't there) for the three files.
+        #[arg(long)]
+        out: PathBuf,
+    },
     /// Retires a machine: its DNS record and tunnel go.
     Remove {
         /// The machine's id (`<id>.wadspaces.com`).
@@ -78,6 +93,7 @@ fn main() -> ExitCode {
         Cmd::Serve { user, config, socket, state_dir, sample } => serve(user, config, socket, state_dir, sample),
         Cmd::Console => console(),
         Cmd::Tunnel { cmd: TunnelCmd::Remove { id, secrets } } => tunnel_remove(&id, &secrets),
+        Cmd::Tunnel { cmd: TunnelCmd::Provision { id, secrets, out } } => tunnel_provision(&id, &secrets, &out),
     }
 }
 
@@ -90,6 +106,52 @@ fn console() -> ExitCode {
         .and_then(|rt| rt.block_on(wadd::console::run()));
     match r {
         Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("wadd: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn tunnel_provision(id: &str, secrets: &std::path::Path, out: &std::path::Path) -> ExitCode {
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+    let run = || -> Result<String, String> {
+        if let Some(p) = wad_model::install_names::computer_name_problem(id) {
+            return Err(format!("{id}: {p}"));
+        }
+        let text = std::fs::read_to_string(secrets).map_err(|e| format!("{}: {e}", secrets.display()))?;
+        let keys = wad_cloudflare::Keys::parse(&text).map_err(|e| e.to_string())?;
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        let cf = wad_cloudflare::Cloudflare::new(wad_cloudflare::API, "wadspaces.com", &keys);
+        let a = rt.block_on(cf.provision(id)).map_err(|e| e.to_string())?;
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(out)
+            .map_err(|e| format!("{}: {e}", out.display()))?;
+        let write = |name: &str, text: &str, mode: u32| -> Result<(), String> {
+            let path = out.join(name);
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(mode)
+                .open(&path)
+                .map_err(|e| format!("{}: {e}", path.display()))?;
+            std::io::Write::write_all(&mut f, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+        };
+        write("cloudflared-token", &a.token, 0o600)?;
+        write("wadd.toml", &format!("[machine]\nid = \"{id}\"\n\n[streaming]\nhost = \"{}\"\n", a.host), 0o644)?;
+        if let Some(turn) = keys.turn_file() {
+            write("turn.toml", &turn, 0o600)?;
+        }
+        Ok(a.host)
+    };
+    match run() {
+        Ok(host) => {
+            println!("{host}");
+            ExitCode::SUCCESS
+        }
         Err(e) => {
             eprintln!("wadd: {e}");
             ExitCode::FAILURE

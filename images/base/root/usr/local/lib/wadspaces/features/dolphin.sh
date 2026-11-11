@@ -8,6 +8,26 @@ if [ ! -e "${dir}/GCPadNew.ini" ]; then
     mkdir -p "${dir}"
     /usr/local/lib/wadspaces/wadspaces-gcpad > "${dir}/GCPadNew.ini"
 fi
+# All four GameCube ports a Standard Controller (Dolphin's 6), so Play
+# together's players 2-4 count: Dolphin plugs in port 1 only. A port the
+# person has set themselves is left as it is.
+python3 - "${dir}/Dolphin.ini" <<'PY' || true
+import configparser, sys
+path = sys.argv[1]
+c = configparser.RawConfigParser(strict=False, interpolation=None)
+c.optionxform = str
+c.read(path)
+if not c.has_section("Core"):
+    c.add_section("Core")
+changed = False
+for n in range(4):
+    if not c.has_option("Core", f"SIDevice{n}"):
+        c.set("Core", f"SIDevice{n}", "6")
+        changed = True
+if changed:
+    with open(path, "w") as f:
+        c.write(f, space_around_delimiters=True)
+PY
 exec dolphin-emu "$@"
 WRAP
 chmod 755 /usr/local/bin/wadspaces-dolphin

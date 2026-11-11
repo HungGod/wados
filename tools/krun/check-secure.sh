@@ -134,12 +134,18 @@ ssh -i "${ROOT}/.build/vm/id_ed25519" -p "$(cat "${RUN}/ssh.port")" -o BatchMode
     -N -L "127.0.0.1:${lport}:127.0.0.1:${port}" root@127.0.0.1 &
 tunnel=$!
 sleep 2
-seen="$(node "${ROOT}/tools/krun/view.mjs" "http://localhost:${lport}/ws-${guid}/#token=${key}" "${OUT}/stream.png" 12 2>&1)"
+# WADOS_KRUN_VIEWER: a browser viewer taking URL OUT.png SECONDS, printing
+# {"drawn":…} first and its frames per second third (view.mjs's contract; it
+# went with the v2 spike's Playwright). Without one, this is skipped.
+seen=""
+[[ -n "${WADOS_KRUN_VIEWER:-}" ]] && seen="$(${WADOS_KRUN_VIEWER} "http://localhost:${lport}/ws-${guid}/#token=${key}" "${OUT}/stream.png" 12 2>&1)"
 kill "${tunnel}" 2> /dev/null
 wait "${tunnel}" 2> /dev/null
 first="$(head -1 <<< "${seen}")"
 frames="$(sed -n 3p <<< "${seen}" | grep -o ', [0-9]*' | awk '{s += $2} END {print s + 0}')"
-if grep -q '"drawn":true' <<< "${first}" && [[ "${frames:-0}" -gt 50 ]]; then
+if [[ -z "${WADOS_KRUN_VIEWER:-}" ]]; then
+    echo "skip  the browser draws its desktop (no browser viewer: WADOS_KRUN_VIEWER)"
+elif grep -q '"drawn":true' <<< "${first}" && [[ "${frames:-0}" -gt 50 ]]; then
     ok "the browser draws its desktop (${frames} frames; ${OUT}/stream.png, stream-start.png: its Start menu)"
 else
     fail "the browser: ${first}"

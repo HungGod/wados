@@ -43,7 +43,7 @@ const SITES: [(&str, &[&str]); 6] = [
 /// Each app's usual add-ons, after what goes with what's in it.
 const USUAL_VSCODE: [&str; 3] = ["anthropic.claude-code", "eamodio.gitlens", "esbenp.prettier-vscode"];
 const USUAL_TERMINAL: [&str; 3] = ["claude-code", "nodejs", "python"];
-const USUAL_WADBROWSER: [&str; 4] = ["github", "claude", "google-drive", "calendar"];
+const USUAL_WADBROWSER: [&str; 3] = ["github", "claude", "google-drive"];
 
 fn tool_name(id: &str) -> String {
     tool(id).map_or_else(|| id.to_string(), |t| t.name.clone())

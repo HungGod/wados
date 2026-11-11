@@ -128,15 +128,8 @@ impl Bus {
         };
         self.keep(&listed);
         // The shell hears it (its bell, and a toast: it's news here too).
-        let e = Event::Notice {
-            level: n.level,
-            title,
-            undo: None,
-            body: n.body,
-            icon: n.icon,
-            action: None,
-            toast: true,
-        };
+        let e =
+            Event::Notice { level: n.level, title, undo: None, body: n.body, icon: n.icon, action: None, toast: true };
         {
             let mut latest = self.latest.lock().unwrap();
             if let Some(k) = e.latest_key() {

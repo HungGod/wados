@@ -9,12 +9,12 @@
 /secrets/
 /host/secrets/
 *.secret.toml
-# The site
-/site/node_modules/
-/site/dist/
 # Python
 __pycache__/
 *.pyc
 # Logs and editor leftovers
 *.log
 .DS_Store
+# Claude Code session leftovers (its sandbox makes these; 0de5698 committed them by mistake)
+.claude/
+.mcp.json

@@ -192,8 +192,7 @@ mod tests {
         std::fs::write(d.path().join("keys/gh/cookies.sqlite"), b"kept").unwrap();
         // "gh" is the library's; "old" only a trashed wadspace's.
         std::fs::create_dir_all(d.path().join("keys/old")).unwrap();
-        let mut lib = wad_model::edit::Library::default();
-        lib.keys = all.to_vec();
+        let mut lib = wad_model::edit::Library { keys: all.to_vec(), ..Default::default() };
         let mut trashed = wad_model::ops::blank("club", "Club", "m", 0, 1);
         trashed.deleted_at = Some(2);
         trashed.secrets.by_slot.insert(

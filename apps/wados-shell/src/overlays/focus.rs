@@ -119,7 +119,8 @@ impl FocusUi {
     }
 
     /// Every display but the primary.
-    fn cover(&self, f: &Focus) {        let primary = self.shell.primary.connector();
+    fn cover(&self, f: &Focus) {
+        let primary = self.shell.primary.connector();
         let mut covers = self.covers.borrow_mut();
         for m in crate::monitors::monitors() {
             if m.connector() == primary {

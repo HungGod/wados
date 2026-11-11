@@ -52,6 +52,30 @@
 //! (`Builds::refresh_base`, through `Hooks::bases_changed`). Once a day, on
 //! a machine, and at its start.
 //!
+//! **Where a newer WadOS comes from** ([`UpdateSource`]). Each source names
+//! an image in the machine's own family (`wados-host`, or
+//! `wados-host-nvidia` on an NVIDIA machine):
+//!
+//! - **GitHub's** (and **pushed**, the WadOS wadspace's push to the same
+//!   tag): `ghcr.io/hunggod/<family>:latest`. While bootc follows it, the
+//!   check and download are bootc's (`upgrade`). While it follows something
+//!   else (this machine's build), bootc's check would be of that, so wadd
+//!   reads the registry itself ([`registry_version`]: the manifest's digest
+//!   and the version label) and the update is a `bootc switch` back to it.
+//! - **This machine's builds**: the newest `localhost/<family>` by its
+//!   version label, in the machine's podman store or in a running
+//!   wadspace's own (the WadOS wadspace's rootless podman, which
+//!   `host/build.sh image` builds into). One in a wadspace is copied out
+//!   first (`podman save` inside it, in its user namespace, so the files
+//!   keep their owners; `podman load` here), then `bootc switch
+//!   --transport containers-storage <name>@<image id>`. Only a build newer
+//!   than what's booted is offered.
+//!
+//! A check downloads what it found by itself only when it's newer than
+//! what's booted: going back to an older image is the person's to choose.
+//! A check counts as a look whether it worked or not (the next is
+//! [`EVERY`] later), and the source can't change while an update runs.
+//!
 //! What wadd remembers between starts (when it last looked, what was turned
 //! down, when each base was refreshed): `<state_dir>/updates.json`.
 
@@ -67,7 +91,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use wad_model::{JobKind, PartState};
 use wad_proto as proto;
-use wad_proto::{ApiError, Base, Bases, ErrorCode, Event, JobInfo, Level, NoticeAction, UpdateProgress, UpdateSource, Version};
+use wad_proto::{
+    ApiError, Base, Bases, ErrorCode, Event, JobInfo, Level, NoticeAction, UpdateProgress, UpdateSource, Version,
+};
 
 use crate::backend::{ImageInfo, OnBytes, OnLine, Res};
 use crate::events::Bus;
@@ -95,6 +121,87 @@ pub const UPGRADE: &[&str] = &["bash", "-c", "set -o pipefail; bootc upgrade --p
 /// The image name that's a host image's.
 const HOST_IMAGE: &str = "wados-host";
 const NVIDIA_IMAGE: &str = "wados-host-nvidia";
+/// This machine's own builds of it (`host/build.sh image`), and the NVIDIA one's.
+const LOCAL_HOST_IMAGE: &str = "localhost/wados-host";
+
+/// Which host image `host` runs: NVIDIA's (`wados-host-nvidia`), else the
+/// plain one. A machine stays in its family whatever the source.
+fn family(host: &Host) -> &'static str {
+    let nvidia = |i: &str| i.contains(NVIDIA_IMAGE);
+    if nvidia(&host.image) || host.booted.as_ref().is_some_and(|b| nvidia(&b.image)) {
+        NVIDIA_IMAGE
+    } else {
+        HOST_IMAGE
+    }
+}
+
+/// Where GitHub's CI (and the WadOS wadspace's push) publishes `host`'s image.
+fn registry_target(host: &Host) -> String {
+    format!("{PUBLISHED}{}:latest", family(host))
+}
+
+/// bootc follows `target` from its registry (so `bootc upgrade` updates it),
+/// not this machine's build or another image.
+fn follows(host: &Host, target: &str) -> bool {
+    host.transport == "registry" && host.image == target
+}
+
+/// The repository of a tag (`localhost/wados-host` of `localhost/wados-host:44.1`).
+fn repo_of(tag: &str) -> &str {
+    match tag.rsplit_once(':') {
+        Some((r, t)) if !t.contains('/') => r,
+        _ => tag,
+    }
+}
+
+/// The newest of this machine's builds of `family` (`wados-host`, or the
+/// NVIDIA one: never another image whose name starts the same, such as
+/// `wados-host-builder`), by its `org.opencontainers.image.version` (else
+/// its tag): the version, its tag and image id, and the wadspace whose own
+/// podman has it (none: the machine's store, which wins a tie).
+fn newest_local(family: &str, images: &[(Option<String>, ImageInfo)]) -> Option<(Version, Option<String>)> {
+    let repo = format!("localhost/{family}");
+    let mut best: Option<(Version, Option<String>)> = None;
+    for (from, i) in images {
+        let Some(tag) = i.tags.iter().find(|t| repo_of(t) == repo) else { continue };
+        let version =
+            i.labels.get("org.opencontainers.image.version").and_then(Value::as_str).map(String::from).or_else(|| {
+                i.tags
+                    .iter()
+                    .filter(|t| repo_of(t) == repo)
+                    .find_map(|t| t.strip_prefix(&format!("{repo}:")).filter(|v| *v != "latest").map(String::from))
+            });
+        let Some(version) = version else { continue };
+        let v = Version { version, image: tag.clone(), digest: Some(i.id.trim_start_matches("sha256:").to_string()) };
+        let better = match &best {
+            None => true,
+            Some((b, b_from)) => match compare_versions(&v.version, &b.version) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => b_from.is_some() && from.is_none(),
+                std::cmp::Ordering::Less => false,
+            },
+        };
+        if better {
+            best = Some((v, from.clone()));
+        }
+    }
+    best
+}
+
+/// CI's versions (`44.20261105.2`): ones that can be told newer or older.
+fn ci_version(v: &str) -> bool {
+    v.split('.').count() >= 2 && v.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// `a` is newer than `b`, by their versions; when either isn't CI's kind
+/// (a digest for a version), it can't be told, so it counts as newer.
+fn newer(a: &Version, b: &Version) -> bool {
+    if ci_version(&a.version) && ci_version(&b.version) {
+        compare_versions(&a.version, &b.version).is_gt()
+    } else {
+        true
+    }
+}
 
 /// The host image with NVIDIA's driver beside `booted` (same registry and
 /// tag), if `booted` is the plain one.
@@ -118,6 +225,8 @@ const OFFLINE: &[&str] = &[
     "tls handshake timeout",
     "connection timed out",
     "no route to host",
+    "dns error",
+    "error sending request",
 ];
 /// ... and that it wants a login.
 const REFUSED: &[&str] = &["unauthorized", "authentication required", "denied", "401", "403"];
@@ -525,6 +634,17 @@ pub trait Images: Send + Sync + 'static {
     /// Every image here, as podman lists them (a WadOS wadspace's builds are
     /// `localhost/wados-host*`).
     async fn all(&self) -> Res<Vec<ImageInfo>>;
+    /// The host images built inside the wadspaces running here (a WadOS
+    /// wadspace's own podman: rootless, in its /config): (its container, the
+    /// image as that podman lists it).
+    async fn built_in_wadspaces(&self) -> Res<Vec<(String, ImageInfo)>>;
+    /// One of those copied into the machine's store, where bootc reads it:
+    /// `podman save` inside the wadspace (its own user namespace, so the
+    /// files keep their owners), `podman load` here. Its id stays the same.
+    async fn import(&self, container: &str, id: &str, on_line: OnLine) -> Res<()>;
+    /// What a registry has at `reference` (its version label and manifest
+    /// digest), without downloading it: for a source bootc doesn't follow.
+    async fn remote(&self, reference: &str, token: Option<String>) -> Res<Version>;
 }
 
 /// The machine's podman.
@@ -551,6 +671,188 @@ impl Images for PodmanImages {
     async fn all(&self) -> Res<Vec<ImageInfo>> {
         self.0.images_all().await.map_err(|e| e.to_string())
     }
+
+    async fn built_in_wadspaces(&self) -> Res<Vec<(String, ImageInfo)>> {
+        // Running ones only (a stopped wadspace's podman can't be asked).
+        let running = self.0.containers_labelled(wad_gen::labels::WADSPACE).await.map_err(|e| e.to_string())?;
+        let mut out = vec![];
+        for c in running {
+            let Some(id) = c.labels.get(wad_gen::labels::WADSPACE).and_then(Value::as_str) else { continue };
+            // The wadspace itself, not its stream's sidecar.
+            if c.name != wad_gen::units::container_name(id) {
+                continue;
+            }
+            let list = format!(
+                "command -v podman > /dev/null || exit 0; exec podman images --format json --filter 'reference={}*'",
+                LOCAL_HOST_IMAGE
+            );
+            let r = self.0.exec(&c.name, "abc", &["sh", "-c", &list], &[("HOME", "/config")]).await;
+            match r {
+                Ok(o) if o.code == 0 => {
+                    let text = String::from_utf8_lossy(&o.stdout);
+                    out.extend(parse_podman_images(&text).into_iter().map(|i| (c.name.clone(), i)));
+                }
+                Ok(o) => tracing::info!("updates: {}'s podman: {}", c.name, o.stderr.trim()),
+                Err(e) => tracing::info!("updates: {}'s podman: {e}", c.name),
+            }
+        }
+        Ok(out)
+    }
+
+    async fn import(&self, container: &str, id: &str, mut on_line: OnLine) -> Res<()> {
+        if !container.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+            || !id.chars().all(|c| c.is_ascii_hexdigit())
+        {
+            return Err(format!("not an image to copy: {container} {id}"));
+        }
+        let script = r#"set -euo pipefail
+podman exec --user abc -e HOME=/config "$1" podman save --format docker-archive "$2" | podman load"#;
+        outside(&["bash", "-c", script, "import", container, id], &mut |l| on_line(l)).await.map(drop)
+    }
+
+    async fn remote(&self, reference: &str, token: Option<String>) -> Res<Version> {
+        registry_version(reference, token.as_deref()).await
+    }
+}
+
+/// `podman images --format json`, as the CLI prints it: what each image is.
+fn parse_podman_images(text: &str) -> Vec<ImageInfo> {
+    let list: Vec<Value> = serde_json::from_str(text.trim()).unwrap_or_default();
+    list.iter()
+        .filter_map(|i| {
+            let id = i.get("Id").and_then(Value::as_str)?.trim_start_matches("sha256:").to_string();
+            let tags = i
+                .get("Names")
+                .and_then(Value::as_array)
+                .map(|n| n.iter().filter_map(Value::as_str).map(String::from).collect())
+                .unwrap_or_default();
+            Some(ImageInfo {
+                id,
+                created: i.get("Created").and_then(Value::as_f64).unwrap_or(0.0),
+                size: i.get("Size").and_then(Value::as_u64).unwrap_or(0),
+                labels: i.get("Labels").and_then(Value::as_object).cloned().unwrap_or_default(),
+                tags,
+                parent: String::new(),
+            })
+        })
+        .collect()
+}
+
+/// The platform's name in an image index (`amd64`, `arm64`).
+fn oci_arch() -> &'static str {
+    match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => other,
+    }
+}
+
+/// Manifests and indexes, as registries answer for them.
+const MANIFEST_TYPES: &str = "application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, \
+     application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json";
+
+/// What a registry has at `reference`: the version its config's
+/// `org.opencontainers.image.version` says, and its manifest's digest (this
+/// platform's, for a list), as bootc reports a deployment's. The registry's
+/// own token (OCI distribution's Bearer challenge): anonymous, or with
+/// `token` (the GitHub token, for ghcr) when it's given.
+pub async fn registry_version(reference: &str, token: Option<&str>) -> Res<Version> {
+    let (host, rest) = reference.split_once('/').ok_or_else(|| format!("{reference}: no registry in it"))?;
+    let (repo, tag) = match rest.rsplit_once(':') {
+        Some((r, t)) if !t.contains('/') => (r, t),
+        _ => (rest, "latest"),
+    };
+    let http = reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("couldn't reach {host}: {e}"))?;
+    let base = format!("https://{host}/v2/{repo}");
+    let mut bearer: Option<String> = None;
+    // A GET, with the registry's token once it asks for one.
+    async fn get(
+        http: &reqwest::Client,
+        url: &str,
+        accept: &str,
+        bearer: &mut Option<String>,
+        login: Option<&str>,
+    ) -> Res<reqwest::Response> {
+        for _ in 0..2 {
+            let mut req = http.get(url).header(reqwest::header::ACCEPT, accept);
+            if let Some(b) = bearer.as_deref() {
+                req = req.bearer_auth(b);
+            }
+            let res = req.send().await.map_err(|e| format!("couldn't reach {url}: {e}"))?;
+            if res.status() != reqwest::StatusCode::UNAUTHORIZED || bearer.is_some() {
+                if !res.status().is_success() {
+                    return Err(format!("{url}: {}", res.status()));
+                }
+                return Ok(res);
+            }
+            // `Bearer realm="…",service="…",scope="…"`: its token, then again.
+            let challenge = res
+                .headers()
+                .get(reqwest::header::WWW_AUTHENTICATE)
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or_default()
+                .to_string();
+            let field = |k: &str| {
+                challenge.split(',').find_map(|p| {
+                    let (key, v) = p.trim().trim_start_matches("Bearer ").split_once('=')?;
+                    (key.trim() == k).then(|| v.trim().trim_matches('"').to_string())
+                })
+            };
+            let realm = field("realm").ok_or_else(|| format!("{url}: 401 Unauthorized"))?;
+            let mut q = vec![];
+            for k in ["service", "scope"] {
+                if let Some(v) = field(k) {
+                    q.push((k, v));
+                }
+            }
+            let mut t = http.get(&realm).query(&q);
+            if let Some(l) = login {
+                t = t.basic_auth(REGISTRY_USER, Some(l));
+            }
+            let t = t.send().await.map_err(|e| format!("couldn't reach {realm}: {e}"))?;
+            if !t.status().is_success() {
+                return Err(format!("{realm}: {} (unauthorized)", t.status()));
+            }
+            let v: Value = t.json().await.map_err(|e| format!("{realm}: {e}"))?;
+            let got = v.get("token").or_else(|| v.get("access_token")).and_then(Value::as_str);
+            *bearer = Some(got.ok_or_else(|| format!("{realm}: no token"))?.to_string());
+        }
+        Err(format!("{url}: 401 Unauthorized"))
+    }
+    let digest_of = |res: &reqwest::Response| {
+        res.headers().get("docker-content-digest").and_then(|h| h.to_str().ok()).map(String::from)
+    };
+    let res = get(&http, &format!("{base}/manifests/{tag}"), MANIFEST_TYPES, &mut bearer, token).await?;
+    let mut digest = digest_of(&res);
+    let mut manifest: Value = res.json().await.map_err(|e| format!("{reference}'s manifest: {e}"))?;
+    // A list: this platform's.
+    if let Some(list) = manifest.get("manifests").and_then(Value::as_array) {
+        let mine = list
+            .iter()
+            .find(|m| m.pointer("/platform/architecture").and_then(Value::as_str) == Some(oci_arch()))
+            .and_then(|m| m.get("digest").and_then(Value::as_str))
+            .ok_or_else(|| format!("{reference} has no image for {}", oci_arch()))?
+            .to_string();
+        let res = get(&http, &format!("{base}/manifests/{mine}"), MANIFEST_TYPES, &mut bearer, token).await?;
+        digest = Some(digest_of(&res).unwrap_or(mine));
+        manifest = res.json().await.map_err(|e| format!("{reference}'s manifest: {e}"))?;
+    }
+    let digest = digest.ok_or_else(|| format!("{reference}: the registry didn't say its digest"))?;
+    let config = manifest
+        .pointer("/config/digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{reference}'s manifest has no config"))?;
+    let res = get(&http, &format!("{base}/blobs/{config}"), "*/*", &mut bearer, token).await?;
+    let config: Value = res.json().await.map_err(|e| format!("{reference}'s config: {e}"))?;
+    let version = config
+        .pointer("/config/Labels/org.opencontainers.image.version")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .unwrap_or_else(|| digest.trim_start_matches("sha256:").chars().take(12).collect());
+    Ok(Version { version, image: reference.to_string(), digest: Some(digest) })
 }
 
 /// A base image: what it's called, its name here, and where CI publishes it.
@@ -652,6 +954,9 @@ struct St {
     /// The newest image this machine built (a WadOS wadspace's), as last
     /// looked for: what "This machine's builds" would offer.
     local: Option<Version>,
+    /// The running wadspace whose own podman has `local` (none: the
+    /// machine's store has it): it's copied out before bootc switches.
+    local_in: Option<String>,
 }
 
 /// Cheap to clone: one service, shared.
@@ -760,7 +1065,10 @@ impl HostUpdates {
             }
         }
         if bases {
-            tracing::info!("updates: refreshing the base images, as every {} h", self.0.settings.bases_every.as_secs() / 3600);
+            tracing::info!(
+                "updates: refreshing the base images, as every {} h",
+                self.0.settings.bases_every.as_secs() / 3600
+            );
             if let Err(e) = self.refresh_job() {
                 tracing::info!("updates: {}", e.message);
             }
@@ -969,27 +1277,34 @@ impl Inner {
         let host = st.host.clone().unwrap_or_default();
         let booted = host.booted.clone().unwrap_or_else(|| Version { image: host.image.clone(), ..Version::default() });
         let staged = if host.rollback_queued { host.rollback.clone() } else { host.staged.clone() };
-        // What was found for the chosen source; GitHub's also has bootc's own
-        // cached update, and this machine's builds are found by their label.
-        let found = match st.saved.source {
-            UpdateSource::Github => st.found.clone().or_else(|| host.cached.clone()),
-            UpdateSource::Local => st.local.clone(),
-            UpdateSource::Pushed => st.found.clone(),
+        // What was found for the chosen source. GitHub's also has bootc's own
+        // cached update, while bootc follows GitHub's image (one it cached
+        // for this machine's build would be nothing). This machine's builds
+        // are found by their label, and only a newer one is offered: an
+        // older build is never an update.
+        let source = st.saved.source;
+        let found = match source {
+            UpdateSource::Github if follows(&host, &registry_target(&host)) => {
+                st.found.clone().or_else(|| host.cached.clone())
+            }
+            UpdateSource::Github | UpdateSource::Pushed => st.found.clone(),
+            UpdateSource::Local => st.local.clone().filter(|l| newer(l, &booted)),
         };
         let available = found.filter(|c| {
-            !same_version(Some(c), Some(&booted))
-                && !same_version(Some(c), staged.as_ref())
-                && !host.rollback_queued
+            !same_version(Some(c), Some(&booted)) && !same_version(Some(c), staged.as_ref()) && !host.rollback_queued
         });
         let error = match (&st.host, self.bootc.here()) {
             (_, false) => Some("This machine doesn't update through bootc".into()),
             _ => st.error.clone(),
         };
         proto::Updates {
-            // A stick's copy isn't a registry's, and this machine's own
-            // builds aren't either: those sources are online without it.
-            online: (self.bootc.here() && host.transport == "registry" && !st.offline)
-                || (st.saved.source == UpdateSource::Local && st.local.is_some()),
+            // GitHub's (and the pushed) image is looked for on its registry,
+            // whatever bootc follows now; this machine's own builds need no
+            // registry, so that source is online when there's one.
+            online: (self.bootc.here()
+                && !st.offline
+                && (host.transport == "registry" || source != UpdateSource::Local))
+                || (source == UpdateSource::Local && st.local.is_some()),
             checking: st.checking,
             booted,
             available,
@@ -1114,27 +1429,33 @@ impl Inner {
         st.error = Some(e.to_string());
     }
 
-    /// The check: true if it found one to download (not turned down).
+    /// The check: true if it found one to download by itself (newer than
+    /// what's booted, and not turned down).
     async fn check(&self, job: &str) -> Res<bool> {
         let _one = self.lock.lock().await;
         // What it follows (whose registry it signs in to), if it isn't known yet.
         if self.st.lock().unwrap().host.is_none() {
             self.refresh().await?;
         }
-        // The image this machine built (a WadOS wadspace's) is looked for
-        // whichever source is chosen, so the page can offer it.
-        let local = self.newest_local().await;
-        self.st.lock().unwrap().local = local;
-        let source = self.st.lock().unwrap().saved.source;
-        if source != UpdateSource::Github {
-            return self.check_source(job, source).await;
-        }
-        let r = self.with_login(job, &["bootc", "upgrade", "--check"]).await;
-        {
+        // Looked now, whatever comes of it: a check that fails waits for the
+        // next one as one that worked does (not every tick).
+        let (source, host) = {
             let mut st = self.st.lock().unwrap();
             st.saved.checked_at = Some(now_ms());
             self.save(&st.saved);
+            (st.saved.source, st.host.clone().unwrap_or_default())
+        };
+        // The image this machine built (a WadOS wadspace's) is looked for
+        // whichever source is chosen, so the page can offer it.
+        self.look_local(Some(job)).await;
+        // GitHub's (or the pushed) image while bootc follows another (this
+        // machine's build): bootc's check would ask about that one, so the
+        // registry is asked itself.
+        let target = registry_target(&host);
+        if source != UpdateSource::Github || !follows(&host, &target) {
+            return self.check_source(job, source, &target).await;
         }
+        let r = self.with_login(job, &["bootc", "upgrade", "--check"]).await;
         let out = match r {
             Ok(out) => out,
             Err(e) => {
@@ -1151,52 +1472,57 @@ impl Inner {
         }
         let u = self.refresh().await?;
         let declined = self.st.lock().unwrap().saved.declined.clone();
-        Ok(u.available.is_some_and(|a| a.digest != declined))
+        Ok(u.available.is_some_and(|a| a.digest != declined && newer(&a, &u.booted)))
     }
 
-    /// The newest image **this machine built** (`localhost/wados-host*`), by
-    /// its `org.opencontainers.image.version`: what a WadOS wadspace's
-    /// `host/build.sh image` makes, and what "This machine's builds" offers.
-    async fn newest_local(&self) -> Option<Version> {
-        let images = self.images.all().await.ok()?;
-        let mut best: Option<Version> = None;
-        for i in &images {
-            // Its version: the label, else the tag after the name.
-            let version = i
-                .labels
-                .get("org.opencontainers.image.version")
-                .and_then(|v| v.as_str())
-                .map(String::from)
-                .or_else(|| {
-                    i.tags.iter().find_map(|t| t.strip_prefix("localhost/wados-host:").map(String::from)).filter(|v| v != "latest")
-                });
-            let Some(version) = version else { continue };
-            let reference = i.tags.iter().find(|t| t.starts_with("localhost/wados-host")).cloned();
-            let Some(reference) = reference else { continue };
-            let v = Version { version, image: reference, digest: Some(i.id.clone()) };
-            if best.as_ref().is_none_or(|b| compare_versions(&v.version, &b.version).is_gt()) {
-                best = Some(v);
+    /// The newest of this machine's own builds, looked for again (the
+    /// machine's store, and the wadspaces' own podman), kept for the page.
+    async fn look_local(&self, job: Option<&str>) {
+        let family = family(&self.st.lock().unwrap().host.clone().unwrap_or_default());
+        let mut images: Vec<(Option<String>, ImageInfo)> = match self.images.all().await {
+            Ok(all) => all.into_iter().map(|i| (None, i)).collect(),
+            Err(e) => {
+                tracing::info!("updates: the machine's images: {e}");
+                vec![]
             }
+        };
+        match self.images.built_in_wadspaces().await {
+            Ok(built) => images.extend(built.into_iter().map(|(c, i)| (Some(c), i))),
+            Err(e) => tracing::info!("updates: the wadspaces' images: {e}"),
         }
-        best
+        let (local, from) = newest_local(family, &images).map_or((None, None), |(v, c)| (Some(v), c));
+        if let (Some(job), Some(v)) = (job, &local) {
+            let where_ = from.as_deref().map_or("this machine's store".to_string(), |c| format!("{c}'s podman"));
+            self.jobs.line(job, &format!("» this machine's newest build: {} ({where_})", v.version));
+        }
+        let mut st = self.st.lock().unwrap();
+        st.local = local;
+        st.local_in = from;
     }
 
-    /// The check, when the source isn't GitHub's: this machine's own build,
-    /// or the one it pushed to GitHub's registry. Nothing to download either
-    /// way: a local image is here, and a pushed one is `bootc switch`ed to.
-    async fn check_source(&self, job: &str, source: UpdateSource) -> Res<bool> {
+    /// The check, but by wadd itself: this machine's own build, or GitHub's
+    /// (or the pushed) image when bootc follows something else, read from
+    /// its registry. Nothing's downloaded: a local image is here, and a
+    /// registry's is `bootc switch`ed to when it's applied.
+    async fn check_source(&self, job: &str, source: UpdateSource, target: &str) -> Res<bool> {
         let (found, error) = match source {
             UpdateSource::Local => (self.st.lock().unwrap().local.clone(), None),
-            // What the wadspace pushed is the registry's own `latest`: bootc's
-            // check is the check (it's the same image family).
-            UpdateSource::Pushed => {
-                let r = self.with_login(job, &["bootc", "upgrade", "--check"]).await;
+            UpdateSource::Github | UpdateSource::Pushed => {
+                self.jobs.line(job, &format!("» {target}, from its registry"));
+                let token = if target.starts_with(&format!("{GHCR}/")) { self.images.token().await } else { None };
+                // Without a login first (a public image needs none), then with one if refused.
+                let r = match self.images.remote(target, None).await {
+                    Err(e) if refused(&e) && token.is_some() => self.images.remote(target, token).await,
+                    r => r,
+                };
                 match r {
-                    Ok(out) => (parse_check(&out), None),
+                    Ok(v) => {
+                        self.jobs.line(job, &format!("» it has {}", v.version));
+                        (Some(v), None)
+                    }
                     Err(e) => (None, Some(e)),
                 }
             }
-            UpdateSource::Github => unreachable!("GitHub's check is bootc's"),
         };
         if let Some(e) = error {
             self.failed(&e);
@@ -1204,48 +1530,53 @@ impl Inner {
             return Err(e);
         }
         // The one it's on, or one it's already got ready, isn't a new one.
-        let booted = self.st.lock().unwrap().host.clone().and_then(|h| h.booted);
-        let staged = self.st.lock().unwrap().host.clone().and_then(|h| h.staged);
-        let found = found.filter(|f| {
-            !same_version(Some(f), booted.as_ref()) && !same_version(Some(f), staged.as_ref())
-        });
+        let (booted, staged) = {
+            let host = self.st.lock().unwrap().host.clone().unwrap_or_default();
+            (host.booted, host.staged)
+        };
+        let found =
+            found.filter(|f| !same_version(Some(f), booted.as_ref()) && !same_version(Some(f), staged.as_ref()));
         {
             let mut st = self.st.lock().unwrap();
             st.offline = false;
             st.error = None;
             st.found = found;
-            st.saved.checked_at = Some(now_ms());
-            self.save(&st.saved);
         }
         let u = self.refresh().await?;
         let declined = self.st.lock().unwrap().saved.declined.clone();
-        Ok(u.available.is_some_and(|a| a.digest != declined))
+        // Downloaded by itself only when it's newer: going back from this
+        // machine's build to an older one of GitHub's is the person's to say.
+        Ok(u.available.is_some_and(|a| a.digest != declined && newer(&a, &u.booted)))
     }
 
-    /// Its source, as chosen: saved, and told the page.
-    pub fn set_source(&self, source: UpdateSource) -> proto::Updates {
+    /// Its source, as chosen: saved, and told the page. Not while an update
+    /// is under way (it was started for the source it had).
+    pub fn set_source(&self, source: UpdateSource) -> Result<proto::Updates, ApiError> {
         {
             let mut st = self.st.lock().unwrap();
+            if let Some(j) = &st.job {
+                return Err(busy("An update", j));
+            }
             st.saved.source = source;
             // What was found is for the source that found it.
             st.found = None;
             self.save(&st.saved);
         }
-        self.publish()
+        Ok(self.publish())
     }
 
-    /// `bootc switch`: its download and staging (it says no progress).
+    /// `bootc switch` to an image on a registry: its download and staging
+    /// (it says no progress).
     async fn switch(self: &Arc<Self>, job: &str, image: &str) -> Res<()> {
         let _one = self.lock.lock().await;
-        self.switch_locked(job, image).await
+        self.switch_locked(job, image, false).await
     }
 
-    /// `switch`, with the lock already held (apply has it).
-    async fn switch_locked(self: &Arc<Self>, job: &str, image: &str) -> Res<()> {
+    /// `switch`, with the lock already held (apply has it). `local`: the
+    /// image is in the machine's podman store (this machine's build), not
+    /// on a registry.
+    async fn switch_locked(self: &Arc<Self>, job: &str, image: &str, local: bool) -> Res<()> {
         self.jobs.stage(job, "download", PartState::Working, None);
-        // A local image is switched to from podman's store; anything named by
-        // a registry is pulled by bootc as it switches.
-        let local = self.st.lock().unwrap().saved.source == UpdateSource::Local;
         let mut argv: Vec<&str> = vec!["bootc", "switch"];
         if local {
             argv.extend(["--transport", "containers-storage"]);
@@ -1262,10 +1593,10 @@ impl Inner {
         };
         self.jobs.line(job, &format!("$ bootc switch {image}"));
         self.sign_out();
-        let r = match self.bootc.run(&argv, lines).await {
+        let r = match self.bootc.run(argv, lines).await {
             Err(e) if refused(&e) && self.sign_in().await => {
                 self.jobs.line(job, "» the registry wants a login: with this machine's GitHub token");
-                let r = self.bootc(Some(job), &argv).await;
+                let r = self.bootc(Some(job), argv).await;
                 self.signed_in_answer(r)
             }
             r => r,
@@ -1281,48 +1612,61 @@ impl Inner {
         Ok(())
     }
 
+    /// What bootc staged, once a switch is done.
+    async fn staged(&self, job: &str) -> Res<Version> {
+        let u = self.refresh().await?;
+        self.jobs.stage(job, "stage", PartState::Done, None);
+        u.staged.ok_or_else(|| "bootc staged nothing: this machine is up to date".to_string())
+    }
+
     /// The download and staging: what's staged.
     async fn apply(self: &Arc<Self>, job: &str) -> Res<Version> {
         let _one = self.lock.lock().await;
-        // This machine's own build (or the one it pushed): `bootc switch` to
-        // it, from the local store or the registry, and nothing is downloaded
-        // from CI.
-        let source = self.st.lock().unwrap().saved.source;
-        if source != UpdateSource::Github {
-            let next = self
-                .st
-                .lock()
-                .unwrap()
-                .found
-                .clone()
-                .or_else(|| self.st.lock().unwrap().local.clone())
-                .ok_or("Nothing to apply: there's no newer image from this source")?;
-            // A local image: its id pins it, so a build made after the check
-            // can't be a surprise. Pushed: its digest, from the registry.
-            let image = match (&next.digest, source) {
-                // `name@sha256:…`: the tag goes (the id is what's pinned).
-                (Some(d), UpdateSource::Local) => {
-                    let name = next.image.split(':').next().unwrap_or(&next.image);
-                    format!("{name}@{d}")
-                }
-                _ => next.image.clone(),
-            };
+        // What's to be applied, all read at once (one lock of `st`: a second
+        // taken while the first is held would never come).
+        let (source, host, next, local_in) = {
+            let st = self.st.lock().unwrap();
+            (st.saved.source, st.host.clone().unwrap_or_default(), self.view(&st).available, st.local_in.clone())
+        };
+        // This machine's own build: `bootc switch` to it in the machine's
+        // podman store (copied there first from the wadspace that built
+        // it), nothing downloaded.
+        if source == UpdateSource::Local {
+            let next = next.ok_or("Nothing to apply: this machine has built nothing newer")?;
+            let id = next.digest.clone().ok_or("this machine's build has no image id")?;
+            let id = id.trim_start_matches("sha256:").to_string();
             self.jobs.line(job, &format!("» from this machine's builds: {}", next.version));
-            self.switch_locked(job, &image).await?;
-            let u = self.refresh().await?;
-            self.jobs.stage(job, "stage", PartState::Done, None);
-            return u.staged.ok_or_else(|| "bootc staged nothing: this machine is up to date".to_string());
+            if let Some(container) = local_in {
+                self.jobs.stage(job, "download", PartState::Working, None);
+                self.jobs.line(job, &format!("» copying it out of {container}'s podman"));
+                let (jobs, id_) = (self.jobs.clone(), job.to_string());
+                let on: OnLine = Box::new(move |l| {
+                    if !l.trim().is_empty() {
+                        jobs.line(&id_, l);
+                    }
+                });
+                if let Err(e) = self.images.import(&container, &id, on).await {
+                    let e = format!("couldn't copy it out of {container}: {e}");
+                    self.failed(&e);
+                    self.publish();
+                    return Err(e);
+                }
+                // In the machine's store now: a later apply needs no copy.
+                self.st.lock().unwrap().local_in = None;
+            }
+            // `name@<image id>` (containers-storage's own form): the id pins
+            // it, so a build made after the check can't be a surprise.
+            let image = format!("{}@{id}", repo_of(&next.image));
+            self.switch_locked(job, &image, true).await?;
+            return self.staged(job).await;
         }
-        // Chosen again after this machine's own build: bootc follows whatever
-        // it was last switched to, so GitHub's image is switched back to first.
-        let ci = format!("{PUBLISHED}{HOST_IMAGE}:latest");
-        let follows = self.st.lock().unwrap().host.as_ref().map(|h| h.image.clone()).unwrap_or_default();
-        if !follows.contains(HOST_IMAGE) || follows.starts_with("localhost/") || follows.starts_with("containers-storage:") {
-            self.jobs.line(job, &format!("» back to GitHub's image: {ci}"));
-            self.switch_locked(job, &ci).await?;
-            let u = self.refresh().await?;
-            self.jobs.stage(job, "stage", PartState::Done, None);
-            return u.staged.ok_or_else(|| "bootc staged nothing: this machine is up to date".to_string());
+        // GitHub's (or the pushed) image, while bootc follows another (this
+        // machine's build, or an image of another name): switched back to.
+        let target = registry_target(&host);
+        if !follows(&host, &target) {
+            self.jobs.line(job, &format!("» back to {target}"));
+            self.switch_locked(job, &target, false).await?;
+            return self.staged(job).await;
         }
         self.jobs.stage(job, "download", PartState::Working, None);
         let (jobs, id, me) = (self.jobs.clone(), job.to_string(), self.clone());
@@ -1466,8 +1810,7 @@ impl crate::api_phase8::Updates for HostUpdates {
         // (a check looks again; the page can be opened before one).
         let wanted = me.st.lock().unwrap().saved.source != UpdateSource::Github;
         if wanted && me.st.lock().unwrap().local.is_none() {
-            let local = me.newest_local().await;
-            me.st.lock().unwrap().local = local;
+            me.look_local(None).await;
         }
         Ok(me.now())
     }
@@ -1494,7 +1837,7 @@ impl crate::api_phase8::Updates for HostUpdates {
         if source != UpdateSource::Github {
             me.can_update()?;
         }
-        Ok(me.set_source(source))
+        me.set_source(source)
     }
 
     async fn cancel(&self) -> Result<proto::Updates, ApiError> {

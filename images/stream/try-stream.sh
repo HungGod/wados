@@ -4,8 +4,9 @@
 # wadspace on localhost/wados-base:44, its sidecar on
 # localhost/wados-stream:44 and the display volume they share), turned into
 # podman commands by quadlet's own dry run and run by hand, rootless. Then
-# a viewer (headless Chromium: stream-probe.mjs) opens the stream at
-# http://127.0.0.1:<port>/ws-test/, as wadd's proxy would hand it on.
+# the streaming socket is tried with and without its key (ws-socket.py), and
+# a browser viewer, when there is one (WADOS_STREAM_VIEWER), opens the stream
+# at http://127.0.0.1:<port>/ws-test/, as wadd's proxy would hand it on.
 #
 #   images/stream/try-stream.sh                all of it
 #   images/stream/try-stream.sh --private      no public stream (WebRTC)
@@ -42,8 +43,13 @@
 # labwc's socket is this session's). Screenshots and what the viewer saw go
 # to .build/try-stream/. Everything it makes is removed.
 #
-# Needs: the images (images/build.sh), cargo, podman's quadlet, node, and
-# Playwright with its Chromium (the spike's node_modules: stream-probe.mjs);
+# Needs: the images (images/build.sh), cargo, podman's quadlet and python3.
+# WADOS_STREAM_VIEWER (optional): a command that takes URL OUT.png [--expect
+# stream|none] [--wait SECONDS] --colour '#rrggbb', saves what it saw, prints
+# JSON lines with the page's status and each socket's frames
+# ({"url":".../api/websockets","frames":N}), and exits 0 when it saw what was
+# expected. Without one, the browser's checks are skipped (the Node and
+# Playwright one went with the v2 spike);
 # for the move, the patched labwc (tools/build-labwc.sh) and wad-wayland's
 # examples (built here when they're missing).
 set -uo pipefail
@@ -76,29 +82,27 @@ fails=0
 check() { if eval "$2"; then echo "ok    $1"; else echo "FAIL  $1"; fails=$((fails + 1)); fi; }
 log() { echo "== $*"; }
 status() { curl -s -o /dev/null -m 10 -w '%{http_code}' "$@"; }
-probe() { (cd "${OUT}" && timeout 150 node "${HERE}/stream-probe.mjs" "$@" --colour "${WALLPAPER}"); }
+# A browser viewer's look (WADOS_STREAM_VIEWER), or nothing without one.
+probe() {
+    [[ -n "${WADOS_STREAM_VIEWER:-}" ]] || return 0
+    (cd "${OUT}" && timeout 150 ${WADOS_STREAM_VIEWER} "$@" --colour "${WALLPAPER}")
+}
+# A check on what the viewer saw: skipped without one.
+vcheck() {
+    if [[ -z "${WADOS_STREAM_VIEWER:-}" ]]; then echo "skip  $1 (no browser viewer: WADOS_STREAM_VIEWER)"; return; fi
+    check "$@"
+}
 # What the streaming socket does for a client holding a token (?token=), for
 # `seconds`: `messages=<how many it sent> closed=<its close code, or none>`.
 # Selkies upgrades any handshake that carries a token, then closes it (4001)
 # when the token isn't in its table.
-socket() {
-    node -e '
-const [url, seconds] = process.argv.slice(1);
-let messages = 0;
-const ws = new WebSocket(url, ["selkies"]);
-ws.onmessage = () => { messages += 1; };
-const done = (closed) => { console.log(`messages=${messages} closed=${closed}`); process.exit(0); };
-ws.onclose = (e) => done(e.code);
-ws.onerror = () => {};
-setTimeout(() => done("none"), Number(seconds) * 1000);
-' "$1" "${2:-4}"
-}
+socket() { python3 -I "${HERE}/ws-socket.py" "$1" "${2:-4}"; }
 
 for img in localhost/wados-base:44 localhost/wados-stream:44; do
     podman image exists "${img}" || { echo "needs ${img} (images/build.sh)" >&2; exit 1; }
 done
 QUADLET="$(command -v quadlet || ls /usr/libexec/podman/quadlet 2> /dev/null)" || { echo "needs podman's quadlet" >&2; exit 1; }
-command -v node > /dev/null || { echo "needs node" >&2; exit 1; }
+command -v python3 > /dev/null || { echo "needs python3" >&2; exit 1; }
 
 rm -rf "${OUT}"
 mkdir -p "${OUT}"
@@ -230,18 +234,18 @@ check "no token: the handshake is refused (${none})" "[[ ${none} == 401 ]]"
 check "a wrong token: closed at once, nothing sent (${wrong})" "[[ '${wrong}' == 'messages=0 closed=4001' ]]"
 check "the stream's key: it streams (${right})" "[[ '${right}' =~ ^messages=[1-9][0-9]*\ closed=none$ ]]"
 
-log "a viewer (Chromium)"
+log "a viewer (a browser: WADOS_STREAM_VIEWER)"
 probe "${AT}/ws-${GUID}/#token=${KEY}" "${OUT}/private-key.png" --expect stream > "${OUT}/private-key.txt"
 ok=$?
 sed 's/^/   /' "${OUT}/private-key.txt"
-check "with the key (#token=) the page streams the wadspace's desktop (private-key.png)" \
+vcheck "with the key (#token=) the page streams the wadspace's desktop (private-key.png)" \
     "[[ ${ok} == 0 ]] && grep -q '/api/websockets\",\"frames\":[1-9]' '${OUT}/private-key.txt'"
 probe "${AT}/ws-${GUID}/" "${OUT}/private-no-token.png" --expect none --wait 20 > "${OUT}/private-no-token.txt"
 ok=$?
-check "with no token the page loads and nothing streams (private-no-token.png)" "[[ ${ok} == 0 ]]"
+vcheck "with no token the page loads and nothing streams (private-no-token.png)" "[[ ${ok} == 0 ]]"
 probe "${AT}/ws-${GUID}/#token=not-the-key" "${OUT}/private-wrong-token.png" --expect none --wait 20 > "${OUT}/private-wrong-token.txt"
 ok=$?
-check "with a wrong token nothing streams (private-wrong-token.png)" "[[ ${ok} == 0 ]]"
+vcheck "with a wrong token nothing streams (private-wrong-token.png)" "[[ ${ok} == 0 ]]"
 
 log "the key taken out of the table (wadd rewrites it)"
 socket "${AT/http/ws}/ws-${GUID}/api/websockets?token=${KEY}" 15 > "${WORK}/cut" &
@@ -276,11 +280,11 @@ if ${PUBLIC}; then
     probe "${AT}/ws-${GUID}/#token=${KEY}" "${OUT}/public-key.png" --expect stream > "${OUT}/public-key.txt"
     ok=$?
     sed 's/^/   /' "${OUT}/public-key.txt"
-    check "with the key the page streams over WebRTC, no data socket (public-key.png)" \
+    vcheck "with the key the page streams over WebRTC, no data socket (public-key.png)" \
         "[[ ${ok} == 0 ]] && grep -q '/api/webrtc/signaling' '${OUT}/public-key.txt' && ! grep -q '/api/websockets' '${OUT}/public-key.txt'"
     probe "${AT}/ws-${GUID}/" "${OUT}/public-no-token.png" --expect none --wait 20 > "${OUT}/public-no-token.txt"
     ok=$?
-    check "with no token nothing streams (public-no-token.png)" "[[ ${ok} == 0 ]]"
+    vcheck "with no token nothing streams (public-no-token.png)" "[[ ${ok} == 0 ]]"
     sw="$(curl -s -m 10 -X POST -H "Authorization: Bearer ${KEY}" -H 'Content-Type: application/json' \
         -d '{"mode": "websockets"}' "${AT}/ws-${GUID}/api/switch")"
     nosw="$(status -X POST -H 'Content-Type: application/json' -d '{"mode": "websockets"}' "${AT}/ws-${GUID}/api/switch")"
@@ -289,7 +293,7 @@ if ${PUBLIC}; then
     probe "${AT}/ws-${GUID}/#token=${KEY}" "${OUT}/public-websockets.png" --expect stream > "${OUT}/public-websockets.txt"
     ok=$?
     sed 's/^/   /' "${OUT}/public-websockets.txt"
-    check "then the page streams over WebSockets (public-websockets.png)" \
+    vcheck "then the page streams over WebSockets (public-websockets.png)" \
         "[[ ${ok} == 0 ]] && grep -q '/api/websockets\",\"frames\":[1-9]' '${OUT}/public-websockets.txt'"
 fi
 
@@ -339,7 +343,7 @@ if ${MOVE}; then
     # (Its terminal, back and maximized, covers the wallpaper: frames, not colour.)
     probe "${AT}/ws-${GUID}/#token=${KEY}" "${OUT}/moved-stream.png" --wait 15 > "${OUT}/moved-stream.txt"
     sed 's/^/   /' "${OUT}/moved-stream.txt"
-    check "and the page streams it (moved-stream.png)" "grep -q '\"page\":200.*/api/websockets\",\"frames\":[1-9][0-9]' '${OUT}/moved-stream.txt'"
+    vcheck "and the page streams it (moved-stream.png)" "grep -q '\"page\":200.*/api/websockets\",\"frames\":[1-9][0-9]' '${OUT}/moved-stream.txt'"
     sessions="$(podman exec -u abc "${WADSPACE}" sh -c 'tmux list-sessions 2>&1; pgrep -a foot' 2>&1)"
     echo "${sessions}" | sed 's/^/   /'
     check "its terminal came back on the stream, in the tmux session it had" \

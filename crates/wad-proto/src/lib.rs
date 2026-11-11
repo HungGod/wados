@@ -555,7 +555,8 @@ mod tests {
         assert_eq!((json["built"].as_str(), json["sizeMb"].as_u64()), (Some("update"), Some(1200)));
         assert_eq!(Event::Build(Box::new(build)).latest_key().as_deref(), Some("build:studio"));
 
-        let screen = Event::Screen(ScreenInfo { socket: None, uid: None, from: ScreenFrom::None, served: vec![], monitors: 1 });
+        let screen =
+            Event::Screen(ScreenInfo { socket: None, uid: None, from: ScreenFrom::None, served: vec![], monitors: 1 });
         assert_eq!(screen.latest_key().as_deref(), Some("screen"));
         // A job's lines aren't the present: its state is.
         assert_eq!(Event::JobLines { id: "j".into(), from: 0, lines: vec![] }.latest_key(), None);

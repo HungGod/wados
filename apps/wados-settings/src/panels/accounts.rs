@@ -543,6 +543,36 @@ impl Accounts {
                 if let Some(e) = link.as_ref().and_then(|a| a.error.as_ref()) {
                     g.add(&Row::new(Some("triangle-alert"), Tone::Warn, e, "").named("account-error").root);
                 }
+                // Pushing to GitHub's packages (a WadOS wadspace's host image,
+                // a game, a disc) takes write:packages, a second, short sign-in:
+                // offered before a push needs it, not only after one failed.
+                if github.as_ref().is_some_and(|a| !a.has_scope("write:packages")) {
+                    let row = Row::new(
+                        Some("package"),
+                        Tone::Plain,
+                        "Pushing packages",
+                        "Not allowed yet: needed to push images, games and discs to your GitHub packages",
+                    )
+                    .named("packages-signin");
+                    let busy = running || self.busy("signin");
+                    let b = kit::button(
+                        if busy { "Signing in…" } else { "Allow" },
+                        Variant::Secondary,
+                        Some("log-in"),
+                        true,
+                    );
+                    b.set_widget_name("packages-signin-button");
+                    b.set_sensitive(!busy);
+                    let w = self.me.clone();
+                    b.connect_clicked(move |_| {
+                        if let Some(m) = w.upgrade() {
+                            let req = SignInRequest { scopes: vec!["write:packages".into()] };
+                            m.ask("signin".into(), move |wadd| async move { wadd.github_signin(&req).await });
+                        }
+                    });
+                    row.ctl.append(&b);
+                    g.add(&row.root);
+                }
                 let note = gtk::Box::builder().css_classes(["kit-inset"]).build();
                 note.append(&kit::label(SIGN_OUT_NOTE, &["kit-row-sub"]));
                 g.add(&note);

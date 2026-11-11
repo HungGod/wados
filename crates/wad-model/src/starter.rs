@@ -63,6 +63,8 @@ pub fn starter_wadspace(machine: &str, now: i64) -> crate::types::Wadspace {
     x.exts = vec![
         Ext::new(AppId::Vscode, "anthropic.claude-code"),
         Ext::new(AppId::Terminal, "rust"),
+        // Python's tools (pip, venv, headers): the repo's scripts and tests.
+        Ext::new(AppId::Terminal, "python"),
         // Nested containers: the host image is built and pushed from here.
         Ext::new(AppId::Terminal, "podman"),
     ];
@@ -70,7 +72,7 @@ pub fn starter_wadspace(machine: &str, now: i64) -> crate::types::Wadspace {
     x.look.projects = vec![Project {
         id: "wadspaces".to_string(),
         as_name: "WadSpaces".to_string(),
-        kind: ProjectKind::Github { repo: STARTER_REPO.to_string(), setup: Some("npm ci".to_string()) },
+        kind: ProjectKind::Github { repo: STARTER_REPO.to_string(), setup: None },
     }];
     x.look.autostart = vec!["app:vscode".to_string()];
     x.look.layout.icons =
@@ -123,6 +125,7 @@ mod tests {
         // Rust itself is its Rust tool (rustup, cargo); RUN_4 pins the Rust it compiles with on it.
         assert!(os.exts.contains(&Ext::new(AppId::Terminal, "rust")));
         assert!(os.exts.contains(&Ext::new(AppId::Terminal, "podman")));
+        assert!(os.exts.contains(&Ext::new(AppId::Terminal, "python")));
         assert_eq!(os.commands[3].text, "rustup toolchain install 1.99 --component rustfmt,clippy");
         assert_eq!(crate::check::wadspace(&os), Ok(()));
 

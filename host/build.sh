@@ -19,6 +19,12 @@
 #                                    the same stick, carrying the offline test
 #                                    scenarios (below): a space-separated list,
 #                                    in any order
+#   installer … --live-name NAME     WadSpaces Live's own public address,
+#                                    NAME.wadspaces.com (wadspaces-live unless
+#                                    told), made with cloudflare.toml as an
+#                                    install makes a machine's: the live
+#                                    session streams publicly (Play together)
+#   installer … --no-live-address    none: live streams privately only
 #
 #   --variant host|nvidia[,...]      which image (host unless told); qcow2, iso
 #                                    and raw take one
@@ -30,10 +36,12 @@
 # --include carries the offline test scenarios onto the stick (and from the
 # stick onto machines installed from it), so a Surface Book 2 with a bad
 # connection can build and launch them without downloading anything:
-#   wados     the WadOS wadspace: the wadspaces base, every package CI builds
-#             (images/README.md, wad_gen::packages::all()), and this repo at
-#             /var/lib/wados/project/wados (what the WadOS Wadspace works on)
-#   dolphin   the Dolphin app, as it runs in a wadspace
+#   wados     the WadOS wadspace: its packages and what they need (wad-gen's
+#             answer: wados-pkgs starter), its own image if this machine built
+#             it, and this repo where wadd keeps its clone
+#             (/var/lib/wados/projects/wadspaces/wadspaces). Without its own
+#             image, its first build runs its dnf and rustup lines online.
+#   dolphin   the Dolphin app, as it runs in a wadspace (and what it needs)
 #   steam     the Steam app, as it runs in a wadspace. Its first run still
 #             downloads Proton and client updates from Valve: no image can
 #             carry those.
@@ -100,7 +108,7 @@ VERSION="${WADOS_VERSION:-44.$(date -u +%Y%m%d).$((10#$(date -u +%H%M)))}"
 
 log() { echo ">> $*"; }
 die() { echo "host/build.sh: $*" >&2; exit "${2:-1}"; }
-usage() { sed -n '2,78p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,87p' "$0" | sed 's/^# \{0,1\}//'; }
 
 TARGET="${1:-}"
 [[ -n "${TARGET}" ]] || { usage; exit 2; }
@@ -386,14 +394,26 @@ push() {
 # stick is wiped, and land in its root podman storage, where wadd finds them
 # without a network; install-to-disk copies them onto machines installed from
 # the stick. host/usr/libexec/wados/install-to-disk.
+# installer's EXIT: its temporary files and loop device gone.
+stick_cleanup() {
+    [[ -n "${LIVE_DIR:-}" ]] && rm -rf "${LIVE_DIR}"
+    [[ -n "${STICK_DEV:-}" ]] && { sudo losetup -d "${STICK_DEV}" 2> /dev/null || true; }
+    return 0
+}
+
 installer() {
     local where="" file="" image="${IMAGE_BASE}:latest" dev
     local target="ghcr.io/hunggod/wados-host:latest"
     # --include's list, and where the stick goes: parsed and validated
     # before anything is touched, so a typo stops before --wipe runs.
     local include_words=() use_wados=0 use_dolphin=0 use_steam=0
+    local live_name=wadspaces-live live_address=1
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --live-name)
+                [[ "${2:-}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]] || die "--live-name takes a name: a-z, 0-9 and -" 2
+                live_name="$2"; shift 2 ;;
+            --no-live-address) live_address=0; shift ;;
             --include)
                 shift
                 local found=0
@@ -449,33 +469,80 @@ installer() {
         abi="$(podman image inspect --format '{{index .Labels "io.wadspaces.abi"}}' "${base}" 2>/dev/null || true)"
         [[ -n "${abi}" ]] || abi=fedora44.1
         log "the base's ABI: ${abi}"
-        local pkgs=()
+        # What the scenarios need, as wad-gen says (crates/wad-gen/src/bin/
+        # wados-pkgs): the WadOS wadspace's packages (wad-model's starter,
+        # and what they need), Dolphin's and Steam's (and theirs). Never a
+        # list kept here by hand.
+        local base_id want=() pkgs=() starter_set=""
+        base_id="$(podman image inspect --format '{{.Id}}' "${base}")"
+        wados_pkgs() { (cd "${ROOT}" && cargo run -q -p wad-gen --bin wados-pkgs -- "$@"); }
         if ((use_wados)); then
-            # Everything CI builds (wad_gen::packages::all()): the WadOS
-            # wadspace's, and the rest. Kept in sync by hand with
-            # crates/wad-gen/src/packages.rs — update both together.
-            pkgs=(cpp python nodejs rust claude-code podman vscode)
-        else
-            ((use_dolphin)) && pkgs+=(dolphin)
-            ((use_steam)) && pkgs+=(steam)
+            local starter
+            starter="$(wados_pkgs starter "${base_id}")" || die "wados-pkgs couldn't say what the WadOS wadspace needs" 2
+            mapfile -t want < <(python3 -c 'import json, sys; print("\n".join(json.load(sys.stdin)["packages"]))' <<< "${starter}")
+            starter_set="$(python3 -c 'import json, sys; print(json.load(sys.stdin)["image"])' <<< "${starter}")"
         fi
-        local p ref
-        for p in "${pkgs[@]}"; do
+        ((use_dolphin)) && want+=(dolphin)
+        ((use_steam)) && want+=(steam)
+        if ((${#want[@]})); then
+            local listed
+            listed="$(wados_pkgs packages "${want[@]}")" || die "wados-pkgs couldn't say what ${want[*]} need" 2
+            mapfile -t pkgs < <(python3 -c 'import json, sys; print("\n".join(p["id"] for p in json.load(sys.stdin)))' <<< "${listed}")
+        fi
+        log "packages: ${pkgs[*]}"
+        # Each one CI's, pulled fresh (an unchanged one costs a manifest),
+        # else the copy here, else this machine's own build. Then what each
+        # says it needs (io.wadspaces.pkg.needs, as built: CI's may be older
+        # than this checkout's recipes) goes too, so the stick never carries
+        # a package without what's under it.
+        local p ref need seen=" " queue=("${pkgs[@]}")
+        while ((${#queue[@]})); do
+            p="${queue[0]}"
+            queue=("${queue[@]:1}")
+            [[ "${seen}" == *" ${p} "* ]] && continue
+            seen+="${p} "
             ref="ghcr.io/hunggod/wados-pkg-${p}:${abi}"
-            if podman image exists "${ref}"; then
-                log "${ref}: here already"
+            log "pulling ${ref}"
+            if podman pull -q "${ref}" > /dev/null; then
+                # This machine's own build of it, if it's newer than CI's (a
+                # feature script changed here and CI hasn't built it yet).
+                local mine="localhost/wados-pkg-${p}:latest"
+                if podman image exists "${mine}" \
+                    && [[ "$(podman image inspect --format '{{.Created.Unix}}' "${mine}")" \
+                        -gt "$(podman image inspect --format '{{.Created.Unix}}' "${ref}")" ]]; then
+                    log "${mine}: built on this machine after CI's, so it goes instead"
+                    ref="${mine}"
+                fi
+            elif podman image exists "${ref}"; then
+                log "${ref}: couldn't pull it, so the copy here goes (it may be older than CI's)"
             elif podman image exists "localhost/wados-pkg-${p}:latest"; then
                 # built on this machine (images/build.sh pkg): wadd finds a
                 # package by its labels, whatever it's called
                 ref="localhost/wados-pkg-${p}:latest"
                 log "${ref}: built on this machine"
             else
-                log "pulling ${ref}"
-                podman pull "${ref}" \
-                    || die "couldn't pull ${ref} — needed for --include; the stick hasn't been touched (check the connection)" 2
+                die "couldn't pull ${ref} — needed for --include; the stick hasn't been touched (check the connection)" 2
             fi
             carry+=("${ref}")
+            for need in $(podman image inspect --format '{{index .Labels "io.wadspaces.pkg.needs"}}' "${ref}" | tr ',' ' '); do
+                if [[ "${seen}" != *" ${need} "* ]]; then
+                    log "${p} (as built) needs ${need}: it goes too"
+                    queue+=("${need}")
+                fi
+            done
         done
+        # The WadOS wadspace's own image (its packages and its commands: dnf,
+        # rustup), if this machine has built it on this base: then it starts
+        # with no build at all. Without it, its first build runs those
+        # commands, which need the network.
+        if [[ -n "${starter_set}" ]]; then
+            if podman image exists "${starter_set}"; then
+                log "${starter_set}: the WadOS wadspace, built here: it goes too"
+                carry+=("${starter_set}")
+            else
+                log "${starter_set} isn't built here: the WadOS wadspace's first build needs the network (its dnf and rustup commands)"
+            fi
+        fi
         local bytes=0 size
         for ref in "${carry[@]}"; do
             size="$(podman image inspect --format '{{.Size}}' "${ref}" 2>/dev/null || echo 0)"
@@ -483,6 +550,7 @@ installer() {
             bytes=$((bytes + size))
         done
         log "the stick will carry ${#carry[@]} images ($((bytes / 1048576)) MB of layers)"
+        CARRY_BYTES="${bytes}"
     fi
     local keys="${SECRETS}/cloudflare.toml"
     if [[ -f "${keys}" ]]; then
@@ -490,6 +558,27 @@ installer() {
     else
         log "no ${keys}: machines this installs have no public address"
         keys=""
+    fi
+    # WadSpaces Live's own public address (<live-name>.wadspaces.com: its
+    # tunnel, DNS record and TURN), made now, before the stick is touched,
+    # as an install makes a machine's: so the live session streams publicly
+    # and does Play together. The same name reuses its tunnel; two sticks of
+    # one name running at once would share it (--live-name for another).
+    # Retired with `wadd tunnel remove <name> --secrets …`.
+    local live_dir=""
+    # What's left when it ends, however it ends: the live address's files
+    # (its tunnel's token) and a stick image's loop device.
+    trap 'stick_cleanup' EXIT
+    if [[ -n "${keys}" ]] && ((live_address)); then
+        live_dir="$(mktemp -d)"
+        LIVE_DIR="${live_dir}"
+        log "WadSpaces Live's public address: ${live_name} (wadd tunnel provision)"
+        local live_host
+        live_host="$(cd "${ROOT}" && cargo run -q -p wadd -- tunnel provision "${live_name}" --secrets "${keys}" --out "${live_dir}")" \
+            || die "couldn't make WadSpaces Live's public address — the stick hasn't been touched (check the connection, or --no-live-address)" 2
+        log "WadSpaces Live streams publicly at https://${live_host}"
+    elif [[ -n "${keys}" ]]; then
+        log "--no-live-address: WadSpaces Live streams privately only (machines it installs still get their own)"
     fi
     local firebase="${SECRETS}/firebase.toml"
     if [[ -f "${firebase}" ]]; then
@@ -505,13 +594,21 @@ installer() {
         -v /dev:/dev -v /var/lib/containers:/var/lib/containers)
     local args=(--wipe --generic-image --skip-fetch-check --target-imgref "${target}")
     if [[ "${where}" == --image ]]; then
-        truncate -s 32G "${file}"
+        # 32 GB, or more when the images need it (the system takes about 12).
+        local gb=$(((${CARRY_BYTES:-0} / 1073741824) + 14))
+        ((gb < 32)) && gb=32
+        truncate -s "${gb}G" "${file}"
         file="$(realpath "${file}")"
         STICK_DEV="$(sudo losetup -fP --show "${file}")"
-        trap '[[ -n "${STICK_DEV:-}" ]] && { sudo losetup -d "${STICK_DEV}" 2> /dev/null || true; }' EXIT
         dev="${STICK_DEV}"
     else
         dev="${where}"
+        # Room for the system (about 12 GB once installed) and the images.
+        local room
+        room="$(lsblk -bndo SIZE "${dev}")"
+        if ((${CARRY_BYTES:-0} + 12 * 1073741824 > room)); then
+            die "${dev} is $((room / 1073741824)) GB: too small for the system and $((CARRY_BYTES / 1073741824)) GB of images" 2
+        fi
         log "${dev} is erased: $(lsblk -ndo SIZE,MODEL "${dev}")"
     fi
     "${bootc[@]}" "${image}" bootc install to-disk "${args[@]}" "${dev}"
@@ -523,10 +620,21 @@ installer() {
     sudo mount "${root}" "${mnt}"
     var="$(sudo find "${mnt}/ostree/deploy" -mindepth 2 -maxdepth 2 -name var -type d | head -1)"
     sudo "${HERE}/stick-files" "${var}" "${target}" "${keys}" "" "${firebase}"
+    if [[ -n "${live_dir}" ]]; then
+        # Its first boot puts them in place (host/usr/libexec/wados/provision),
+        # before cloudflared and wadd start.
+        local f
+        for f in cloudflared-token wadd.toml turn.toml; do
+            [[ -f "${live_dir}/${f}" ]] || continue
+            sudo install -m "$([[ "${f}" == wadd.toml ]] && echo 0644 || echo 0600)" "${live_dir}/${f}" "${var}/lib/wados/provision/${f}"
+        done
+    fi
     if ((${#carry[@]})); then
         log "copying ${#carry[@]} offline images onto the stick (root's podman storage)"
         sudo mkdir -p "${var}/lib/containers"
-        if ! podman save --format docker-archive "${carry[@]}" \
+        # -m: every image, each as itself (without it the others are saved
+        # as more names for the first).
+        if ! podman save -m --format docker-archive "${carry[@]}" \
             | sudo unshare --mount --propagation private bash -euo pipefail -c '
                 mkdir -p /var/lib/containers /run/containers /run/libpod
                 mount --bind "$1" /var/lib/containers
@@ -541,13 +649,22 @@ installer() {
         sudo chmod 0644 "${var}/lib/wados/images.list"
     fi
     if ((use_wados)); then
-        log "copying this repo onto the stick: /var/lib/wados/project/wados"
-        sudo install -d -m 0755 "${var}/lib/wados/project/wados"
+        # Where wadd keeps the WadOS wadspace's clone (projects.rs' clone_dir:
+        # <projects>/<wadspace id>/<project id>, both "wadspaces" in wad-model's
+        # starter), with origin as wadd clones it, so it's used as it is and
+        # not moved aside for another clone.
+        local clone="${var}/lib/wados/projects/wadspaces/wadspaces"
+        log "copying this repo onto the stick: /var/lib/wados/projects/wadspaces/wadspaces"
+        sudo install -d -m 0711 "${var}/lib/wados/projects"
+        sudo install -d -m 0700 -o 1000 -g 1000 "${var}/lib/wados/projects/wadspaces"
+        sudo install -d -m 0700 -o 1000 -g 1000 "${clone}"
         (cd "${ROOT}" && tar --exclude='./target' --exclude='./.build' --exclude='./output' \
-            --exclude='./host/secrets' --exclude='./secrets' --exclude='node_modules' --exclude='./site/dist' \
-            -cf - .) | sudo tar -xf - -C "${var}/lib/wados/project/wados"
-        sudo chown -R 1000:1000 "${var}/lib/wados/project"
-        sudo restorecon -R "${var}/lib/wados/project" 2> /dev/null || true
+            --exclude='./host/secrets' --exclude='./secrets' --exclude='*.secret.toml' --exclude='node_modules' \
+            -cf - .) | sudo tar -xf - -C "${clone}"
+        sudo git -c safe.directory='*' -C "${clone}" remote set-url origin "https://github.com/HungGod/wados.git" \
+            || die "couldn't set the copy's origin (${clone})"
+        sudo chown -R 1000:1000 "${clone}"
+        sudo restorecon -R "${var}/lib/wados/projects" 2> /dev/null || true
     fi
     sudo umount "${mnt}"
     rmdir "${mnt}"

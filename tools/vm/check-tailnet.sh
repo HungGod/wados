@@ -91,6 +91,7 @@ HS_URL=https://hs.test:8443
 ok() { printf 'ok    %s\n' "$*"; }
 fail() { printf 'FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
 note() { printf '      %s\n' "$*"; }
+skip() { printf 'skip  %s\n' "$*"; }
 indent() { sed 's/^/      | /'; }
 step_time() { printf '      (%d s)\n' "$(($(now) - STEP_T))"; STEP_T=$(now); }
 
@@ -1194,8 +1195,10 @@ EOS
     if [[ "${out}" == running* ]]; then ok "$1: a clock in $2's terminal, ${out}"; else fail "$1: the clock in $2: ${out}"; fi
 }
 
-# A viewer on the laptop, onto the tailnet as the device: Playwright's
-# headless shell at http://localhost:<port> (a secure context), a relay
+# A viewer on the laptop, onto the tailnet as the device: a browser viewer
+# (WADOS_STREAM_VIEWER, check-stream.sh's contract: JSON options on stdin,
+# what it saw as JSON; without one these are skipped) at
+# http://localhost:<port> (a secure context), a relay
 # there (tools/vm/socks-relay.py) carrying each connection through the
 # device's SOCKS5 proxy to the test path on A (http://<A's ip>:<port+1000>).
 # tn_view NAME 'jq filter over the share, with $base'.
@@ -1203,7 +1206,7 @@ tn_view() {
     local name="$1" filter="$2" r
     jq -c --arg out "${SHOTS}/${name}.png" --arg base "${TN_LOCAL}" \
         "${filter} + {out: \$out}" "${TN_PRIV}/share.json" |
-        timeout 240 node "${HERE}/stream-view.mjs" > "${SHOTS}/${name}.json" 2> "${SHOTS}/${name}.err"
+        timeout 240 ${WADOS_STREAM_VIEWER} > "${SHOTS}/${name}.json" 2> "${SHOTS}/${name}.err"
     r=$?
     VIEW="$(cat "${SHOTS}/${name}.json")"
     note "${name}: $(jq -c '{page, card, secure, streaming, transport, held, colours, stddev, tokenInAddress, errors, error}' <<< "${VIEW}" 2> /dev/null || head -c 300 <<< "${VIEW}")"
@@ -1328,6 +1331,9 @@ wadd_streams() {
         done
     ) > "${TN_PRIV}/viewers" 2> /dev/null &
     sampler=$!
+    if [[ -z "${WADOS_STREAM_VIEWER:-}" ]]; then
+        skip "the one-tap link, no token and a wrong token over the tailnet (no browser viewer: WADOS_STREAM_VIEWER)"
+    else
     if tn_view 16-private-one-tap '{url: (.openLink | sub("^https://[^/]+"; $base)), expect: "stream", wait: 60, hold: 20}' && [[ "$(jq -r .transport <<< "${VIEW}")" == websockets ]]; then
         ok "the laptop's Chromium, as the device (the relay, its SOCKS5, the tailnet), with the one-tap link: it streams over WebSockets (secure context: $(jq -r .secure <<< "${VIEW}"), $(jq -c .held <<< "${VIEW}"))"
     else
@@ -1343,6 +1349,7 @@ wadd_streams() {
     [[ "${vmax:-0}" -ge 1 ]] && ok "a: wadd counted the viewer (viewers: ${vmax})" || fail "a: viewers stayed ${vmax:-0} while it was watched"
     if tn_view 16-private-no-token '{url: (.link | sub("^https://[^/]+"; $base)), expect: "none", wait: 20}'; then ok "with no token, the card, and nothing streams"; else fail "no token: $(jq -c '{page, streaming, error}' <<< "${VIEW}")"; fi
     if tn_view 16-private-wrong-token '{url: ((.link | sub("^https://[^/]+"; $base)) + "#token=not-the-key"), expect: "none", wait: 20}'; then ok "a wrong token streams nothing"; else fail "a wrong token: $(jq -c '{page, streaming, error}' <<< "${VIEW}")"; fi
+    fi
     shot_on a a-16-streaming.png
     [[ -s "${TN_PRIV}/relay.err" ]] && note "the relay said: $(sort < "${TN_PRIV}/relay.err" | uniq -c | head -3 | tr '\n' ' ')"
     kill "${TN_RELAY}" 2> /dev/null
@@ -1493,6 +1500,9 @@ secure_sound() {
     TN_LOCAL="http://localhost:$(head -1 "${TN_PRIV}/relay.out")"
     # Its desktop's Command line (top left: tools/krun/check-secure.sh's
     # screenshot), then a 30 s tone into the VM's own PulseAudio.
+    if [[ -z "${WADOS_STREAM_VIEWER:-}" ]]; then
+        skip "sound from the secure stream's VM reaching a viewer (no browser viewer: WADOS_STREAM_VIEWER)"
+    else
     tn_view 17b-secure-sound '{url: (.openLink | sub("^https://[^/]+"; $base)), expect: "stream", wait: 90, hold: 20,
         actions: [{wait: 4000}, {dblclick: [57, 45]}, {wait: 6000},
                   {type: "gst-launch-1.0 -q audiotestsrc num-buffers=1300 ! audioconvert ! pulsesink"}, {press: "Enter"}, {wait: 3000}]}'
@@ -1502,6 +1512,7 @@ secure_sound() {
         ok "sound from an app in the secure stream's VM reached the viewer (${r} audio frames in 20 s, through wadd's proxy and the tailnet)"
     else
         fail "no sound from the secure stream's VM: streaming $(jq -r .streaming <<< "${VIEW}"), audio frames ${r:-0} (the tone was typed into its Command line: ${SHOTS}/17b-secure-sound.png)"
+    fi
     fi
     kill "${TN_RELAY}" 2> /dev/null
     wait "${TN_RELAY}" 2> /dev/null

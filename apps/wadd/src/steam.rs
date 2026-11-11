@@ -326,21 +326,24 @@ impl Spaces for RealSpaces {
         self.docs
             .apply(Op::SwapKey { ws: ws.clone(), slot: "app:steam".into(), key: key.to_string() })
             .map_err(|e| e.message)?;
-        self.builds.request(&ws).await.map_err(|e| e.message)?;
-        // Built, or as far as the build got. A wadspace whose desktop can't stay
-        // up (it stops, or fails) doesn't get a window at all: say so now, rather
-        // than wait 30 minutes for a sign-in that can't happen.
+        if let Err(e) = self.builds.request(&ws).await {
+            self.close(&ws).await;
+            return Err(e.message);
+        }
+        // Built (opened at once), or its build still running. A build that
+        // ended with no image failed: say so now, rather than wait 30 minutes
+        // for a sign-in that can't happen. (Its run isn't looked at before
+        // it's opened: a wadspace never opened is Idle.)
         for _ in 0..1800 {
-            let run = self.runs.state(&ws);
-            if matches!(run.state.phase, wad_model::Phase::Idle | wad_model::Phase::Error) {
-                let why = run.state.error.clone().unwrap_or_else(|| "its desktop closed".into());
-                self.close(&ws).await;
-                return Err(format!("Steam's sign-in window didn't stay open: {why}"));
-            }
             let doc = self.docs.wadspace(&ws).ok_or("the wadspace went")?;
-            if self.builds.image_for(&doc).is_some() {
+            let build = self.builds.state_of(&doc);
+            if build.image.is_some() {
                 self.runs.open(&ws, SessionDisplay::Window).map_err(|e| e.message)?;
                 return Ok(ws);
+            }
+            if build.job.is_none() {
+                self.close(&ws).await;
+                return Err("Steam's wadspace didn't build (Activity has why)".into());
             }
             tokio::time::sleep(Duration::from_secs(1)).await;
         }

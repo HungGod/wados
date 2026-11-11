@@ -809,12 +809,7 @@ impl crate::events::Relay for Peers {
             let (client, body) = (self.client(), posted.clone());
             rt.spawn(async move {
                 let url = format!("http://{a}/v1/remote/notices");
-                let sent = client
-                    .post(url)
-                    .timeout(std::time::Duration::from_secs(5))
-                    .json(&body)
-                    .send()
-                    .await;
+                let sent = client.post(url).timeout(std::time::Duration::from_secs(5)).json(&body).send().await;
                 if let Err(e) = sent {
                     tracing::debug!("a notice didn't reach {a}: {e}");
                 }

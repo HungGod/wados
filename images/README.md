@@ -94,8 +94,10 @@ It runs the GPU it's given (`/dev/dri`) for its compositor and VA-API
 encoding, else software (x264).
 
 `stream/try-stream.sh` proves it on this laptop with no wadd: wad-gen's
-units for a streamed wadspace, run through quadlet's dry run, rootless; a
-browser (`stream/stream-probe.mjs`, Playwright from the spike) streams the
-desktop with the key, and nothing with no token or a wrong one; Selkies
+units for a streamed wadspace, run through quadlet's dry run, rootless; the
+streaming socket (`stream/ws-socket.py`) streams with the key and is closed
+with a wrong one, and a browser viewer, when one is given
+(`WADOS_STREAM_VIEWER`), streams the desktop with the key, and nothing with
+no token or a wrong one; Selkies
 answers under `/ws-test/` alone; WebRTC with dual mode streams too; and a
 wadspace on a (headless) screen moves to its stream and back.

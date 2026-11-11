@@ -83,7 +83,7 @@ impl Placer {
     }
 
     /// The displays, primary first: the one `ws` goes to, then the others.
-    fn from_output(&self, ws: &str) -> Vec<String> {
+    fn displays_from(&self, ws: &str) -> Vec<String> {
         order_displays(&self.displays.borrow(), &self.output_of(ws))
     }
 
@@ -188,7 +188,7 @@ impl Placer {
         let (Some(wm), Some(ws)) = (&self.wm, t.wadspace()) else { return };
         let Some(want) = want else { return };
         let output = (want == SessionDisplay::Screen).then(|| {
-            let outs = self.from_output(ws);
+            let outs = self.displays_from(ws);
             outs[at % outs.len()].clone()
         });
         let told = (want, output.clone());

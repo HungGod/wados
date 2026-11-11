@@ -149,6 +149,10 @@ struct Machine {
     private: bool,
     /// A login is refused (a GitHub token without read:packages: ghcr says so even for a public image).
     login_refused: bool,
+    /// What bootc follows (`spec.image`) and how, once switched (none: the booted image, from its registry).
+    follows: Option<(String, String)>,
+    /// What `bootc switch` finds at each reference (this machine's builds, by `name@id`).
+    switchable: HashMap<String, Version>,
 }
 
 fn entry(v: &Version) -> Value {
@@ -161,10 +165,15 @@ fn status(m: &Machine) -> String {
     let mut booted = entry(&m.booted);
     booted["cachedUpdate"] = m.cached.as_ref().map_or(Value::Null, |c| entry(c)["image"].clone());
     json!({"apiVersion": "org.containers.bootc/v1", "kind": "BootcHost", "metadata": {"name": "host"},
-        "spec": {"bootOrder": "default", "image": {"image": m.booted.image, "transport": "registry"}},
+        "spec": {"bootOrder": "default", "image": {"image": followed(m).0, "transport": followed(m).1}},
         "status": {"booted": booted, "staged": m.staged.as_ref().map(entry), "rollback": m.rollback.as_ref().map(entry),
             "rollbackQueued": m.rollback_queued, "type": "bootcHost"}})
     .to_string()
+}
+
+/// What bootc follows: the image it was last switched to, else the booted one's.
+fn followed(m: &Machine) -> (String, String) {
+    m.follows.clone().unwrap_or_else(|| (m.booted.image.clone(), "registry".into()))
 }
 
 #[derive(Default)]
@@ -191,6 +200,7 @@ impl Bootc for FakeBootc {
             ["bootc", "upgrade", "--check"] => "check",
             a if a == UPGRADE => "upgrade",
             ["bootc", "rollback"] => "rollback",
+            ["bootc", "switch", ..] => "switch",
             a if a == UNDEPLOY_STAGED => "undeploy",
             _ => return Err(format!("no such command: {line}")),
         };
@@ -210,6 +220,10 @@ impl Bootc for FakeBootc {
         match verb {
             "status" => return Ok(status(&m)),
             // As bootc 1.17: it says what it found, and keeps no cachedUpdate.
+            // Following this machine's build (pinned by its id), never anything.
+            "check" if followed(&m).1 != "registry" => {
+                return Ok(format!("No changes in: containers-storage:{}\n", followed(&m).0));
+            }
             "check" => {
                 return Ok(match m.remote.clone().filter(|r| r.digest != m.booted.digest) {
                     Some(r) => format!(
@@ -243,6 +257,21 @@ impl Bootc for FakeBootc {
                 m.rollback_queued = !m.rollback_queued;
             }
             "undeploy" => m.staged = None,
+            "switch" => {
+                let (image, transport) = match argv {
+                    [_, _, "--transport", t, image] => (image.to_string(), t.to_string()),
+                    [_, _, image] => (image.to_string(), "registry".to_string()),
+                    _ => return Err(format!("no such command: {line}")),
+                };
+                let found = if transport == "registry" {
+                    m.remote.clone().filter(|r| r.image == image)
+                } else {
+                    m.switchable.get(&image).cloned()
+                };
+                m.staged = Some(found.ok_or_else(|| format!("{transport}:{image}: image not known"))?);
+                m.rollback_queued = false;
+                m.follows = Some((image, transport));
+            }
             _ => unreachable!(),
         }
         *self.m.lock().unwrap() = m;
@@ -260,6 +289,25 @@ struct FakeImages {
     pulls: Mutex<Vec<(String, bool)>>,
     /// Images this machine built (a WadOS wadspace's): reference → (id, version).
     built: Mutex<Vec<(String, String, String)>>,
+    /// Built in a running wadspace's own podman: (container, reference, id, version).
+    in_wadspaces: Mutex<Vec<(String, String, String, String)>>,
+    /// What was copied out of a wadspace: (container, id).
+    imports: Mutex<Vec<(String, String)>>,
+    /// What registries have, by reference (read without bootc).
+    registry: Mutex<HashMap<String, Version>>,
+    /// How many times a registry was read.
+    registry_reads: std::sync::atomic::AtomicUsize,
+}
+
+fn built_image(reference: &str, id: &str, version: &str) -> ImageInfo {
+    ImageInfo {
+        id: id.into(),
+        created: 1.0,
+        size: 100,
+        labels: [("org.opencontainers.image.version".to_string(), serde_json::json!(version))].into_iter().collect(),
+        tags: vec![reference.into()],
+        parent: String::new(),
+    }
 }
 
 #[async_trait]
@@ -312,18 +360,33 @@ impl Images for FakeImages {
             })
             .collect();
         for (reference, id, version) in self.built.lock().unwrap().iter() {
-            out.push(ImageInfo {
-                id: id.clone(),
-                created: 1.0,
-                size: 100,
-                labels: [("org.opencontainers.image.version".to_string(), serde_json::json!(version))]
-                    .into_iter()
-                    .collect(),
-                tags: vec![reference.clone()],
-                parent: String::new(),
-            });
+            out.push(built_image(reference, id, version));
         }
         Ok(out)
+    }
+
+    async fn built_in_wadspaces(&self) -> Res<Vec<(String, ImageInfo)>> {
+        Ok(self
+            .in_wadspaces
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(c, reference, id, version)| (c.clone(), built_image(reference, id, version)))
+            .collect())
+    }
+
+    async fn import(&self, container: &str, id: &str, mut on_line: OnLine) -> Res<()> {
+        on_line(&format!("Loaded image: sha256:{id}"));
+        self.imports.lock().unwrap().push((container.into(), id.into()));
+        let found = self.in_wadspaces.lock().unwrap().iter().find(|(c, _, i, _)| c == container && i == id).cloned();
+        let (_, reference, id, version) = found.ok_or("no such image in it")?;
+        self.built.lock().unwrap().push((reference, id, version));
+        Ok(())
+    }
+
+    async fn remote(&self, reference: &str, _token: Option<String>) -> Res<Version> {
+        self.registry_reads.fetch_add(1, Ordering::Relaxed);
+        self.registry.lock().unwrap().get(reference).cloned().ok_or_else(|| format!("{reference}: manifest unknown"))
     }
 }
 
@@ -606,7 +669,17 @@ async fn this_machines_own_build_is_an_update_from_here() {
         built.push(("localhost/wados-host:latest".into(), "sha256:built".into(), "44.20261106.0".into()));
         built.push(("localhost/wados-host:44.20261101.0".into(), "sha256:old".into(), "44.20261101.0".into()));
     }
-    let up = up_with(Machine { remote: Some(v("44.20261104.0", "booted")), ..machine() }, images, |_, _| {});
+    let built = Version {
+        version: "44.20261106.0".into(),
+        image: "localhost/wados-host@built".into(),
+        digest: Some("sha256:built".into()),
+    };
+    let m = Machine {
+        remote: Some(v("44.20261104.0", "booted")),
+        switchable: [("localhost/wados-host@built".to_string(), built)].into_iter().collect(),
+        ..machine()
+    };
+    let up = up_with(m, images, |_, _| {});
     // Chosen: this machine's builds.
     let u = up.u.source(UpdateSource::Local).await.unwrap();
     assert_eq!(u.source, UpdateSource::Local);
@@ -615,17 +688,185 @@ async fn this_machines_own_build_is_an_update_from_here() {
     assert_eq!(u.local.as_ref().map(|l| l.version.as_str()), Some("44.20261106.0"));
     let job = up.u.check().await.unwrap();
     assert_eq!(up.ended(&job).await.job.status, JobStatus::Done);
-    let u = up.until(|u| u.available.is_some()).await;
-    assert_eq!(u.available.map(|a| a.version), Some("44.20261106.0".into()));
+    // Offered, or already being switched to (the check fetches what it finds).
+    let u = up.until(|u| u.available.is_some() || u.staged.is_some()).await;
+    assert_eq!(u.available.or(u.staged).map(|a| a.version), Some("44.20261106.0".into()));
     assert!(!up.calls().iter().any(|c| c.contains("--check")), "no registry: {:?}", up.calls());
     // Found, so switched to in podman's store straight after (a check
-    // downloads what it finds): nothing from a registry.
-    up.until(|u| u.job.is_none()).await;
+    // downloads what it finds): nothing from a registry. Pinned by its image
+    // id, containers-storage's `name@<id>` (not `@sha256:`, a manifest's).
+    let u = up.until(|u| u.job.is_none() && u.staged.is_some()).await;
+    assert_eq!(u.staged.map(|s| s.version), Some("44.20261106.0".into()));
     assert!(
-        up.calls().iter().any(|c| c == "bootc switch --transport containers-storage localhost/wados-host@sha256:built"),
+        up.calls().iter().any(|c| c == "bootc switch --transport containers-storage localhost/wados-host@built"),
         "{:?}",
         up.calls()
     );
+}
+
+/// The machine after `bootc switch`ing to this machine's build 44.20261106.0
+/// (booted now), with GitHub's 44.20261105.0 on its registry.
+fn on_a_local_build() -> Machine {
+    let mut booted = v("44.20261106.0", "built");
+    booted.image = "localhost/wados-host@built".into();
+    Machine {
+        booted,
+        follows: Some(("localhost/wados-host@built".into(), "containers-storage".into())),
+        remote: Some(v("44.20261105.0", "ci")),
+        ..machine()
+    }
+}
+
+#[tokio::test]
+async fn updating_from_this_machines_build_without_a_check_doesnt_hang() {
+    // The page's Update straight after choosing "This machine" (no check):
+    // what's applied is read under one lock of the state, not two.
+    let images = FakeImages::default();
+    images.built.lock().unwrap().push(("localhost/wados-host:latest".into(), "built".into(), "44.20261106.0".into()));
+    let built = Version {
+        version: "44.20261106.0".into(),
+        image: "localhost/wados-host@built".into(),
+        digest: Some("built".into()),
+    };
+    let m =
+        Machine { switchable: [("localhost/wados-host@built".to_string(), built)].into_iter().collect(), ..machine() };
+    let up = up_with(m, images, |_, _| {});
+    up.u.source(UpdateSource::Local).await.unwrap();
+    assert!(up.u.status().await.unwrap().available.is_some());
+    let job = up.u.apply().await.unwrap();
+    let ended = tokio::time::timeout(Duration::from_secs(5), up.ended(&job)).await.expect("it ends");
+    assert_eq!(ended.job.status, JobStatus::Done, "{:?}", ended.job.error);
+    assert_eq!(up.u.status().await.unwrap().staged.map(|s| s.version), Some("44.20261106.0".into()));
+}
+
+#[tokio::test]
+async fn back_to_githubs_image_after_this_machines_build() {
+    let up = up_with(on_a_local_build(), FakeImages::default(), |_, _| {});
+    up.images.registry.lock().unwrap().insert("ghcr.io/hunggod/wados-host:latest".into(), v("44.20261105.0", "ci"));
+    // GitHub's again: bootc follows the local build, whose check is nothing,
+    // so the registry's asked; it's offered, not fetched by itself (it's
+    // older than the build booted).
+    up.u.source(UpdateSource::Github).await.unwrap();
+    let job = up.u.check().await.unwrap();
+    assert_eq!(up.ended(&job).await.job.status, JobStatus::Done);
+    let u = up.u.status().await.unwrap();
+    assert_eq!(u.available.as_ref().map(|a| a.version.as_str()), Some("44.20261105.0"));
+    assert!(u.online, "GitHub's registry is read whatever bootc follows");
+    assert!(!up.calls().iter().any(|c| c == "bootc upgrade --check"), "{:?}", up.calls());
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(up.u.status().await.unwrap().staged.is_none(), "an older one isn't downloaded by itself");
+    // Update: switched back to GitHub's image, from its registry, where later updates come from.
+    let job = up.u.apply().await.unwrap();
+    assert_eq!(up.ended(&job).await.job.status, JobStatus::Done);
+    assert!(up.calls().iter().any(|c| c == "bootc switch ghcr.io/hunggod/wados-host:latest"), "{:?}", up.calls());
+    let m = up.bootc.m.lock().unwrap().clone();
+    assert_eq!(followed(&m), ("ghcr.io/hunggod/wados-host:latest".into(), "registry".into()));
+    assert_eq!(m.staged.map(|s| s.version), Some("44.20261105.0".into()));
+}
+
+#[tokio::test]
+async fn an_older_build_of_this_machines_is_never_an_update() {
+    // Booted: CI's 44.20261104.0; built here before it: 44.20261101.0.
+    let images = FakeImages::default();
+    images.built.lock().unwrap().push(("localhost/wados-host:latest".into(), "old".into(), "44.20261101.0".into()));
+    let up = up_with(machine(), images, |_, _| {});
+    up.u.source(UpdateSource::Local).await.unwrap();
+    let job = up.u.check().await.unwrap();
+    up.ended(&job).await;
+    let u = up.until(|u| u.job.is_none()).await;
+    assert_eq!(u.local.map(|l| l.version), Some("44.20261101.0".into()), "it's known");
+    assert!(u.available.is_none(), "but not offered");
+    assert!(!up.calls().iter().any(|c| c.starts_with("bootc switch")), "{:?}", up.calls());
+}
+
+#[tokio::test]
+async fn a_build_in_the_wados_wadspace_is_copied_out_then_switched_to() {
+    // host/build.sh image, run in the WadOS wadspace: in its own podman.
+    let images = FakeImages::default();
+    images.in_wadspaces.lock().unwrap().push((
+        "wad-wadspaces".into(),
+        "localhost/wados-host:latest".into(),
+        "fresh".into(),
+        "44.20261111.1302".into(),
+    ));
+    let fresh = Version {
+        version: "44.20261111.1302".into(),
+        image: "localhost/wados-host@fresh".into(),
+        digest: Some("fresh".into()),
+    };
+    let m =
+        Machine { switchable: [("localhost/wados-host@fresh".to_string(), fresh)].into_iter().collect(), ..machine() };
+    let up = up_with(m, images, |_, _| {});
+    up.u.source(UpdateSource::Local).await.unwrap();
+    let job = up.u.check().await.unwrap();
+    up.ended(&job).await;
+    let u = up.until(|u| u.job.is_none() && u.staged.is_some()).await;
+    assert_eq!(u.staged.map(|s| s.version), Some("44.20261111.1302".into()));
+    // Copied out of the wadspace (its podman's save), then switched to here.
+    assert_eq!(*up.images.imports.lock().unwrap(), [("wad-wadspaces".to_string(), "fresh".to_string())]);
+    assert!(
+        up.calls().iter().any(|c| c == "bootc switch --transport containers-storage localhost/wados-host@fresh"),
+        "{:?}",
+        up.calls()
+    );
+}
+
+#[tokio::test]
+async fn only_this_machines_own_family_of_builds() {
+    let images = FakeImages::default();
+    {
+        let mut built = images.built.lock().unwrap();
+        built.push(("localhost/wados-host:latest".into(), "plain".into(), "44.20261106.0".into()));
+        // Newer, but another image: NVIDIA's, and the builder's.
+        built.push(("localhost/wados-host-nvidia:latest".into(), "nv".into(), "44.20261107.0".into()));
+        built.push(("localhost/wados-host-builder:44".into(), "builder".into(), "44.20261108.0".into()));
+    }
+    let up = up_with(machine(), images, |_, _| {});
+    up.u.source(UpdateSource::Local).await.unwrap();
+    let u = up.u.status().await.unwrap();
+    assert_eq!(u.local.map(|l| (l.version, l.digest)), Some(("44.20261106.0".into(), Some("plain".into()))));
+
+    // An NVIDIA machine: NVIDIA's builds.
+    let images = FakeImages::default();
+    images.built.lock().unwrap().push(("localhost/wados-host:latest".into(), "plain".into(), "44.20261109.0".into()));
+    images.built.lock().unwrap().push((
+        "localhost/wados-host-nvidia:latest".into(),
+        "nv".into(),
+        "44.20261107.0".into(),
+    ));
+    let mut m = machine();
+    m.booted.image = "ghcr.io/hunggod/wados-host-nvidia:latest".into();
+    let up = up_with(m, images, |_, _| {});
+    up.u.source(UpdateSource::Local).await.unwrap();
+    assert_eq!(up.u.status().await.unwrap().local.map(|l| l.version), Some("44.20261107.0".into()));
+}
+
+#[tokio::test]
+async fn a_failed_check_of_the_pushed_image_waits_for_the_next_one() {
+    // Following this machine's build, the pushed image is read from the
+    // registry; it doesn't answer. The next check is EVERY away, not a tick.
+    let up = up_with(on_a_local_build(), FakeImages::default(), |_, _| {});
+    up.u.source(UpdateSource::Pushed).await.unwrap();
+    up.u.due().await;
+    let job = up.until(|u| u.job.is_some()).await.job.unwrap();
+    let ended = up.ended(&up.jobs.info(&job).unwrap()).await;
+    assert_eq!(ended.job.status, JobStatus::Error);
+    let u = up.until(|u| u.job.is_none()).await;
+    assert!(u.checked_at.is_some(), "a failed check counts as a look");
+    up.u.due().await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert_eq!(up.images.registry_reads.load(Ordering::Relaxed), 1, "not asked again until it's due");
+}
+
+#[tokio::test]
+async fn the_source_stays_while_an_update_is_under_way() {
+    let up = up_with(machine(), FakeImages::default(), |b, _| b.slow = Duration::from_millis(30));
+    up.u.source(UpdateSource::Github).await.unwrap();
+    let job = up.u.check().await.unwrap();
+    assert_eq!(up.u.source(UpdateSource::Local).await.unwrap_err().code, ErrorCode::Conflict);
+    up.ended(&job).await;
+    up.until(|u| u.job.is_none()).await;
+    assert_eq!(up.u.source(UpdateSource::Local).await.unwrap().source, UpdateSource::Local);
 }
 
 #[tokio::test]
@@ -729,4 +970,35 @@ async fn a_login_that_doesnt_help_is_never_kept() {
     let job = up.u.check().await.unwrap();
     assert_eq!(up.ended(&job).await.job.status, JobStatus::Error);
     assert!(!up.bootc.auth.exists(), "a refused login isn't kept");
+}
+
+/// The real registry (network): `cargo test -p wadd --lib -- --ignored registry_version_reads_ghcr`.
+#[tokio::test]
+#[ignore]
+async fn registry_version_reads_ghcr() {
+    let v = registry_version("ghcr.io/hunggod/wados-host:latest", None).await.expect("ghcr answers");
+    assert!(ci_version(&v.version), "{v:?}");
+    assert!(v.digest.as_deref().is_some_and(|d| d.starts_with("sha256:")), "{v:?}");
+    eprintln!("ghcr has {v:?}");
+}
+
+#[test]
+fn a_wadspaces_podman_images_as_its_cli_prints_them() {
+    // podman 5.8's `podman images --format json` (in a wadspace, rootless).
+    let text = r#"[{"Id": "4c20228689f1aa61e2f2a9f2b8c5b54c6f0b9b6d1d7b4f8e0a6c0e5d2c1b0a99",
+        "ParentId": "", "RepoTags": null,
+        "RepoDigests": ["localhost/wados-host@sha256:11772ce852d5b1754b1150bde1652ffb451946bb9aba942453601f005a8c2de6"],
+        "Size": 1289, "SharedSize": 0, "VirtualSize": 1289,
+        "Labels": {"io.buildah.version": "1.43.4", "org.opencontainers.image.version": "44.20261111.1302"},
+        "Containers": 0, "Names": ["localhost/wados-host:latest"], "Digest": "sha256:11772ce8",
+        "History": ["localhost/wados-host:latest"], "Created": 1794361288, "CreatedAt": "2026-11-11T13:01:28Z"}]"#;
+    let images = parse_podman_images(text);
+    assert_eq!(images.len(), 1);
+    let images: Vec<(Option<String>, ImageInfo)> =
+        images.into_iter().map(|i| (Some("wad-wadspaces".into()), i)).collect();
+    let (v, from) = newest_local(HOST_IMAGE, &images).unwrap();
+    assert_eq!(v.version, "44.20261111.1302");
+    assert_eq!(v.digest.as_deref(), Some("4c20228689f1aa61e2f2a9f2b8c5b54c6f0b9b6d1d7b4f8e0a6c0e5d2c1b0a99"));
+    assert_eq!(from.as_deref(), Some("wad-wadspaces"));
+    assert!(parse_podman_images("").is_empty() && parse_podman_images("not json").is_empty());
 }

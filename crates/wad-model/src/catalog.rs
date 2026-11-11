@@ -75,11 +75,13 @@ struct Catalog {
     tools: Vec<CatalogTool>,
 }
 
-/// Add-ons the catalog doesn't offer any more: Notion, Figma and Docs.rs for WadBrowser; Go for VS Code and the command line; Git LFS.
-pub const RETIRED_ADDONS: [(AppId, &str); 6] = [
+/// Add-ons the catalog doesn't offer any more: Notion, Figma, Docs.rs, Calendar and ChatGPT for WadBrowser; Go for VS Code and the command line; Git LFS.
+pub const RETIRED_ADDONS: [(AppId, &str); 8] = [
     (AppId::Wadbrowser, "notion"),
     (AppId::Wadbrowser, "figma"),
     (AppId::Wadbrowser, "docs-rs"),
+    (AppId::Wadbrowser, "calendar"),
+    (AppId::Wadbrowser, "chatgpt"),
     (AppId::Vscode, "golang.go"),
     (AppId::Terminal, "go"),
     (AppId::Terminal, "git-lfs"),
@@ -115,7 +117,7 @@ static CATALOG: LazyLock<Catalog> = LazyLock::new(|| {
     let extensions = raw.extensions.into_iter().filter(|e| !retired(AppId::Vscode, &e.id)).collect();
     // v1's other command-line downloads (its images' features beyond the catalog's tools: claude-code.sh, hplip.sh), as tools here too, and Ori (OpenRouter's agent).
     let more = [
-        ("claude-code", "Claude Code", "Anthropic’s claude command, from npm (adds Node.js)"),
+        ("claude-code", "Claude Code", "Anthropic’s claude command (its native build)"),
         ("ori", "Ori", "OpenRouter’s command-line coding agent: Claude Code, Codex and more, through OpenRouter"),
         (
             "podman",
@@ -191,7 +193,7 @@ pub struct Site {
     icon: &'static str,
 }
 
-pub const WEB_APPS: [Site; 10] = [
+pub const WEB_APPS: [Site; 8] = [
     Site { id: "github", name: "GitHub", url: "https://github.com", icon: "github.svg" },
     Site { id: "claude", name: "Claude", url: "https://claude.ai", icon: "claude.svg" },
     Site { id: "gmail", name: "Gmail", url: "https://mail.google.com", icon: "gmail.png" },
@@ -205,8 +207,6 @@ pub const WEB_APPS: [Site; 10] = [
     Site { id: "google-drive", name: "Google Drive", url: "https://drive.google.com", icon: "google-drive.png" },
     Site { id: "squarespace", name: "Squarespace", url: "https://squarespace.com", icon: "squarespace.png" },
     Site { id: "youtube", name: "YouTube", url: "https://youtube.com", icon: "youtube.png" },
-    Site { id: "calendar", name: "Calendar", url: "https://calendar.google.com", icon: "calendar.png" },
-    Site { id: "chatgpt", name: "ChatGPT", url: "https://chatgpt.com", icon: "chatgpt.svg" },
 ];
 
 pub fn site(id: &str) -> Option<&'static Site> {
@@ -495,7 +495,7 @@ mod tests {
         }
         assert!(!tools.contains(&"go") && !tools.contains(&"git-lfs"));
         assert!(extension("golang.go").is_none());
-        for id in ["notion", "figma", "docs-rs"] {
+        for id in ["notion", "figma", "docs-rs", "calendar", "chatgpt"] {
             assert!(site(id).is_none());
         }
         assert_eq!(

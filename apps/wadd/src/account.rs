@@ -66,8 +66,10 @@ pub struct FirebaseApp {
     pub functions_region: String,
 }
 
+/// Where the account's `enrollMachine` is deployed (wadspaces-client's
+/// functions/.env.wad-spaces), for a firebase.toml that doesn't say.
 fn default_region() -> String {
-    "us-central1".into()
+    "australia-southeast2".into()
 }
 
 impl FirebaseApp {
@@ -608,8 +610,18 @@ impl AccountService {
             data.insert("tailnet".into(), t);
         }
         // Only the fields the rules let the machine change, and its document must be there.
-        let w = Write::update(format!("users/{uid}/machines/{mid}"), data).now("lastSeen");
-        match a.firestore.commit(&tok, &[w]).await {
+        let path = format!("users/{uid}/machines/{mid}");
+        let w = Write::update(path.clone(), data).now("lastSeen");
+        let r = match a.firestore.commit(&tok, &[w]).await {
+            // The rules see an update of a document that's gone as a create,
+            // which a machine can't make (403, not a failed precondition):
+            // gone it is, if a read of it (its own: allowed) finds nothing.
+            Err(FbError::Denied) if matches!(a.firestore.get(&tok, &path).await, Ok(None)) => {
+                Err(FbError::Precondition("the machine's document is gone".into()))
+            }
+            r => r,
+        };
+        match r {
             Ok(()) => {
                 self.view.lock().unwrap().last_seen = Some(now_ms());
                 self.refresh_view(Some(None));
@@ -759,7 +771,7 @@ mod tests {
         assert_eq!(FirebaseApp::read(&p), None);
         std::fs::write(&p, "api_key = \"k\"\nproject_id = \"wad-spaces\"\n").unwrap();
         let a = FirebaseApp::read(&p).unwrap();
-        assert_eq!((a.project_id.as_str(), a.functions_region.as_str()), ("wad-spaces", "us-central1"));
+        assert_eq!((a.project_id.as_str(), a.functions_region.as_str()), ("wad-spaces", "australia-southeast2"));
         std::fs::write(&p, "api_key = \"\"\nproject_id = \"x\"\n").unwrap();
         assert_eq!(FirebaseApp::read(&p), None);
     }

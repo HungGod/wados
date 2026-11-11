@@ -59,6 +59,10 @@ for k in ("api_key", "project_id", "auth_domain", "functions_region"):
 PY
     chmod 0600 "${VAR}/lib/wados/installer/firebase.toml.new"
     mv "${VAR}/lib/wados/installer/firebase.toml.new" "${VAR}/lib/wados/installer/firebase.toml"
+    # WadSpaces Live has the account too (its first boot puts it at
+    # /etc/wados/firebase.toml), so Sign in to WadSpaces links it as on a
+    # machine; it shows in the account as wadspaces-live.
+    install -m 0600 "${VAR}/lib/wados/installer/firebase.toml" "${VAR}/lib/wados/provision/firebase.toml"
 fi
 # WadSpaces Live: its first boot makes `live` (locked: nobody signs in as it)
 # and says it's the stick. wados-provision.service does the rest, as on a machine.

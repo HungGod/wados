@@ -124,7 +124,8 @@ pub static TOOLS: [(&str, Recipe); 11] = [
     // wrappers on PATH: v1's script as it was (it needs a C toolchain).
     ("rust", feature("rust", &["cpp"], "rustc --version")),
     ("android", Recipe::Todo("Java, Gradle, adb and the Android SDK's command-line tools, as v1's feature")),
-    ("claude-code", feature("claude-code", &["nodejs"], "claude --version")),
+    // Anthropic's native build (claude.ai/install.sh): no Node.js under it.
+    ("claude-code", feature("claude-code", &[], "claude --version")),
     // A standalone binary from OpenRouter's GitHub releases (downloaded, not
     // the API: no token). It signs in with `ori login`.
     (
@@ -150,7 +151,8 @@ pub static TOOLS: [(&str, Recipe); 11] = [
 
 /// Features in the order they stack: what others need first, the big,
 /// common ones low. (Each one once: a test checks.)
-pub const ORDER: &[&str] = &["cpp", "python", "nodejs", "rust", "claude-code", "ori", "podman", "dolphin", "steam", "vscode"];
+pub const ORDER: &[&str] =
+    &["cpp", "python", "nodejs", "rust", "claude-code", "ori", "podman", "dolphin", "steam", "vscode"];
 
 /// An app's recipe (every app has one, if only a `Todo`).
 pub fn app(id: AppId) -> &'static Recipe {

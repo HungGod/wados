@@ -53,6 +53,10 @@ usage: wados-pkgs <command> …  (wad-gen's packages, chains and sets)
   set <base id> <id>…
       JSON: the set of those packages and what they need, with no commands
       of its own: {packages, key, image}
+  starter <base id>
+      JSON: the WadOS wadspace's set (wad-model's starter) on that base:
+      {packages, key, image}. Its packages are what a stick carries for it
+      (host/build.sh installer --include wados).
   set-containerfile <key> <from> <base id> [<id>=<ref>]…
       that set's Containerfile, FROM its top chain (or the base)
   index <old index.json> <abi> <base digest> [<result.json>…]
@@ -124,6 +128,10 @@ fn run(args: &[String]) -> Result<String, Fail> {
             _ => Err(usage("chain-step <from> <from id> <id>=<ref>…")),
         },
         "set" => set(rest),
+        "starter" => match rest {
+            [base_id] => Ok(starter(base_id)),
+            _ => Err(usage("starter <base id>")),
+        },
         "set-containerfile" => match rest {
             [key, from, base_id, stacked @ ..] => {
                 let packages = pairs(stacked)?;
@@ -268,6 +276,15 @@ fn set(args: &[String]) -> Result<String, Fail> {
     let packages = p::closure(ids);
     let key = sets::set_key(&packages, base_id, &[]);
     Ok(line(json!({"packages": packages, "image": sets::set_image(&key), "key": key}).to_string()))
+}
+
+/// The WadOS wadspace's set on `base_id`: its packages (with what they need)
+/// and the image its build makes (its commands are in its key).
+fn starter(base_id: &str) -> String {
+    let ws = wad_model::starter::starter_wadspace("this-machine", 0);
+    let set = sets::Set::of(&ws, base_id);
+    let key = set.key.clone().unwrap_or_default();
+    line(json!({"packages": set.packages, "image": set.image(BASE_IMAGE), "key": key}).to_string())
 }
 
 fn index(args: &[String]) -> Result<String, Fail> {

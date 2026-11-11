@@ -92,3 +92,20 @@ The cost is Tailscale's support for these machines.
 - **Drops on Live's desktop** aren't blocked with the spike's "Install WadSpaces first".
 - **The spike's boot menu** (Test this media, Boot first hard disk) isn't there; GRUB's is.
 - **Real hardware:** the Surface Book 2's keyboard at the disk password prompt, firmware boot entries, and a real stick.
+
+## The domain
+
+(Moved from the old `site/README.md`: the landing page is Firebase Hosting's now, in `../wadspaces-client`.)
+
+Every record lives in the `wadspaces.com` zone on Cloudflare:
+
+| Name | Points at | Made by |
+|---|---|---|
+| `wadspaces.com`, `www` | the landing page (Firebase Hosting, `../wadspaces-client`: a custom domain) | by hand, once |
+| `<id>.wadspaces.com` | that machine's own tunnel (`<tunnel-id>.cfargotunnel.com`, proxied) | the installer stick, when it installs the machine (`apps/wadd/src/provision.rs`) |
+
+- **There's no wildcard.** A name nobody made gets a clean "not found", never some machine's tunnel.
+- **A machine's id** is chosen at install. It's DNS-safe and never one of the site's names (`www`, `api`, `mail`, `docs`, `status`, `app`, `admin`). Renaming the machine later doesn't touch DNS.
+- **Streams** live under their machine's name: `https://<id>.wadspaces.com/ws-<guid>/`. They're served by the machine itself (wadd's proxy behind its tunnel), not by this site.
+- **Machines never hold a DNS token.** Only the stick does, and it uses it once, at install. `wadd tunnel remove <id>`, run on the build computer with the secrets, retires a machine's tunnel and record.
+

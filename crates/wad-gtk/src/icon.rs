@@ -1,4 +1,4 @@
-//! Lucide icons (assets/lucide, made by tools/lucide.mjs) drawn in the
+//! Lucide icons (assets/lucide, made by tools/lucide.py) drawn in the
 //! widget's own CSS colour, at its size and the screen's scale: what
 //! lucide-react draws in the web app. `Icon::new("play", 16)`.
 
@@ -183,7 +183,7 @@ impl Icon {
         me.set_halign(gtk::Align::Center);
         me.set_valign(gtk::Align::Center);
         if svg(name).is_none() {
-            tracing::warn!("no lucide icon {name:?} in assets/lucide (tools/lucide.mjs)");
+            tracing::warn!("no lucide icon {name:?} in assets/lucide (tools/lucide.py)");
         }
         me
     }

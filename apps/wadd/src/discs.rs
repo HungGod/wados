@@ -188,9 +188,9 @@ impl MachineDiscs {
                 same.then(|| format!("ext:{}:{}", e.app, e.id))
             });
             if let Some(variant) = variant {
-                self.docs.apply(Op::RemoveVariant { ws: ws.id.clone(), variant }).map_err(|e| {
-                    ApiError::conflict(format!("{} still has it: {}", ws.name, e.message))
-                })?;
+                self.docs
+                    .apply(Op::RemoveVariant { ws: ws.id.clone(), variant })
+                    .map_err(|e| ApiError::conflict(format!("{} still has it: {}", ws.name, e.message)))?;
             }
         }
         // Its file goes first (with a part a copy left): a library entry

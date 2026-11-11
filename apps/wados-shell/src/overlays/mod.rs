@@ -49,12 +49,7 @@ use crate::store::Change;
 /// The wadspace full screen on the screen (the primary): what Ctrl+Alt+↓ puts
 /// in a window, and Spaces takes off the screen.
 fn screen_ws(shell: &Rc<Shell>) -> Option<String> {
-    shell
-        .store
-        .running()
-        .into_iter()
-        .map(|w| w.id)
-        .find(|id| shell.store.display(id) == Some(SessionDisplay::Screen))
+    shell.store.running().into_iter().map(|w| w.id).find(|id| shell.store.display(id) == Some(SessionDisplay::Screen))
 }
 
 const CSS: &str = r#"

@@ -15,7 +15,7 @@ phases. `firebase` and `go` (retired from the catalog) are not coming back.
 | `git` | git + git-lfs | No wad-gen recipe yet. The base has git-core; add `git-lfs` if a recipe asks for it |
 | `electron-deps` | Electron's libraries on a minimal Debian | Only needed for AppImages and tarballs, since Fedora's RPMs bring their own: nss, gtk3, alsa-lib, mesa-libgbm, libsecret, libnotify, libXScrnSaver, cups-libs, at-spi2-atk |
 | `chrome` | Google's .deb + `--no-sandbox` wrapper | Google's RPM repository (dl.google.com/linux/chrome/rpm), the same wrapper (`wadspaces-wrap-electron`) |
-| `claude-code` | `npm install -g` + its icon | done (phase 11): needs `nodejs` |
+| `claude-code` | `npm install -g` + its icon | done (phase 11): the native build (claude.ai/install.sh), no `nodejs` |
 | `obsidian` | AppImage, extracted to /opt | the same, `need electron-deps` |
 | `tiled` | AppImage | Fedora's `tiled` (`rpm-tiled`) |
 | `libresprite` | AppImage | the same AppImage |

@@ -11,8 +11,8 @@ read in place from the person's secrets, and nothing else of them.
                             replaced: what a check prints goes through it
 
 The file: WADOS_SECRETS, a folder with cloudflare.toml in it (as host/build.sh
-takes the folder for its mok/), or the file itself; by default v1's,
-../wadspaces-old/host/secrets beside this checkout. Only the [cloudflare.turn]
+takes the folder for its mok/), or the file itself; by default this
+checkout's host/secrets (as host/build.sh finds it). Only the [cloudflare.turn]
 table's lines are parsed: no other table (the tunnel's tokens) is ever read
 into a value, used or printed. Standard library only.
 """
@@ -24,7 +24,7 @@ import sys
 import tomllib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DEFAULT = os.path.normpath(os.path.join(HERE, "..", "..", "..", "wadspaces-old", "host", "secrets"))
+DEFAULT = os.path.normpath(os.path.join(HERE, "..", "..", "host", "secrets"))
 HEADER = re.compile(r"^\s*\[\s*([^\]\s]+)\s*\]\s*(#.*)?$")
 
 

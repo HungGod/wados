@@ -452,11 +452,8 @@ impl MachineAgents {
     /// waited for: the share the accepter opens. The machine it runs on is
     /// this one (the agent's own, whose files it tries).
     async fn stream_sandbox(&self, sandbox: &str, ws: &str) -> Result<wad_proto::StreamShare, ApiError> {
-        let streams = self
-            .streams
-            .get()
-            .cloned()
-            .ok_or_else(|| ApiError::conflict("Streaming isn't here on this machine"))?;
+        let streams =
+            self.streams.get().cloned().ok_or_else(|| ApiError::conflict("Streaming isn't here on this machine"))?;
         streams
             .start(
                 ws,
