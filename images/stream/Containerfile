@@ -63,7 +63,9 @@ LABEL org.opencontainers.image.source="https://github.com/HungGod/wados"
 # doesn't offer them. Sharing links are WadOS's share sheet's, not Selkies'.
 # Gamepads are off but for Play together, whose unit turns them on: a row per
 # player in the tokens file, SELKIES_GAMEPAD_ENABLED, and the interposer's
-# sockets in the display volume both containers share.
+# sockets in the display volume both containers share. Then every player's
+# page polls its gamepad from the start (SELKIES_GAMEPAD_ON_START): Play
+# together's other players are viewers, whose page never turns it on itself.
 ENV LSIO_FIRST_PARTY=false \
     HOME="/config" \
     LANG="en_US.UTF-8" \
@@ -88,7 +90,7 @@ ENV LSIO_FIRST_PARTY=false \
     SELKIES_ENABLE_SHARING=false \
     SELKIES_UI_SIDEBAR_SHOW_SHARING=false \
     SELKIES_GAMEPAD_ENABLED="false|locked" \
-    SELKIES_GAMEPAD_ON_START=false \
+    SELKIES_GAMEPAD_ON_START=true \
     SELKIES_UINPUT_GAMEPAD=false \
     SELKIES_UI_SIDEBAR_SHOW_GAMEPADS=false \
     SELKIES_ENABLE_PLAYER2="false|locked" \

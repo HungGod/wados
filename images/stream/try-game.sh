@@ -19,6 +19,9 @@
 #   images/stream/try-game.sh DISC.rvz --public   a public stream's WebRTC (dual
 #                                                 mode, the mux port), as wadd's
 #                                                 "Stream publicly"; else private
+#   images/stream/try-game.sh DISC.rvz --players 2  Play together: player 1 on the
+#                                                 phone, the others' links printed
+#                                                 (wadd's table: viewers, slots 2+)
 #
 # Checks, each ok or FAIL: the sidecar is up with gamepads on and its pads
 # in the display volume; the wadspace has the disc at /config/Games and its
@@ -41,17 +44,19 @@ DISC_ID=mario-kart-double-dash
 DISC_FILE=mario-kart-double-dash.rvz
 
 MUX_PORT="${MUX_PORT:-48191}"
-DISC="" IMAGE="" FOR="" PHONE=true PUBLIC=false
+DISC="" IMAGE="" FOR="" PHONE=true PUBLIC=false PLAYERS=1
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --image) IMAGE="$2"; shift 2 ;;
         --for) FOR="$2"; shift 2 ;;
         --no-phone) PHONE=false; shift ;;
         --public) PUBLIC=true; shift ;;
-        -h|--help) sed -n '2,27p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --players) PLAYERS="$2"; shift 2 ;;
+        -h|--help) sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) DISC="$1"; shift ;;
     esac
 done
+[[ "${PLAYERS}" =~ ^[1-4]$ ]] || { echo "try-game: --players 1 to 4" >&2; exit 2; }
 [[ -f "${DISC}" ]] || { echo "try-game: a disc (.rvz or .iso) to play: try-game.sh DISC.rvz" >&2; exit 2; }
 if [[ -z "${IMAGE}" ]]; then
     IMAGE="$(podman images --format '{{.Repository}}:{{.Tag}} {{.Labels}}' | awk '/^localhost\/wados-set-/ && /io.wadspaces.pkgs:dolphin[ \]]/ { print $1; exit }')"
@@ -96,7 +101,7 @@ cp --reflink=auto "${DISC}" "${WORK}/state/discs/${DISC_ID}/${DISC_FILE}" || exi
 public_args=()
 ${PUBLIC} && public_args=(--mux-port "${MUX_PORT}")
 "${ROOT}/target/debug/examples/stream-units" --units "${WORK}/units" --state "${WORK}/state" --guid "${GUID}" \
-    --web-port "${WEB_PORT}" --auth "${AUTH}" --wallpaper '#1b1530' --image "${IMAGE}" --players 1 "${public_args[@]}" || exit 1
+    --web-port "${WEB_PORT}" --auth "${AUTH}" --wallpaper '#1b1530' --image "${IMAGE}" --players "${PLAYERS}" "${public_args[@]}" || exit 1
 # Public: this laptop's loopback stands in for the machine's addresses
 # (as try-stream.sh), and the phone reaches the mux port over USB too:
 # WebRTC's TCP candidate, 127.0.0.1:<mux>.
@@ -122,8 +127,14 @@ run_unit() {
 }
 put() { printf '%s\n' "$2" > "${AUTH}/.$1" && chmod 600 "${AUTH}/.$1" && mv "${AUTH}/.$1" "${AUTH}/$1"; }
 KEY="$(head -c 24 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')"
-# Player 1 at the controls, as wadd's table for a game's own stream.
-put tokens.json "{\"${KEY}\": {\"role\": \"controller\", \"slot\": 1}}"
+# Player 1 at the controls, as wadd's table for a game's own stream; Play
+# together's others as viewers in their own slots (wadd's token_table).
+OTHERS=() table="\"${KEY}\": {\"role\": \"controller\", \"slot\": 1}"
+for ((n = 2; n <= PLAYERS; n++)); do
+    OTHERS+=("$(head -c 24 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')")
+    table+=", \"${OTHERS[-1]}\": {\"role\": \"viewer\", \"slot\": ${n}}"
+done
+put tokens.json "{${table}}"
 put rtc.json '{"iceServers": []}'
 head -c 32 /dev/urandom | base64 | podman secret create "${SECRET}" - > /dev/null
 
@@ -134,6 +145,7 @@ for _ in $(seq 60); do [[ "$(status "${AT}/ws-${GUID}/api/health")" == 200 ]] &&
 check "the sidecar answers on ${AT}/ws-${GUID}/" "[[ \"\$(status ${AT}/ws-${GUID}/api/health)\" == 200 ]]"
 ${PUBLIC} && check "it streams WebRTC" "curl -s -m 5 ${AT}/ws-${GUID}/api/status | grep -q '\"current_mode\": \"webrtc\"'"
 check "its gamepads are on" "podman exec ${SIDECAR} printenv SELKIES_GAMEPAD_ENABLED | grep -qx true"
+check "every player's page polls its gamepad from the start" "podman exec ${SIDECAR} printenv SELKIES_GAMEPAD_ON_START | grep -qx true"
 check "its pads are in the display volume" "podman exec ${SIDECAR} test -e /run/wadspaces-display/interposer/selkies_input_interposer.so"
 run_unit "${WADSPACE}.service"
 # (Not grep -q: with pipefail, podman logs cut off by it fails the line.)
@@ -169,6 +181,9 @@ fi
 echo
 echo "   the stream: ${LINK}"
 echo "   (on the phone over USB, the same address: adb reverse tcp:${WEB_PORT})"
+for ((n = 2; n <= PLAYERS; n++)); do
+    echo "   player ${n}: ${AT}/ws-${GUID}/#token=${OTHERS[n - 2]}"
+done
 echo
 ((fails)) && echo "try-game: ${fails} failed" || echo "try-game: all ok"
 podman logs "${WADSPACE}" > "${OUT}/wadspace.log" 2>&1

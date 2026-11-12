@@ -721,7 +721,7 @@ pub const STREAM_IMAGE_SELKIES_ENV: &[(&str, &str)] = &[
     ("SELKIES_ENABLE_SHARING", "false"),
     ("SELKIES_UI_SIDEBAR_SHOW_SHARING", "false"),
     ("SELKIES_GAMEPAD_ENABLED", "false|locked"),
-    ("SELKIES_GAMEPAD_ON_START", "false"),
+    ("SELKIES_GAMEPAD_ON_START", "true"),
     ("SELKIES_UINPUT_GAMEPAD", "false"),
     ("SELKIES_UI_SIDEBAR_SHOW_GAMEPADS", "false"),
     ("SELKIES_ENABLE_PLAYER2", "false|locked"),
