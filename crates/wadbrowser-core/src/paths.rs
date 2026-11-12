@@ -45,12 +45,40 @@ impl AppPaths {
     }
 
     pub fn downloads_dir(&self) -> PathBuf {
-        directories::UserDirs::new()
-            .and_then(|u| u.download_dir().map(|p| p.to_path_buf()))
-            .unwrap_or_else(|| self.data_dir.join("Downloads"))
+        user_downloads_dir()
     }
 
     pub fn session_path(&self) -> PathBuf {
         self.data_dir.join("session.json")
+    }
+}
+
+/// The person's Downloads folder: the one `~/.config/user-dirs.dirs` names,
+/// else `~/Downloads`, where Files' Downloads is. (Not a folder of the
+/// browser's own: on a machine with no user-dirs.dirs, as WadOS is,
+/// downloads went to a hidden one nothing showed.)
+pub fn user_downloads_dir() -> PathBuf {
+    let dirs = directories::UserDirs::new();
+    downloads_in(
+        dirs.as_ref().and_then(|u| u.download_dir().map(|p| p.to_path_buf())),
+        dirs.as_ref().map(|u| u.home_dir().to_path_buf()).unwrap_or_else(|| PathBuf::from("/tmp")),
+    )
+}
+
+fn downloads_in(named: Option<PathBuf>, home: PathBuf) -> PathBuf {
+    named.unwrap_or_else(|| home.join("Downloads"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn downloads_go_where_files_shows_them() {
+        assert_eq!(downloads_in(None, "/home/live".into()), PathBuf::from("/home/live/Downloads"));
+        assert_eq!(
+            downloads_in(Some("/home/live/Téléchargements".into()), "/home/live".into()),
+            PathBuf::from("/home/live/Téléchargements")
+        );
     }
 }

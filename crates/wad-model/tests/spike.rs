@@ -71,6 +71,47 @@ mod variants {
     }
 
     #[test]
+    fn steam_comes_in_signed_in_to_the_machines_steam_key() {
+        let mut lib = library();
+        lib.keys.retain(|k| k.kind != wad_model::SecretKind::Steam);
+        let new = |lib: &mut wad_model::Library, name: &str| {
+            let id = act(lib, Op::Create { name: Some(s(name)), category: None, machine: None }).created.unwrap();
+            act(lib, Op::AddApp { ws: id.clone(), app: AppId::Steam });
+            id
+        };
+        // The first: a Steam key made for it, in Steam's slot.
+        let a = new(&mut lib, "Games");
+        let key = ws(&lib, &a).secrets.by_slot.get("app:steam").cloned().expect("signed in with a key");
+        let k = lib.keys.iter().find(|k| k.id == key.id).expect("the key");
+        assert_eq!((k.kind, k.name.as_str()), (wad_model::SecretKind::Steam, "Steam"));
+        assert!(k.paths.iter().any(|p| p == ".local/share/Steam/steamapps/"));
+        // Another: the same key (one sign-in, one library).
+        let b = new(&mut lib, "More games");
+        assert_eq!(ws(&lib, &b).secrets.by_slot["app:steam"].id, key.id);
+        assert_eq!(lib.keys.iter().filter(|k| k.kind == wad_model::SecretKind::Steam).count(), 1);
+        // Taken off by hand: it stays off (only Steam's coming in gives one).
+        act(&mut lib, Op::DropKey { ws: b.clone(), app: AppId::Steam, key: key.id.clone() });
+        assert!(!ws(&lib, &b).secrets.by_slot.contains_key("app:steam"));
+        act(&mut lib, Op::Rename { ws: b.clone(), name: s("Still more") });
+        assert!(!ws(&lib, &b).secrets.by_slot.contains_key("app:steam"));
+    }
+
+    #[test]
+    fn a_packaged_steam_game_is_what_its_gamespace_starts_into() {
+        let mut lib = library();
+        let id = act(&mut lib, Op::Create { name: Some(s("Hollow")), category: None, machine: None }).created.unwrap();
+        let add = |item: &str| Op::NewVariant { ws: id.clone(), app: AppId::Steam, new: NewVariant::Addon(s(item)) };
+        act(&mut lib, add("steam:hollow-knight"));
+        let x = ws(&lib, &id);
+        assert!(x.has_app(AppId::Steam) && x.ext(AppId::Steam, "hollow-knight").is_some());
+        assert_eq!(x.look.launch.as_deref(), Some("variant:hollow-knight"));
+        assert_eq!(x.category, Some(wad_model::Category::Gaming));
+        // A second one: the first stays what it starts into.
+        act(&mut lib, add("steam:celeste"));
+        assert_eq!(ws(&lib, &id).look.launch.as_deref(), Some("variant:hollow-knight"));
+    }
+
+    #[test]
     fn a_new_one_a_game_no_build_needed_a_web_app_a_sign_in() {
         let mut lib = library();
         let id = s("couch-co-op");
@@ -87,6 +128,13 @@ mod variants {
             Some(s("variant:mario-kart"))
         );
         assert!(ws(&lib, &id).look.layout.icons.contains(&s("variant:mario-kart")));
+        // The same disc again (opened with Dolphin twice, uploaded again): that one, not "Mario Kart 2".
+        let again = act(
+            &mut lib,
+            Op::NewVariant { ws: id.clone(), app: AppId::Dolphin, new: NewVariant::Named(s("Mario Kart")) },
+        );
+        assert_eq!(again.created.as_deref(), Some("ext:dolphin:mario-kart"));
+        assert_eq!(ws(&lib, &id).exts.iter().filter(|e| e.app == AppId::Dolphin).count(), 1);
         let out = act(&mut lib, Op::RemoveVariant { ws: id.clone(), variant: s("ext:dolphin:mario-kart") });
         assert!(!out.needs_build);
         assert!(!ws(&lib, &id).exts.iter().any(|e| e.id == "mario-kart"));

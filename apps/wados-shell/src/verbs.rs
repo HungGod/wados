@@ -9,7 +9,7 @@ use wad_model::SessionDisplay;
 use crate::session::Power;
 use crate::shell::Shell;
 
-const VERBS: [&str; 4] = ["power.restart", "settings.open", "app.open", "wadspace.open"];
+const VERBS: [&str; 5] = ["power.restart", "settings.open", "app.open", "wadspace.open", crate::portal::VERB];
 
 pub fn known(verb: &str) -> bool {
     VERBS.contains(&verb)
@@ -53,6 +53,7 @@ pub fn run(shell: &Rc<Shell>, verb: &str, args: &[String]) {
             }
         }
         "wadspace.open" if !first.is_empty() => shell.open(first, SessionDisplay::Screen),
+        crate::portal::VERB => crate::portal::open(shell),
         _ => tracing::info!("a notice's verb {verb:?} isn't the shell's"),
     }
 }
@@ -63,7 +64,7 @@ mod tests {
 
     #[test]
     fn the_verbs_it_knows() {
-        assert!(known("power.restart") && known("wadspace.open") && !known("rm.rf"));
+        assert!(known("power.restart") && known("wadspace.open") && known("network.signin") && !known("rm.rf"));
         assert_eq!(app_argv("files"), ["wados-files"]);
         assert_eq!(app_argv("updates"), ["wados-settings", "--page", "updates"]);
         assert!(app_argv("nope").is_empty());

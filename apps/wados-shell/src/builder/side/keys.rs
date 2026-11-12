@@ -56,6 +56,9 @@ pub enum Act {
     /// A disc off this machine (`DELETE /v1/discs/{id}`: not an edit of a
     /// wadspace, which is why it isn't an Op).
     RemoveDisc { id: String },
+    /// A Steam game downloaded into `account`'s folder, packaged into your
+    /// GitHub packages (`POST /v1/steam/push`).
+    PackageGame { account: String, game: String },
 }
 
 /// Things of a wadspace that sign in with a key once it's made: each a
@@ -374,7 +377,7 @@ mod tests {
     fn ops(p: &Pick) -> Vec<Op> {
         match &p.act {
             Act::Ops(o) => o.clone(),
-            Act::NewKey { .. } | Act::RemoveDisc { .. } => panic!("not edits"),
+            Act::NewKey { .. } | Act::RemoveDisc { .. } | Act::PackageGame { .. } => panic!("not edits"),
         }
     }
 

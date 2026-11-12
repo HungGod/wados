@@ -3,11 +3,13 @@ Version=1.0
 Type=Application
 Name=Files
 Comment=WadOS's files: your other machines on the tailnet, their homes and their wadspaces
-# --machines: Machines; --machine <id>: one of them.
-Exec=wados-files --machines
+# --machines: Machines; --machine <id>: one of them. A folder given (an
+# app opening one, inode/directory) goes there instead.
+Exec=wados-files --machines %U
 Icon=system-file-manager
 Terminal=false
 Categories=System;FileManager;
+MimeType=inode/directory;
 StartupNotify=true
 StartupWMClass=io.wados.Files
 Keywords=Machines;Tailnet;Taildrive;Peers;

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use common::{Rig, rig};
-use wad_model::{JobStatus, Op, SecretKind};
+use wad_model::{AppId, JobStatus, Op, SecretKind};
 use wad_proto::{SteamPush, SteamSignIn};
 use wadd::discs::{Account, NEEDS_PACKAGES, Registry};
 use wadd::steam::{MachineSteam, Spaces, plain_name, read_folder, read_plain};
@@ -158,4 +158,40 @@ fn root_never_follows_what_a_wadspace_planted() {
         assert!(!plain_name(bad), "{bad}");
     }
     assert!(plain_name("Portal 2"));
+}
+
+/// The Builder's way, step by step: (1) a wadspace with Steam, signed in to
+/// the machine's Steam key as Steam comes in; (2) Steam signed in to in the
+/// wadspace, a game downloaded there (Steam's own files, in the key's
+/// folder); (3, 4) its library read, as wadd does every 20 s and as the
+/// Builder opens it, for the Builder's Steam games; (5) the downloaded game
+/// packaged into GitHub's packages.
+#[tokio::test]
+async fn signing_in_inside_a_steam_wadspace_lists_its_games_and_one_packages() {
+    let rig = rig();
+    let reg = Arc::new(Fake { who: Some(pusher()), ..Fake::default() });
+    let (s, spaces, keys) = steam(&rig, false, reg.clone());
+    // 1.
+    let ws = rig.wadspace("Games", &[AppId::Steam], &[]);
+    let key = rig.docs.wadspace(&ws).unwrap().secrets.by_slot["app:steam"].id.clone();
+    assert_eq!(rig.docs.snapshot().keys.iter().find(|k| k.id == key).map(|k| k.kind), Some(SecretKind::Steam));
+    assert!(s.accounts().is_empty(), "not signed in yet");
+    assert!(!rig.docs.snapshot().steam.contains_key(&key));
+    // 2.
+    client(&keys.join(&key));
+    // 3, 4.
+    let a = s.accounts();
+    assert_eq!((a.len(), a[0].id.as_str()), (1, key.as_str()));
+    let lib = rig.docs.snapshot();
+    let library = &lib.steam[&key];
+    assert_eq!(library.owned.len(), 2, "{:?}: the runtime isn't a game", library.owned);
+    let portal = a[0].games.iter().find(|g| g.name == "Portal 2").unwrap();
+    assert!(portal.installed && !portal.pushed && library.has(&portal.id));
+    // 5.
+    let job = s.push(SteamPush { account: key.clone(), games: vec![portal.id.clone()] }).await.unwrap();
+    assert_eq!(rig.finished(&job.job.id).await, JobStatus::Done);
+    assert_eq!(reg.pushed.lock().unwrap()[0].0, ["common/Portal 2", "appmanifest_620.acf"]);
+    assert!(rig.docs.snapshot().game_packages.contains_key(&portal.id));
+    // No sign-in wadspace of wadd's: it all happened in the person's own.
+    assert!(spaces.closed.lock().unwrap().is_empty());
 }

@@ -9,21 +9,42 @@ if [ ! -e "${dir}/GCPadNew.ini" ]; then
     /usr/local/lib/wadspaces/wadspaces-gcpad > "${dir}/GCPadNew.ini"
 fi
 # All four GameCube ports a Standard Controller (Dolphin's 6), so Play
-# together's players 2-4 count: Dolphin plugs in port 1 only. A port the
-# person has set themselves is left as it is.
+# together's players 2-4 count: Dolphin plugs in port 1 only. Its game list
+# looks in the machine's discs (/config/Games, read-only), and the
+# wadspace's Desktop and Downloads (a disc opened with Dolphin, or copied
+# in), folders in them too. A game plays full screen (no title bar, no
+# panel over it), and takes the pads whether or not its window has the
+# keyboard's focus (a stream's window never gets it, so Dolphin ignored
+# every button). A setting the person has set themselves is left as it is.
 python3 - "${dir}/Dolphin.ini" <<'PY' || true
 import configparser, sys
 path = sys.argv[1]
 c = configparser.RawConfigParser(strict=False, interpolation=None)
 c.optionxform = str
 c.read(path)
-if not c.has_section("Core"):
-    c.add_section("Core")
 changed = False
+for section in ("Core", "General", "Display", "Input", "Interface"):
+    if not c.has_section(section):
+        c.add_section(section)
 for n in range(4):
     if not c.has_option("Core", f"SIDevice{n}"):
         c.set("Core", f"SIDevice{n}", "6")
         changed = True
+for section, key, value in (
+    ("Display", "Fullscreen", "True"),
+    ("Input", "BackgroundInput", "True"),
+    ("Interface", "ConfirmStop", "False"),
+):
+    if not c.has_option(section, key):
+        c.set(section, key, value)
+        changed = True
+if not c.has_option("General", "ISOPaths"):
+    folders = ["/config/Games", "/config/Desktop", "/config/Downloads"]
+    c.set("General", "ISOPaths", str(len(folders)))
+    for n, f in enumerate(folders):
+        c.set("General", f"ISOPath{n}", f)
+    c.set("General", "RecursiveISOPaths", "True")
+    changed = True
 if changed:
     with open(path, "w") as f:
         c.write(f, space_around_delimiters=True)
@@ -37,7 +58,8 @@ rpm -q dolphin-emu
 # Play together's mapping: port N is Selkies' pad N, as one Xbox-to-GameCube
 # layout (A/B/X/Y, RB to Z, the triggers to analog L and R, the right stick
 # to the C-stick). The device names are Selkies' pad name, numbered as Dolphin
-# numbers devices of one name. Not seen working with a game yet.
+# numbers devices of one name. Seen working: Mario Kart: Double Dash!!
+# played from a phone's touch gamepad (images/stream/try-game.sh).
 cat > /usr/local/lib/wadspaces/wadspaces-gcpad <<'GCPAD'
 #!/bin/sh
 for n in 1 2 3 4; do

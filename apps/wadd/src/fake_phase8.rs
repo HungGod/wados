@@ -127,6 +127,7 @@ impl Sample {
             ],
             ip: None,
             dns: vec![],
+            portal: false,
             exit_node: None,
             exit_nodes: vec![],
         };

@@ -141,6 +141,11 @@ pub struct Files {
     /// The last one clicked (Shift picks from it).
     pub(crate) anchor: RefCell<Option<String>>,
     pub(crate) view: Cell<View>,
+    /// Hidden things shown (dot-files and backups; Ctrl+H).
+    pub(crate) hidden: Cell<bool>,
+    /// The last press on a thing (its key, when): a double-click counts across
+    /// the redraw a first click's pick makes (its widget is a new one by then).
+    last_press: RefCell<Option<(String, i64)>>,
     pub(crate) listing: RefCell<Listing>,
     /// The folder here that's open: what's in it.
     pub(crate) here: RefCell<Option<Result<Vec<local::Item>, String>>>,
@@ -290,6 +295,8 @@ impl Files {
                 selected: RefCell::default(),
                 anchor: RefCell::default(),
                 view: Cell::new(View::Grid),
+                hidden: Cell::new(false),
+                last_press: RefCell::default(),
                 listing: RefCell::default(),
                 here: RefCell::default(),
                 trash: RefCell::default(),
@@ -530,7 +537,7 @@ impl Files {
     /// What's here read again (the folder open, or the Trash).
     pub(crate) fn reload(&self) {
         match &*self.loc.borrow() {
-            Loc::Local(p) => *self.here.borrow_mut() = Some(local::list(p)),
+            Loc::Local(p) => *self.here.borrow_mut() = Some(local::list(p, self.hidden.get())),
             Loc::Trash => *self.trash.borrow_mut() = local::trash_list(),
             _ => {}
         }
@@ -642,6 +649,15 @@ impl Files {
 
     pub(crate) fn sel_first(&self) -> Option<String> {
         self.selected.borrow().first().cloned()
+    }
+
+    /// The presses in a row on `key`, GTK's `n` or more: a second press on
+    /// it within the double-click time is a double-click even when the
+    /// first one's pick redrew the view under it.
+    pub(crate) fn presses(&self, key: &str, n: i32) -> i32 {
+        let window =
+            gtk::Settings::default().map(|s| s.gtk_double_click_time()).filter(|t| *t > 0).unwrap_or(400) as i64;
+        count_presses(&mut self.last_press.borrow_mut(), key, glib::monotonic_time() / 1000, window, n)
     }
 
     pub(crate) fn is_sel(&self, k: &str) -> bool {
@@ -1066,6 +1082,17 @@ pub(crate) fn item(icon: &'static str, name: &str, sub: &str, selected: bool) ->
     b
 }
 
+/// [`Files::presses`]' count: `last` is the last press (its key, in ms).
+fn count_presses(last: &mut Option<(String, i64)>, key: &str, now_ms: i64, window_ms: i64, n: i32) -> i32 {
+    let n = match last.as_ref() {
+        Some((k, t)) if k == key && now_ms - t <= window_ms => n.max(2),
+        _ => n,
+    };
+    // A double-click done: the next press starts again (a third isn't a second open).
+    *last = if n >= 2 { None } else { Some((key.to_string(), now_ms)) };
+    n
+}
+
 pub(crate) fn name_label(name: &str, selected: bool) -> gtk::Label {
     gtk::Label::builder()
         .label(name)
@@ -1090,4 +1117,24 @@ fn free_space(p: &Path) -> String {
 
 pub fn now_ms() -> i64 {
     glib::real_time() / 1000
+}
+
+#[cfg(test)]
+mod tests {
+    use super::count_presses;
+
+    #[test]
+    fn a_second_press_soon_on_the_same_thing_is_a_double_click() {
+        let mut last = None;
+        assert_eq!(count_presses(&mut last, "Documents", 1_000, 400, 1), 1);
+        // The pick redrew the view: GTK's count started again at 1.
+        assert_eq!(count_presses(&mut last, "Documents", 1_250, 400, 1), 2);
+        // A third press starts again.
+        assert_eq!(count_presses(&mut last, "Documents", 1_300, 400, 1), 1);
+        // Too slow, or another thing: one press.
+        assert_eq!(count_presses(&mut last, "Documents", 2_000, 400, 1), 1);
+        assert_eq!(count_presses(&mut last, "Music", 2_100, 400, 1), 1);
+        // GTK's own count still counts.
+        assert_eq!(count_presses(&mut last, "Pictures", 5_000, 400, 2), 2);
+    }
 }

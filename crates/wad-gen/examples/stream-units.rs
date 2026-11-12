@@ -10,6 +10,12 @@
 //!       [--screen-dir <dir>]      the machine's screen folders (else none)
 //!       [--moving]                moving_units: both displays, the sidecar unbound
 //!       [--no-stream]             (with --moving) not streamed: no sidecar
+//!       [--image <ref>]           the wadspace's image (a set's: retro has Dolphin);
+//!                                 else the base
+//!       [--players <n>]           its gamepads (1: a game's own stream, 2-4: Play together)
+//!
+//! Its extra folder has games.json too, as wadd writes it (the sample's
+//! discs, at `<state>/discs/<id>/<file>`, which the unit mounts at /config/Games).
 
 use std::collections::HashMap;
 use std::fs;
@@ -60,11 +66,12 @@ fn main() {
         transport,
         dir: &auth,
         origin: None,
-        players: 0,
+        players: opts.get("players").map(|p| p.parse().expect("--players: a number")).unwrap_or(0),
     };
     let stream = (!opts.contains_key("no-stream")).then_some(&sidecar);
     let mounts = Mounts::new();
-    let run = Run { image: "localhost/wados-base:44", mounts: &mounts, wallpaper: None };
+    let image = opts.get("image").cloned().unwrap_or_else(|| "localhost/wados-base:44".into());
+    let run = Run { image: &image, mounts: &mounts, wallpaper: None };
     let all = if opts.contains_key("moving") {
         units::moving_units(&ws, &run, &machine, stream)
     } else {
@@ -81,6 +88,9 @@ fn main() {
             fs::write(format!("{extra}/{name}"), text).expect("an extra file");
         }
     }
+    if let Some(games) = extras::games_json(&ws, lib.discs.values()) {
+        fs::write(format!("{extra}/games.json"), games).expect("games.json");
+    }
     // Streamed from the start: its desktop starts on the stream. (Moving, the
     // try script says which, as wadd does before each move.)
     if !opts.contains_key("moving") && stream.is_some() {
@@ -91,7 +101,8 @@ fn main() {
 fn usage() -> ! {
     eprintln!(
         "usage: stream-units --units <dir> --state <dir> --guid <guid> --web-port <port> --auth <dir> \
-         --wallpaper <#rrggbb> [--mux-port <port>] [--screen-dir <dir>] [--moving] [--no-stream]"
+         --wallpaper <#rrggbb> [--mux-port <port>] [--screen-dir <dir>] [--moving] [--no-stream] [--image <ref>] \
+         [--players <n>]"
     );
     std::process::exit(2)
 }

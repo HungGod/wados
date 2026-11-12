@@ -136,11 +136,20 @@ pub(crate) fn build_window_as(
         }
     };
     let chip_me = me.clone();
+    let downloads_me = me.clone();
+    let downloads_actions = crate::downloads::DownloadsActions {
+        show_all: Rc::new(move || {
+            if let Some(ctx) = downloads_me.borrow().upgrade() {
+                open_page(&ctx, "wadbrowser://downloads");
+            }
+        }),
+    };
     let header = chrome::Header::new(
         &chrome.identity,
         &chrome.page_title,
         &chrome.offsite,
         shield_actions,
+        downloads_actions,
         ChipInfo { name: String::new(), color: String::new(), private },
         move |b| {
             if let Some(ctx) = chip_me.borrow().upgrade() {

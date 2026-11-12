@@ -9,6 +9,7 @@
 //!     wados-files --trash               the Trash
 //!     wados-files --wadspace <id>       one of this machine's wadspaces
 //!     wados-files --view <file>         a picture or text file, in a viewer
+//!     wados-files --select <file>       its folder, with it picked (a browser's "Show in folder")
 //!     wados-files --machines            Machines
 //!     wados-files --machine <id> [--home [<path>]]
 //!                                       one of them (its home, a folder in it)
@@ -44,6 +45,8 @@ struct Args {
     dump: bool,
     /// A file to show in a viewer.
     view: Option<std::path::PathBuf>,
+    /// A thing to pick in the folder it opens (`--select`).
+    select: Option<String>,
     /// `--dump`: this thing's menu too.
     menu: Option<String>,
     /// `--dump`: these done first, as clicks would (tests).
@@ -89,6 +92,14 @@ fn parse_in(args: &[String], cwd: &std::path::Path) -> Result<Args, String> {
             "--trash" => a.loc = Some(Loc::Trash),
             "--wadspace" => a.loc = Some(Loc::Space(it.next().ok_or("--wadspace needs a wadspace's id")?.clone())),
             "--view" => a.view = Some(path_of(it.next().ok_or("--view needs a file")?, cwd)),
+            "--select" => {
+                let p = path_of(it.next().ok_or("--select needs a file")?, cwd);
+                let (Some(dir), Some(name)) = (p.parent(), p.file_name()) else {
+                    return Err(format!("--select: {} isn't in a folder", p.display()));
+                };
+                a.loc = Some(Loc::Local(dir.to_path_buf()));
+                a.select = Some(name.to_string_lossy().into_owned());
+            }
             "--act" => a.acts.push(it.next().ok_or("--act needs what to do")?.clone()),
             "--menu" => a.menu = Some(it.next().ok_or("--menu needs a thing's name (or background)")?.clone()),
             other if !other.starts_with("--") => {
@@ -133,7 +144,7 @@ fn main() -> glib::ExitCode {
         }
         Some("--help" | "-h") => {
             println!(
-                "usage: wados-files [<folder> | --trash | --wadspace <id> | --view <file> | --machines | --machine <id> [--home [<path>]]] [--dump [--menu <name>]]"
+                "usage: wados-files [<folder> | --trash | --wadspace <id> | --view <file> | --select <file> | --machines | --machine <id> [--home [<path>]]] [--dump [--menu <name>]]"
             );
             return glib::ExitCode::SUCCESS;
         }
@@ -183,6 +194,9 @@ fn main() -> glib::ExitCode {
         let files = f.get_or_init(|| ui::Files::new(app));
         if let Some(l) = a.loc {
             files.go(l);
+        }
+        if let Some(name) = &a.select {
+            files.pick_only(name);
         }
         if a.dump {
             dump_when_ready(files, app, a.menu.clone(), a.acts.clone());
@@ -288,6 +302,10 @@ mod tests {
                 ..Args::default()
             }
         );
+        let s = parse_in(&args(&["--select", "/home/live/Downloads/a b.zip"]), cwd).unwrap();
+        assert_eq!(s.loc, Some(Loc::Local("/home/live/Downloads".into())));
+        assert_eq!(s.select.as_deref(), Some("a b.zip"));
+        assert!(parse(&args(&["--select"])).is_err());
         assert!(parse(&args(&["--machine"])).is_err());
         assert!(parse(&args(&["--home"])).is_err());
     }

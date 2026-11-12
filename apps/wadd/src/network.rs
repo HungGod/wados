@@ -202,6 +202,7 @@ impl MachineNetwork {
             networks: s.networks,
             ip: s.ip,
             dns: s.dns,
+            portal: s.portal,
             exit_node,
             exit_nodes,
         };

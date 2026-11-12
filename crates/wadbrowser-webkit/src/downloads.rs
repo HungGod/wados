@@ -3,7 +3,8 @@
 //! were kept alive by it). A download goes straight to the Downloads folder
 //! under the name WebKit suggests (the server's, else the address's), a
 //! number added when it's taken; the store keeps a record (not a private
-//! window's). The UI hears of each through [`connect`].
+//! window's). The UI hears of each through [`connect`]: its start, its
+//! progress (a few times a second), its end; [`cancel`] stops one.
 
 use crate::engine::engine;
 use std::cell::{Cell, RefCell};
@@ -83,27 +84,61 @@ fn percent_decode(s: &str) -> String {
 /// What happened to a download, for the UI (a toast, the downloads panel).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadEvent {
-    Started { id: u64, name: String, path: PathBuf },
-    Finished { id: u64, name: String, path: PathBuf },
-    Failed { id: u64, name: String, cancelled: bool, error: String },
+    /// Where it's going, and the site it came from (`url`).
+    Started {
+        id: u64,
+        name: String,
+        path: PathBuf,
+        url: String,
+    },
+    /// Bytes so far, of `total` (when the server said how many).
+    Progress {
+        id: u64,
+        received: u64,
+        total: Option<u64>,
+    },
+    Finished {
+        id: u64,
+        name: String,
+        path: PathBuf,
+    },
+    Failed {
+        id: u64,
+        name: String,
+        cancelled: bool,
+        error: String,
+    },
 }
 
+/// Progress is told at most this often (ms), and once more at the end.
+const PROGRESS_EVERY_MS: i64 = 250;
+
 type Listener = Rc<dyn Fn(Option<&WebView>, &DownloadEvent)>;
+/// A download under way: its id, it, the view it came from (if any).
+type Active = (u64, Download, Option<glib::WeakRef<WebView>>);
 
 thread_local! {
     static LISTENERS: RefCell<Vec<Listener>> = const { RefCell::new(Vec::new()) };
     static NEXT: Cell<u64> = const { Cell::new(1) };
-    /// The downloads under way, and the views they came from.
-    static ACTIVE: RefCell<Vec<(u64, glib::WeakRef<WebView>)>> = const { RefCell::new(Vec::new()) };
+    /// The downloads under way, the views they came from (if any).
+    static ACTIVE: RefCell<Vec<Active>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Whether a download from `view` is under way (it doesn't sleep).
 pub(crate) fn downloading(view: &WebView) -> bool {
-    ACTIVE.with_borrow(|a| a.iter().any(|(_, w)| w.upgrade().as_ref() == Some(view)))
+    ACTIVE.with_borrow(|a| a.iter().any(|(_, _, w)| w.as_ref().and_then(|w| w.upgrade()).as_ref() == Some(view)))
 }
 
 fn done(id: u64) {
-    ACTIVE.with_borrow_mut(|a| a.retain(|(i, _)| *i != id));
+    ACTIVE.with_borrow_mut(|a| a.retain(|(i, _, _)| *i != id));
+}
+
+/// Stops download `id` (it ends as [`DownloadEvent::Failed`], cancelled).
+pub fn cancel(id: u64) {
+    let d = ACTIVE.with_borrow(|a| a.iter().find(|(i, _, _)| *i == id).map(|(_, d, _)| d.clone()));
+    if let Some(d) = d {
+        d.cancel();
+    }
 }
 
 /// Called for each download's start and end, with the view it came from (if any).
@@ -112,7 +147,9 @@ pub fn connect(f: impl Fn(Option<&WebView>, &DownloadEvent) + 'static) {
 }
 
 fn tell(d: &Download, ev: DownloadEvent) {
-    crate::testlog::line("download", &[&format!("{ev:?}")]);
+    if !matches!(ev, DownloadEvent::Progress { .. }) {
+        crate::testlog::line("download", &[&format!("{ev:?}")]);
+    }
     let view = d.web_view();
     for f in LISTENERS.with_borrow(|l| l.clone()) {
         f(view.as_ref(), &ev);
@@ -123,9 +160,7 @@ fn tell(d: &Download, ev: DownloadEvent) {
 pub fn downloads_dir() -> PathBuf {
     let d = match engine() {
         Some(e) => e.paths.downloads_dir(),
-        None => {
-            glib::user_special_dir(glib::UserDirectory::Downloads).unwrap_or_else(|| glib::home_dir().join("Downloads"))
-        }
+        None => wadbrowser_core::paths::user_downloads_dir(),
     };
     let _ = std::fs::create_dir_all(&d);
     d
@@ -142,9 +177,7 @@ fn started(d: &Download, keep: bool, profile: &str) {
     let id = NEXT.get();
     NEXT.set(id + 1);
     d.set_allow_overwrite(false);
-    if let Some(v) = d.web_view() {
-        ACTIVE.with_borrow_mut(|a| a.push((id, v.downgrade())));
-    }
+    ACTIVE.with_borrow_mut(|a| a.push((id, d.clone(), d.web_view().map(|v| v.downgrade()))));
     let url = d.request().and_then(|r| r.uri()).map(String::from).unwrap_or_default();
     let record: Rc<Cell<Option<i64>>> = Rc::default();
     let name: Rc<RefCell<String>> = Rc::default();
@@ -162,8 +195,19 @@ fn started(d: &Download, keep: bool, profile: &str) {
             if keep && let Some(e) = engine() {
                 record.set(e.store.add_download(&url, &file, &path, "started").ok().map(|r| r.id));
             }
-            tell(d, DownloadEvent::Started { id, name: file, path });
+            tell(d, DownloadEvent::Started { id, name: file, path, url: url.clone() });
             true
+        });
+    }
+    {
+        let last = Cell::new(0i64);
+        d.connect_received_data(move |d, _| {
+            let now = glib::monotonic_time() / 1000;
+            if now - last.get() < PROGRESS_EVERY_MS {
+                return;
+            }
+            last.set(now);
+            tell(d, progress(id, d));
         });
     }
     {
@@ -177,6 +221,7 @@ fn started(d: &Download, keep: bool, profile: &str) {
             }
             // `finished` comes after `failed` too: only a download that didn't fail is done.
             if record.get() != Some(-1) {
+                tell(d, progress(id, d));
                 tell(d, DownloadEvent::Finished { id, name: name.borrow().clone(), path });
             }
         });
@@ -190,6 +235,12 @@ fn started(d: &Download, keep: bool, profile: &str) {
         record.set(Some(-1));
         tell(d, DownloadEvent::Failed { id, name: name.borrow().clone(), cancelled, error: err.message().to_string() });
     });
+}
+
+/// How far `d` is.
+fn progress(id: u64, d: &Download) -> DownloadEvent {
+    let total = d.response().map(|r| r.content_length()).filter(|n| *n > 0);
+    DownloadEvent::Progress { id, received: d.received_data_length(), total }
 }
 
 #[cfg(test)]

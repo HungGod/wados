@@ -187,10 +187,7 @@ impl Server {
         };
         let d = &config.daemon;
         let bus = Bus::new(machine.clone());
-        // A machine the installer made is offered WadOS by Set up; a stick has no wadspaces.
-        let installer_made = setup::read(&d.state_dir) != wad_proto::SetupStep::Done;
-        let stick = d.state_dir.join("installer/installer.toml").exists();
-        let starter = !installer_made && !stick;
+        let starter = starts_with_wados(&d.state_dir);
         let docs = Arc::new(Docs::open_with(Store::new(&d.state_dir)?, bus.clone(), &machine.id, starter)?);
         let policy = Policy {
             own_uid: nix::unistd::getuid().as_raw(),
@@ -617,11 +614,21 @@ async fn watch_machine(app: Arc<AppState>, every: Duration) {
     /// Longer than the keys' endpoint's own prune: a folder removed while
     /// the browser has it open is a folder of cookies lost.
     const KEYS_EVERY: Duration = Duration::from_secs(60);
+    /// Steam's libraries, read again from their keys' folders: a sign-in in
+    /// a wadspace (Steam's own) or a game downloaded there reaches the
+    /// Builder's Steam games without anyone asking.
+    const STEAM_EVERY: Duration = Duration::from_secs(20);
     app.builds.refresh_base().await;
     app.builds.publish_all();
     app.runs.publish_all();
     let mut keys_at = std::time::Instant::now();
+    let mut steam_at = std::time::Instant::now() - STEAM_EVERY;
     loop {
+        if steam_at.elapsed() >= STEAM_EVERY {
+            steam_at = std::time::Instant::now();
+            let steam = app.steam.clone();
+            let _ = tokio::task::spawn_blocking(move || steam.accounts()).await;
+        }
         app.runs.reconcile().await;
         if keys_at.elapsed() >= KEYS_EVERY {
             keys_at = std::time::Instant::now();
@@ -715,5 +722,35 @@ mod tests {
         assert_eq!(super::socket_group(&groups, wheel_only), Some(10));
         assert_eq!(super::socket_group(&groups, |_| None), None);
         assert_eq!(super::socket_group(&[], both), None);
+    }
+}
+
+/// Whether a new library starts with the WadOS wadspace. A machine the
+/// installer made is offered it by Set up instead. A stick has no wadspaces,
+/// unless it was made with `--include wados` (host/build.sh's
+/// installer/wados): then it carries WadOS's parts (its packages, its image
+/// and the repo's clone), and WadOS is there to open.
+fn starts_with_wados(state_dir: &std::path::Path) -> bool {
+    let installer_made = setup::read(state_dir) != wad_proto::SetupStep::Done;
+    let stick = state_dir.join("installer/installer.toml").exists();
+    let stick_carries_wados = state_dir.join("installer/wados").exists();
+    !installer_made && (!stick || stick_carries_wados)
+}
+
+#[cfg(test)]
+mod starter_tests {
+    use super::starts_with_wados;
+
+    #[test]
+    fn a_stick_starts_with_wados_only_when_it_carries_it() {
+        let d = tempfile::tempdir().unwrap();
+        assert!(starts_with_wados(d.path()), "an ordinary machine");
+        std::fs::create_dir_all(d.path().join("installer")).unwrap();
+        std::fs::write(d.path().join("installer/installer.toml"), "").unwrap();
+        assert!(!starts_with_wados(d.path()), "a stick without --include wados");
+        std::fs::write(d.path().join("installer/wados"), "").unwrap();
+        assert!(starts_with_wados(d.path()), "a stick with --include wados");
+        std::fs::write(d.path().join("setup.json"), br#"{"step":"welcome"}"#).unwrap();
+        assert!(!starts_with_wados(d.path()), "Set up offers it instead");
     }
 }

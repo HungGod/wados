@@ -135,7 +135,7 @@ impl Files {
         click.connect_released(move |g, n, _, _| {
             g.set_state(gtk::EventSequenceState::Claimed);
             let Some(m) = w.upgrade() else { return };
-            if n >= 2 {
+            if m.presses(&id, n) >= 2 {
                 m.go(Loc::Peer(id.clone()));
             } else {
                 m.pick_only(&id);
@@ -305,7 +305,7 @@ impl Files {
             click.connect_released(move |g, n, _, _| {
                 g.set_state(gtk::EventSequenceState::Claimed);
                 let Some(m) = w.upgrade() else { return };
-                if n >= 2 {
+                if m.presses("home", n) >= 2 {
                     m.go(Loc::Folder { peer: id.clone(), path: vec![] });
                 } else {
                     m.pick_only("home");
@@ -442,7 +442,7 @@ impl Files {
                     click.connect_released(move |g, n, _, _| {
                         g.set_state(gtk::EventSequenceState::Claimed);
                         let Some(m) = w.upgrade() else { return };
-                        if n >= 2 {
+                        if m.presses(&en.name, n) >= 2 {
                             m.open_entry(&en);
                         } else {
                             m.pick_only(&en.name);

@@ -13,6 +13,7 @@ mod window;
 pub mod chip;
 pub mod data;
 pub mod dialogs;
+pub mod downloads;
 pub mod menu_popover;
 pub mod menus;
 pub mod shield;

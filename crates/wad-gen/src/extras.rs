@@ -20,7 +20,7 @@
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use wad_model::{AppId, KeyRef, ProjectKind, Secret, SecretKind, Wadspace, Wallpaper, catalog, look};
+use wad_model::{AppId, DiscImage, KeyRef, ProjectKind, Secret, SecretKind, Wadspace, Wallpaper, catalog, look};
 
 use crate::recipes::{self, Recipe};
 use crate::{Mounts, mountable};
@@ -127,9 +127,16 @@ pub fn launcher(app: AppId) -> Option<&'static str> {
     }
 }
 
+/// Dolphin opens at start in a wadspace that has it, when nothing else does
+/// (no game it starts straight into, nothing set to open): its game list,
+/// not an empty desktop. A game streamed to a phone is what it's for.
+fn dolphin_opens(ws: &Wadspace) -> bool {
+    ws.has_app(AppId::Dolphin) && ws.look.launch.is_none() && ws.look.autostart.is_empty()
+}
+
 fn icon(ws: &Wadspace, key: &str) -> Option<Icon> {
     let (kind, id) = key.split_once(':')?;
-    let autostart = ws.look.autostart.iter().any(|a| a == key);
+    let autostart = ws.look.autostart.iter().any(|a| a == key) || (key == "app:dolphin" && dolphin_opens(ws));
     let app = |app: String, desktop: String, label: String| Icon {
         app: Some(app),
         project: None,
@@ -177,6 +184,27 @@ pub fn layout_json(ws: &Wadspace) -> String {
     }
     let icons = keys.iter().filter_map(|k| icon(ws, k)).collect();
     pretty(&Layout { version: 1, icons })
+}
+
+/// games.json (init-wadspaces-workspace makes a launcher of each): what
+/// each of its games runs, `{id, name, exec}`. Dolphin's are the machine's
+/// discs (`/config/Games/<id>/<file>`, read-only); Steam's, its games.
+pub fn games_json<'a>(ws: &Wadspace, discs: impl IntoIterator<Item = &'a DiscImage>) -> Option<String> {
+    let mut out = vec![];
+    if ws.has_app(AppId::Dolphin) {
+        for d in discs {
+            let exec = format!("wadspaces-dolphin -b -e \"/config/Games/{}/{}\"", d.id, d.file);
+            out.push(serde_json::json!({ "id": d.id, "name": d.name, "exec": exec }));
+        }
+    }
+    for e in ws.exts.iter().filter(|e| e.app == AppId::Steam) {
+        if let Some(appid) = wad_model::vdf::appid_of(&e.id) {
+            let exec = format!("gamescope -f -- wadspaces-steam -silent -applaunch {appid}");
+            let name = e.name.clone().unwrap_or_else(|| e.id.clone());
+            out.push(serde_json::json!({ "id": e.id, "name": name, "exec": exec }));
+        }
+    }
+    (!out.is_empty()).then(|| serde_json::Value::Array(out).to_string())
 }
 
 /// wadbrowser.conf, with WadBrowser: links open in it, full or Focus (its
@@ -387,4 +415,53 @@ pub fn projects_json(ws: &Wadspace, mounts: &Mounts) -> String {
         })
         .collect();
     pretty(&serde_json::json!({ "version": 2, "projects": projects }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wad_model::{AppIn, Ext};
+
+    fn dolphin() -> Wadspace {
+        let mut x = wad_model::ops::blank("kart", "Kart", "m-here", 0, 0);
+        x.apps = vec![AppIn::new(AppId::Dolphin)];
+        x
+    }
+
+    fn opens(layout: &str, icon: &str) -> bool {
+        let v: serde_json::Value = serde_json::from_str(layout).unwrap();
+        v["icons"].as_array().unwrap().iter().any(|i| i["app"] == icon && i["autostart"] == true)
+    }
+
+    #[test]
+    fn dolphin_opens_when_its_wadspace_has_no_game_to_start() {
+        let mut x = dolphin();
+        assert!(opens(&layout_json(&x), "dolphin"), "its game list, not an empty desktop");
+        // A game it starts straight into: that, not Dolphin's list too.
+        x.exts.push(Ext::new(AppId::Dolphin, "mario-kart").named("Mario Kart"));
+        x.look.launch = Some("variant:mario-kart".into());
+        let l = layout_json(&x);
+        assert!(!opens(&l, "dolphin") && opens(&l, "game-mario-kart"), "{l}");
+        // Something set to open: that, alone.
+        x.look.launch = None;
+        x.look.autostart = vec!["app:dolphin".into()];
+        assert!(opens(&layout_json(&x), "dolphin"));
+    }
+
+    #[test]
+    fn its_games_are_the_machines_discs() {
+        let x = dolphin();
+        let disc = DiscImage {
+            id: "mario-kart".into(),
+            name: "Mario Kart".into(),
+            file: "Mario Kart (USA).rvz".into(),
+            mb: 1350,
+            reference: String::new(),
+            machine: "m-here".into(),
+            at: 0,
+        };
+        let j: serde_json::Value = serde_json::from_str(&games_json(&x, [&disc]).unwrap()).unwrap();
+        assert_eq!(j[0]["exec"], "wadspaces-dolphin -b -e \"/config/Games/mario-kart/Mario Kart (USA).rvz\"");
+        assert!(games_json(&wad_model::ops::blank("w", "W", "m", 0, 0), [&disc]).is_none());
+    }
 }

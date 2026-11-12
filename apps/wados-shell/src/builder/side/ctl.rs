@@ -21,7 +21,7 @@
 //! (where to click for one); `app:<app>`; `suggest:<item>`,
 //! `addon:<key>`, `focus`, `site-add`, `command:<id>`,
 //! `command-remove:<id>`, `command-kind`, `command-input`, `command-add`,
-//! `link-steam`, `disc-upload`; `pill:<variant>`, `group:<home|key>`,
+//! `disc-upload`; `pill:<variant>`, `group:<home|key>`,
 //! `key-select:<home|key|variant>`, `own-key`, `unpick`. A disc's pill
 //! (`addon:dolphin:<id>`) has one too: `disc-remove:<id>` takes it off the
 //! machine.

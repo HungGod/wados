@@ -76,6 +76,17 @@ pub fn act(b: &Rc<Builder>, anchor: &gtk::Widget, a: &Act) {
                 },
             );
         }
+        Act::PackageGame { account, game } => {
+            let (shell, account, game) = (b.shell.clone(), account.clone(), game.clone());
+            let s = shell.clone();
+            shell.link.call(
+                move |w| async move { w.steam_push(&account, vec![game]).await },
+                move |r| match r {
+                    Ok(_) => s.toast(wad_proto::Level::Info, "Packaging it: Activity has how it's going", None),
+                    Err(e) => s.toast(wad_proto::Level::Warn, &e.message, None),
+                },
+            );
+        }
         Act::NewKey { kind, then } => {
             let (shell, kind, then) = (b.shell.clone(), *kind, then.clone());
             ask(

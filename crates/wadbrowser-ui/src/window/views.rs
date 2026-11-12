@@ -1,7 +1,7 @@
 //! The engine's side of a window (wadbrowser-webkit): starting it, what it
 //! asks of windows (a popup's tab, a page closing itself, a tab moving into
 //! a key's session, a permission prompt, a `wadbrowser://` page's message), the
-//! `wadbrowser://` pages, download toasts, and tab sleeping.
+//! `wadbrowser://` pages, download news, and tab sleeping.
 //!
 //! A child of `window`, so it reaches the window's state; `window.rs`'s
 //! `create_tab`, `wire_webview`, `open_in_view`, `render_internal` and
@@ -80,7 +80,7 @@ pub(super) fn ensure(ctx: &Rc<WindowCtx>) {
             ask_permission: Box::new(ask_permission),
         });
         wadbrowser_webkit::set_page_source(page_source);
-        downloads::connect(download_toast);
+        downloads::connect(download_news);
         glib::timeout_add_seconds_local(60, || {
             sleep_tabs();
             glib::ControlFlow::Continue
@@ -279,15 +279,34 @@ fn ask_permission(view: &WebView, ask: Ask) {
     super::wire::ask_permission(parent.as_ref(), ask);
 }
 
-fn download_toast(view: Option<&WebView>, ev: &DownloadEvent) {
+/// A download's news: every window's downloads button (crate::downloads);
+/// a start opens the popover in its window (as Chrome's bubble), and a
+/// failure is a toast there too.
+fn download_news(view: Option<&WebView>, ev: &DownloadEvent) {
+    crate::downloads::tell(ev);
     let Some(ctx) = view.and_then(window_of).or_else(any_window) else { return };
-    let msg = match ev {
-        DownloadEvent::Started { name, .. } => format!("Downloading {name}"),
-        DownloadEvent::Finished { name, .. } => format!("Downloaded {name}"),
-        DownloadEvent::Failed { cancelled: true, .. } => return,
-        DownloadEvent::Failed { name, error, .. } => format!("{name} didn't download: {error}"),
-    };
-    show_toast(&ctx, &msg);
+    match ev {
+        DownloadEvent::Started { .. } => {
+            // After the button's shown (its first download) and placed.
+            let ctx = Rc::downgrade(&ctx);
+            glib::idle_add_local_once(move || {
+                // In its window if that's the one in use (or none of ours is).
+                let ours_in_use = gtk::Window::list_toplevels()
+                    .iter()
+                    .filter_map(|w| w.downcast_ref::<gtk::Window>())
+                    .any(|w| w.is_active());
+                if let Some(ctx) = ctx.upgrade()
+                    && (ctx.window.is_active() || !ours_in_use)
+                {
+                    ctx.header.downloads.popup(true);
+                }
+            });
+        }
+        DownloadEvent::Failed { cancelled: false, name, error, .. } => {
+            show_toast(&ctx, &format!("{name} didn't download: {error}"))
+        }
+        _ => {}
+    }
 }
 
 /// Background tabs not looked at for a while sleep (the settings' minutes).

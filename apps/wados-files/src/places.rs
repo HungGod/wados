@@ -6,7 +6,8 @@
 //!   that last opened its kind (Open with's memory) or else Files' viewer.
 //!   Its menu (`fileMenu`): Open, Open with ▸, Cut, Copy, Paste, Rename,
 //!   Move to Trash (with Undo); the background's: New folder, Paste, Select
-//!   all, View as list or grid. Delete, F2, Ctrl+A/C/X/V, Ctrl+Shift+N.
+//!   all, View as list or grid, Show hidden files. Delete, F2, Ctrl+A/C/X/V,
+//!   Ctrl+H, Ctrl+Shift+N.
 //! - **The Trash**: its files (freedesktop.org's) and this machine's
 //!   wadspaces in it, newest first; Restore (where each came from), Delete
 //!   permanently (asked first: a wadspace goes for good, `DELETE
@@ -363,7 +364,7 @@ impl Files {
             if m.renaming.borrow().as_deref() == Some(k.as_str()) {
                 return;
             }
-            if n >= 2 {
+            if m.presses(&k, n) >= 2 {
                 if !trash {
                     m.pick_only(&k);
                     m.open_key(&k);
@@ -476,6 +477,11 @@ impl Files {
             self.go(Loc::Local(i.path));
             return;
         }
+        // An archive: what's in it, in a folder beside it.
+        if local::is_archive(&i.name) {
+            self.extract(&i.name);
+            return;
+        }
         let o = Opening::new(&i.name, Some(&i.content_type).filter(|c| !c.is_empty()).map(String::as_str), false);
         let live = self.state.borrow().live();
         match open_with::remembered_for(&o, &live, &wad_gtk::opened::load()) {
@@ -585,6 +591,13 @@ impl Files {
                 .key("Enter")
                 .row(),
             mi("open-with", "Open with", "app-window", || {}).sub(self.open_with_rows(&picked)).row(),
+        ]
+        .into_iter()
+        .chain((!i.folder && local::is_archive(&i.name)).then(|| {
+            let k = key.to_string();
+            mi("extract", "Extract here", "file-archive", on(Box::new(move |m| m.extract(&k)))).row()
+        }))
+        .chain([
             Row::Sep,
             mi("cut", "Cut", "scissors", on(Box::new(move |m| m.copy(&ks1, true)))).key("Ctrl+X").row(),
             mi("copy", "Copy", "copy", on(Box::new(move |m| m.copy(&ks2, false)))).key("Ctrl+C").row(),
@@ -607,7 +620,8 @@ impl Files {
             },
             Row::Sep,
             mi("trash", "Move to Trash", "trash", on(Box::new(move |m| m.trash(&ks3)))).key("Delete").danger().row(),
-        ]
+        ])
+        .collect()
     }
 
     fn trash_menu(&self, key: &str) -> Vec<Row> {
@@ -676,6 +690,12 @@ impl Files {
             View::Grid => mi("view", "View as list", "list", on(Box::new(|m| m.set_view(View::List)))),
             View::List => mi("view", "View as grid", "layout-grid", on(Box::new(|m| m.set_view(View::Grid)))),
         };
+        let hidden = if self.hidden.get() {
+            mi("hidden", "Hide hidden files", "eye-off", on(Box::new(|m| m.toggle_hidden())))
+        } else {
+            mi("hidden", "Show hidden files", "eye", on(Box::new(|m| m.toggle_hidden())))
+        }
+        .key("Ctrl+H");
         match loc {
             Loc::Local(dir) => vec![
                 mi("new-folder", "New folder", "folder-plus", on(Box::new(|m| m.new_folder()))).row(),
@@ -686,6 +706,7 @@ impl Files {
                 Row::Sep,
                 select_all.row(),
                 view.row(),
+                hidden.row(),
             ],
             Loc::Trash => vec![
                 mi("restore-all", "Restore all", "undo-2", on(Box::new(|m| m.restore_all())))
@@ -757,6 +778,7 @@ impl Files {
             "empty" => self.empty_trash(),
             "view" => self.set_view(if arg == "list" { View::List } else { View::Grid }),
             "select" => self.pick_only(&key_of(arg)),
+            "hidden" => self.toggle_hidden(),
             _ => return Err(format!("no such act {verb:?}")),
         }
         self.reload();
@@ -765,6 +787,17 @@ impl Files {
 
     fn set_view(&self, v: View) {
         self.view.set(v);
+        self.queue_draw();
+    }
+
+    /// Hidden things (dot-files, backups) shown, or not: the folder read again.
+    pub(crate) fn toggle_hidden(&self) {
+        self.hidden.set(!self.hidden.get());
+        // What's picked and now hidden isn't picked.
+        if !self.hidden.get() {
+            self.selected.borrow_mut().retain(|k| !k.starts_with('.') && !k.ends_with('~'));
+        }
+        self.reload();
         self.queue_draw();
     }
 
@@ -800,6 +833,7 @@ impl Files {
             (Loc::Local(_), gdk::Key::x | gdk::Key::X) if ctrl && !sel.is_empty() => self.copy(&sel, true),
             (Loc::Local(d), gdk::Key::v | gdk::Key::V) if ctrl => self.paste(d.clone()),
             (Loc::Local(_), gdk::Key::n | gdk::Key::N) if ctrl && shift => self.new_folder(),
+            (Loc::Local(_), gdk::Key::h | gdk::Key::H) if ctrl => self.toggle_hidden(),
             (Loc::Trash, gdk::Key::Delete) if !sel.is_empty() => self.ask_delete(&sel),
             (Loc::Machines | Loc::Peer(_) | Loc::Folder { .. }, gdk::Key::Return | gdk::Key::KP_Enter) => {
                 self.open_selected()
@@ -1034,6 +1068,30 @@ impl Files {
     }
 
     /// The clipboard's files into `dir` (moved, if they were cut here).
+    /// The archive `key` extracted into a folder beside it, which is picked
+    /// when it's done (it can take a while: the note says so meanwhile).
+    pub(crate) fn extract(&self, key: &str) {
+        let Some(dir) = self.dir() else { return };
+        let archive = dir.join(key);
+        self.say(&format!("Extracting {key}…"));
+        let w = self.me.clone();
+        glib::spawn_future_local(async move {
+            let r = gio::spawn_blocking(move || local::extract(&archive)).await;
+            let Some(m) = w.upgrade() else { return };
+            match r {
+                Ok(Ok(folder)) => {
+                    m.say(&format!("Extracted into {folder}"));
+                    m.reload();
+                    m.pick_only(&folder);
+                }
+                Ok(Err(e)) => m.say(&e),
+                Err(_) => m.say("It didn’t extract"),
+            }
+            m.reload();
+            m.queue_draw();
+        });
+    }
+
     fn paste(&self, dir: PathBuf) {
         let (w, clip) = (self.me.clone(), self.window.clipboard());
         glib::spawn_future_local(async move {

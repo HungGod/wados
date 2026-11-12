@@ -46,11 +46,15 @@
 //! **The base images** ([`BaseImage`]): the base and the stream sidecar,
 //! as wadspaces use them (`localhost/wados-base:44`), from where CI
 //! publishes them (`ghcr.io/hunggod/wados-base:44`). Refresh is a Pull job,
-//! a stage each: the published one pulled if it's newer (with the GitHub
-//! token, if there's one) and named as wadspaces use it. A wadspace built on
-//! the base before shows as an update and rebuilds when it next opens
-//! (`Builds::refresh_base`, through `Hooks::bases_changed`). Once a day, on
-//! a machine, and at its start.
+//! a stage each: the published one pulled only if it was built later than
+//! the copy here (its config's time, read from the registry without
+//! downloading it; with the GitHub token, if there's one) and named as
+//! wadspaces use it. One here that's as new, or newer (a stick carries the
+//! base its builder made), is kept. A wadspace built on the base before
+//! shows as an update and rebuilds when it next opens (`Builds::refresh_base`,
+//! through `Hooks::bases_changed`). Looked at once a day on a machine (the
+//! first a few minutes after its first start), quietly: the job, and the
+//! download, only when a newer one's published.
 //!
 //! **Where a newer WadOS comes from** ([`UpdateSource`]). Each source names
 //! an image in the machine's own family (`wados-host`, or
@@ -645,6 +649,10 @@ pub trait Images: Send + Sync + 'static {
     /// What a registry has at `reference` (its version label and manifest
     /// digest), without downloading it: for a source bootc doesn't follow.
     async fn remote(&self, reference: &str, token: Option<String>) -> Res<Version>;
+    /// When the registry's image at `reference` was built (Unix seconds,
+    /// its config's `created`), without downloading it: a base's refresh
+    /// downloads only one newer than the copy here.
+    async fn published_created(&self, reference: &str, token: Option<String>) -> Res<f64>;
 }
 
 /// The machine's podman.
@@ -713,6 +721,10 @@ podman exec --user abc -e HOME=/config "$1" podman save --format docker-archive 
     async fn remote(&self, reference: &str, token: Option<String>) -> Res<Version> {
         registry_version(reference, token.as_deref()).await
     }
+
+    async fn published_created(&self, reference: &str, token: Option<String>) -> Res<f64> {
+        registry_created(reference, token.as_deref()).await
+    }
 }
 
 /// `podman images --format json`, as the CLI prints it: what each image is.
@@ -757,6 +769,31 @@ const MANIFEST_TYPES: &str = "application/vnd.oci.image.index.v1+json, applicati
 /// own token (OCI distribution's Bearer challenge): anonymous, or with
 /// `token` (the GitHub token, for ghcr) when it's given.
 pub async fn registry_version(reference: &str, token: Option<&str>) -> Res<Version> {
+    let (digest, config) = registry_config(reference, token).await?;
+    let version = config
+        .pointer("/config/Labels/org.opencontainers.image.version")
+        .and_then(Value::as_str)
+        .map(String::from)
+        .unwrap_or_else(|| digest.trim_start_matches("sha256:").chars().take(12).collect());
+    Ok(Version { version, image: reference.to_string(), digest: Some(digest) })
+}
+
+/// When the registry's image at `reference` was built: its config's
+/// `created` (RFC 3339), in Unix seconds.
+pub async fn registry_created(reference: &str, token: Option<&str>) -> Res<f64> {
+    let (_, config) = registry_config(reference, token).await?;
+    let created = config.get("created").and_then(Value::as_str).ok_or_else(|| format!("{reference}: no build time"))?;
+    created_secs(created).ok_or_else(|| format!("{reference}: its build time {created:?} isn't one"))
+}
+
+/// An RFC 3339 time (`2026-11-11T03:41:59.028043743Z`) in Unix seconds.
+fn created_secs(s: &str) -> Option<f64> {
+    let t = chrono::DateTime::parse_from_rfc3339(s).ok()?;
+    Some(t.timestamp() as f64 + f64::from(t.timestamp_subsec_nanos()) / 1e9)
+}
+
+/// The registry's manifest digest for `reference` (this platform's) and its config.
+async fn registry_config(reference: &str, token: Option<&str>) -> Res<(String, Value)> {
     let (host, rest) = reference.split_once('/').ok_or_else(|| format!("{reference}: no registry in it"))?;
     let (repo, tag) = match rest.rsplit_once(':') {
         Some((r, t)) if !t.contains('/') => (r, t),
@@ -847,12 +884,7 @@ pub async fn registry_version(reference: &str, token: Option<&str>) -> Res<Versi
         .ok_or_else(|| format!("{reference}'s manifest has no config"))?;
     let res = get(&http, &format!("{base}/blobs/{config}"), "*/*", &mut bearer, token).await?;
     let config: Value = res.json().await.map_err(|e| format!("{reference}'s config: {e}"))?;
-    let version = config
-        .pointer("/config/Labels/org.opencontainers.image.version")
-        .and_then(Value::as_str)
-        .map(String::from)
-        .unwrap_or_else(|| digest.trim_start_matches("sha256:").chars().take(12).collect());
-    Ok(Version { version, image: reference.to_string(), digest: Some(digest) })
+    Ok((digest, config))
 }
 
 /// A base image: what it's called, its name here, and where CI publishes it.
@@ -1065,12 +1097,24 @@ impl HostUpdates {
             }
         }
         if bases {
-            tracing::info!(
-                "updates: refreshing the base images, as every {} h",
-                self.0.settings.bases_every.as_secs() / 3600
-            );
-            if let Err(e) = self.refresh_job() {
-                tracing::info!("updates: {}", e.message);
+            // Looked at quietly: a refresh (a job in Activity, and gigabytes)
+            // only when one's newer where it's published, or missing here.
+            // Up to date, or unreadable (offline): nothing to show, and the
+            // next look is a day from now.
+            {
+                let mut st = self.0.st.lock().unwrap();
+                st.saved.bases_at = Some(now_ms());
+                self.0.save(&st.saved);
+            }
+            match self.0.any_base_newer().await {
+                Ok(true) => {
+                    tracing::info!("updates: a newer base image is published: refreshing");
+                    if let Err(e) = self.refresh_job() {
+                        tracing::info!("updates: {}", e.message);
+                    }
+                }
+                Ok(false) => tracing::info!("updates: the base images here are up to date"),
+                Err(e) => tracing::info!("updates: the base images weren't looked at: {e}"),
             }
         }
     }
@@ -1746,6 +1790,23 @@ impl Inner {
             let stage = format!("base-{i}");
             self.jobs.stage(job, &stage, PartState::Working, None);
             self.jobs.line(job, &format!("» {}: {}", b.name, b.published));
+            // Only a newer one: the copy here as new (CI's, pulled before; or
+            // one built here, which a stick carries) is neither downloaded
+            // again nor replaced by an older one.
+            match self.base_newer(b, token.clone()).await {
+                Ok(false) => {
+                    self.jobs.line(job, &format!("✓ {}: the one here is as new", b.name));
+                    let mut st = self.st.lock().unwrap();
+                    st.saved.refreshed.insert(b.local.clone(), now_ms());
+                    self.save(&st.saved);
+                    drop(st);
+                    self.jobs.stage(job, &stage, PartState::Done, None);
+                    continue;
+                }
+                Ok(true) => {}
+                // Not read (the registry, or the way to it): pulled as before.
+                Err(e) => self.jobs.line(job, &format!("  {}: its build time wasn't read ({e})", b.name)),
+            }
             let auth = token.as_ref().filter(|_| b.published.starts_with(&format!("{GHCR}/")));
             let auth = auth.map(|t| wad_podman::registry_auth(REGISTRY_USER, t, GHCR));
             let (jobs, id, st) = (self.jobs.clone(), job.to_string(), stage.clone());
@@ -1771,6 +1832,28 @@ impl Inner {
             }
         }
         if failed.is_empty() { Ok(()) } else { Err(failed.join("; ")) }
+    }
+
+    /// Whether the published `b` is newer than the copy here (built later,
+    /// by its config's time): true when there's none here.
+    async fn base_newer(&self, b: &BaseImage, token: Option<String>) -> Res<bool> {
+        let Some(here) = self.images.info(&b.local).await? else { return Ok(true) };
+        let token = token.filter(|_| b.published.starts_with(&format!("{GHCR}/")));
+        let published = self.images.published_created(&b.published, token).await?;
+        // A second's leeway: the same image, read two ways.
+        Ok(published > here.created + 1.0)
+    }
+
+    /// Whether any base is newer where it's published (or missing here).
+    /// Errors: what couldn't be read (offline, say).
+    async fn any_base_newer(&self) -> Res<bool> {
+        let token = self.images.token().await;
+        for b in &self.settings.bases {
+            if self.base_newer(b, token.clone()).await? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     async fn bases(&self) -> Bases {

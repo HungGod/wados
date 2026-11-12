@@ -20,7 +20,7 @@ use gtk::prelude::*;
 use wad_gtk::keyed::Keyed;
 use wad_model::catalog::{app_name, url_host};
 use wad_model::commands::parse_command;
-use wad_model::edit::Op;
+use wad_model::edit::{NewVariant, Op};
 use wad_model::suggest::Suggestion;
 use wad_model::{AppId, BuildCommand, CommandKind, Wadspace};
 
@@ -64,7 +64,6 @@ pub struct Panel {
     sug: Wrap,
     parts: Vec<(GroupId, Part)>,
     site_add: gtk::Button,
-    link_steam: gtk::Button,
     disc_upload: gtk::Button,
     no_discs: gtk::Label,
     cmds: Commands,
@@ -103,13 +102,6 @@ impl Panel {
                     p.ask_site(b.upcast_ref());
                 }
             });
-            let link_steam = pill_button("gamepad-2", "Link Steam", "Sign in to Steam, in Settings ▸ Accounts");
-            let w = me.clone();
-            link_steam.connect_clicked(move |_| {
-                if let Some(b) = w.upgrade().and_then(|p| p.builder.upgrade()) {
-                    crate::peers::open_app(&b.shell, &["wados-settings", "--page", "accounts"]);
-                }
-            });
             let disc_upload = pill_button("upload", "Upload iso, rvz file", "An .iso or .rvz from this computer");
             disc_upload.set_halign(gtk::Align::Start);
             let w = me.clone();
@@ -144,14 +136,11 @@ impl Panel {
                     f
                 });
                 card.append(&for_line(&format!("for {}", app_name(app)), Some((app, focus.as_ref()))));
+                // Steam's sign-in is the wadspace's own: Steam's, as it opens.
                 if g == GroupId::Steam {
-                    let line = gtk::Box::builder().spacing(10).css_classes(["side-link-steam"]).build();
-                    let l = note("Its games show here once your Steam account is linked.");
-                    l.set_hexpand(true);
-                    line.append(&l);
-                    link_steam.set_valign(gtk::Align::Center);
-                    line.append(&link_steam);
-                    card.append(&line);
+                    card.append(&note(
+                        "Your packaged games show here. Sign in to Steam in the wadspace for the rest of your library.",
+                    ));
                 }
                 let pills = Wrap::new(6, 6);
                 card.append(&pills);
@@ -181,7 +170,6 @@ impl Panel {
                 sug,
                 parts,
                 site_add,
-                link_steam,
                 disc_upload,
                 no_discs,
                 cmds,
@@ -210,6 +198,11 @@ impl Panel {
             // Another wadspace: what was being typed was for the last one.
             self.cmds.entry.set_text("");
             self.cmds.err.set_visible(false);
+            // Steam's: its library read again now (wadd reads the key's
+            // folder; a change comes back as the library), not in a while.
+            if x.has_app(AppId::Steam) {
+                b.shell.link.call(|w| async move { w.steam().await }, |_| {});
+            }
         }
         let me = self.me.clone();
 
@@ -236,16 +229,19 @@ impl Panel {
             part.pills.set(&keyed, |i| item_pill(&me, gid, i), |_, _| {});
             for (k, w) in part.pills.keyed() {
                 if let Some(i) = items.get(&(gid, k.clone())) {
-                    paint_item(&w, i, editable, gid == GroupId::Dolphin);
+                    paint_item(&w, i, editable, gid);
                 }
-                // A disc's pill, right-clicked: take it off this machine.
-                if gid == GroupId::Dolphin {
+                // A disc's pill, right-clicked: take it off this machine; a
+                // Steam game's: package it. Once per pill (they're kept
+                // from one show to the next).
+                if matches!(gid, GroupId::Dolphin | GroupId::Steam) && !w.has_css_class("side-menu-wired") {
+                    w.add_css_class("side-menu-wired");
                     let (p, w2, key) = (me.clone(), w.clone(), k.to_string());
                     let g = gtk::GestureClick::builder().button(gtk::gdk::BUTTON_SECONDARY).build();
                     g.connect_pressed(move |g, _, x, y| {
                         g.set_state(gtk::EventSequenceState::Claimed);
                         if let Some(p) = p.upgrade() {
-                            p.disc_menu(&w2, &key, (x, y));
+                            p.pill_menu(gid, &w2, &key, (x, y));
                         }
                     });
                     w.add_controller(g);
@@ -298,6 +294,32 @@ impl Panel {
         }
     }
 
+    /// A pill's own menu: a disc's, or a Steam game's.
+    fn pill_menu(&self, g: GroupId, anchor: &gtk::Widget, key: &str, at: (f64, f64)) {
+        match g {
+            GroupId::Dolphin => self.disc_menu(anchor, key, at),
+            GroupId::Steam => self.steam_menu(anchor, key, at),
+            _ => {}
+        }
+    }
+
+    /// A Steam game's pill, right-clicked: package it, once it's downloaded
+    /// here. Not an edit of the wadspace, so it isn't `editable`.
+    fn steam_menu(&self, anchor: &gtk::Widget, key: &str, at: (f64, f64)) {
+        let Some(b) = self.builder.upgrade() else { return };
+        let Some(id) = key.strip_prefix("steam:") else { return };
+        let Some(x) = self.now.borrow().clone() else { return };
+        let lib = b.shell.store.library();
+        let Some(g) = addon_list::steam_games(&lib, &x).into_iter().find(|g| g.id == id) else { return };
+        let choices = addon_list::steam_menu(&g);
+        let (wb, wa) = (self.builder.clone(), anchor.downgrade());
+        kit::menu(anchor, Some(at), &format!("addon:{key}"), choices, move |p: &crate::builder::side::keys::Pick| {
+            if let (Some(b), Some(a)) = (wb.upgrade(), wa.upgrade()) {
+                kit::act(&b, &a, &p.act);
+            }
+        });
+    }
+
     /// A disc's pill, right-clicked: its menu (off this machine, and where
     /// it's used). Not an edit of the wadspace, so it isn't `editable`.
     fn disc_menu(&self, anchor: &gtk::Widget, key: &str, at: (f64, f64)) {
@@ -346,6 +368,7 @@ impl Panel {
         let window = from.root().and_downcast::<gtk::Window>();
         let shell = b.shell.clone();
         let w2 = window.clone();
+        let me = self.me.clone();
         dialog.open(window.as_ref(), gtk::gio::Cancellable::NONE, move |r| {
             let Some(path) = r.ok().and_then(|f| f.path()) else { return };
             let ask = gtk::AlertDialog::builder()
@@ -356,18 +379,33 @@ impl Panel {
                 .default_button(1)
                 .build();
             let shell = shell.clone();
+            let me = me.clone();
             ask.choose(w2.as_ref(), gtk::gio::Cancellable::NONE, move |pick| {
                 let push = match pick {
                     Ok(1) => false,
                     Ok(2) => true,
                     _ => return,
                 };
-                let (s, path) = (shell.clone(), path.display().to_string());
+                let (s, me, path) = (shell.clone(), me.clone(), path.display().to_string());
+                let file = path.rsplit('/').next().unwrap_or_default().to_string();
                 shell.link.call(
                     move |w| async move { w.disc_add(&path, push).await },
-                    move |r| {
-                        if let Err(e) = r {
-                            s.toast(wad_proto::Level::Warn, &e.message, None);
+                    move |r| match r {
+                        Err(e) => s.toast(wad_proto::Level::Warn, &e.message, None),
+                        // Uploaded from this wadspace's Builder: it's this
+                        // wadspace's game too (the one it starts into, if
+                        // it has none), not only one more in the list.
+                        Ok(_) => {
+                            if let Some(p) = me.upgrade() {
+                                let x = p.now.borrow().clone();
+                                if let Some(x) = x {
+                                    p.act(Some(Op::NewVariant {
+                                        ws: x.id,
+                                        app: AppId::Dolphin,
+                                        new: NewVariant::Named(wad_model::games::disc_name(&file)),
+                                    }));
+                                }
+                            }
                         }
                     },
                 );
@@ -487,11 +525,11 @@ impl ctl::Rows for Panel {
                 let row = Row::new(format!("addon:{k}"), &w, label_of(&w)).lit(w.has_css_class("in"));
                 // A disc's pill, right-clicked: take it off this machine
                 // (and `wadsctl side menu` can open its menu too).
-                let row = if *gid == GroupId::Dolphin {
-                    let (me2, w2, key) = (self.me.clone(), w.clone(), k.clone());
+                let row = if matches!(*gid, GroupId::Dolphin | GroupId::Steam) {
+                    let (me2, w2, key, g) = (self.me.clone(), w.clone(), k.clone(), *gid);
                     let menu: Rc<dyn Fn()> = Rc::new(move || {
                         if let Some(p) = me2.upgrade() {
-                            p.disc_menu(&w2, &key, (0.0, 0.0));
+                            p.pill_menu(g, &w2, &key, (0.0, 0.0));
                         }
                     });
                     row.menu(menu)
@@ -520,9 +558,6 @@ impl ctl::Rows for Panel {
             if self.cmds.err.is_visible() {
                 out.push(Row::new("command-error", &self.cmds.err, self.cmds.err.label()));
             }
-        }
-        if card_of(GroupId::Steam) {
-            out.push(Row::new("link-steam", &self.link_steam, "Link Steam"));
         }
         if card_of(GroupId::Dolphin) {
             out.push(Row::new("disc-upload", &self.disc_upload, "Upload iso, rvz file"));
@@ -667,7 +702,7 @@ fn item_pill(me: &Weak<Panel>, g: GroupId, i: &Item) -> gtk::Widget {
     b.upcast()
 }
 
-fn paint_item(w: &gtk::Widget, i: &Item, editable: bool, a_disc: bool) {
+fn paint_item(w: &gtk::Widget, i: &Item, editable: bool, g: GroupId) {
     lit(w, i.lit.is_some());
     if let Some(l) = name_label(w)
         && l.label() != i.name
@@ -680,9 +715,17 @@ fn paint_item(w: &gtk::Widget, i: &Item, editable: bool, a_disc: bool) {
         None if i.lit.is_some() => format!("{}: in it (click to take it out)", i.name),
         None => format!("Add {}", i.name),
     };
-    // A disc's click adds it here; its right-click is the only way to take
-    // it off the machine, so the tooltip says so.
-    let tip = if a_disc { format!("{tip} (right-click to remove it from this machine)") } else { tip };
+    // Where it is (a Steam game's), then what its right-click does: a disc's
+    // is the only way to take it off the machine, a game's packages it.
+    let tip = match &i.note {
+        Some(n) => format!("{tip} · {n}"),
+        None => tip,
+    };
+    let tip = match g {
+        GroupId::Dolphin => format!("{tip} (right-click to remove it from this machine)"),
+        GroupId::Steam => format!("{tip} (right-click to keep it in your GitHub packages)"),
+        _ => tip,
+    };
     w.set_tooltip_text(Some(&tip));
 }
 

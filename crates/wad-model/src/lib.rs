@@ -110,6 +110,10 @@ pub mod variants;
 pub mod vdf;
 pub mod wallpapers;
 
+/// A Steam key's folders (under the home): Steam's session and its library.
+pub const STEAM_KEY_PATHS: [&str; 4] =
+    [".steam/", ".local/share/Steam/config/", ".local/share/Steam/userdata/", ".local/share/Steam/steamapps/"];
+
 pub use check::CheckError;
 pub use edit::{Ctx, EditError, FileRef, Library, NewVariant, Op, Outcome, Payload, UndoSnapshot, apply, undo};
 pub use look::IconPatch;

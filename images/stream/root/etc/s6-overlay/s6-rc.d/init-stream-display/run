@@ -35,6 +35,13 @@ rm -rf "${DIR}/interposer"
 if [[ "${SELKIES_GAMEPAD_ENABLED:-false}" == true ]]; then
     install -d -o abc -g abc -m 0755 "${DIR}/interposer"
     install -o abc -g abc -m 0755 /usr/lib/wados-pads/* "${DIR}/interposer/"
+    # And its page opens the touch gamepad on a phone (touch-pad.js).
+    web="$(/opt/selkies/bin/python -I -c 'import importlib.resources as r; print(r.files("selkies.selkies_web"))')"
+    install -m 0644 /usr/share/wados-stream/touch-pad.js "${web}/wados-touch-pad.js"
+    grep -q 'wados-touch-pad.js' "${web}/index.html" \
+        || sed -i 's|</body>|<script src="wados-touch-pad.js"></script></body>|' "${web}/index.html"
+    grep -q 'wados-touch-pad.js' "${web}/index.html" \
+        || echo "[stream-display] the page has no </body>: no touch gamepad at start" >&2
 fi
 printf '%s' "${DIR}" > /run/s6/container_environment/XDG_RUNTIME_DIR
 printf '%s' "unix:${DIR}/pulse/native" > /run/s6/container_environment/PULSE_SERVER

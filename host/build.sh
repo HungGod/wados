@@ -347,8 +347,7 @@ disk_image() {
     local bib="${ROOT}/.build/bib/config.toml"
     bib_config "${bib}"
     mkdir -p "${ROOT}/output"
-    log "sudo is needed for bootc-image-builder"
-    sudo -v
+    sudo_for_the_run "bootc-image-builder runs as root"
     # bootc-image-builder reads the image from root's storage.
     log "copying ${image} into root's container storage"
     podman image scp "${USER}@localhost::${image}" root@localhost::
@@ -396,9 +395,42 @@ push() {
 # the stick. host/usr/libexec/wados/install-to-disk.
 # installer's EXIT: its temporary files and loop device gone.
 stick_cleanup() {
+    [[ -n "${SUDO_KEEPER:-}" ]] && kill "${SUDO_KEEPER}" 2> /dev/null
     [[ -n "${LIVE_DIR:-}" ]] && rm -rf "${LIVE_DIR}"
     [[ -n "${STICK_DEV:-}" ]] && { sudo losetup -d "${STICK_DEV}" 2> /dev/null || true; }
     return 0
+}
+
+# sudo asked for once, at the start, and kept until the end: a long run
+# (the pulls, cargo, the copy onto the stick) would otherwise outlast sudo's
+# timestamp and ask again midway, maybe after you've walked away. The keeper
+# goes when the script does (stick_cleanup, or its own check).
+SUDO_KEEPER=""
+sudo_for_the_run() {
+    log "sudo is needed: $1"
+    sudo -v || die "no sudo: $1" 2
+    (
+        while kill -0 "$$" 2> /dev/null; do
+            sudo -n -v 2> /dev/null || exit 0
+            sleep 50
+        done
+    ) > /dev/null 2>&1 &
+    SUDO_KEEPER=$!
+}
+
+# SELinux labels for what was put in the stick's /var, by the stick's own
+# policy and its paths as the stick sees them (/var/lib/...): restorecon
+# here would look up this machine's /tmp/… path in this machine's policy
+# ("Warning no default label for …") and label nothing. VAR is
+# <root>/ostree/deploy/<os>/var; the policy is its deployment's.
+label_stick_var() { # VAR PATH...
+    local var="$1" root fc
+    shift
+    root="${var%/var}"
+    fc="$(sudo find "${root}/deploy" -mindepth 7 -maxdepth 7 -path '*/etc/selinux/targeted/contexts/files/file_contexts' 2> /dev/null | head -1)"
+    [[ -n "${fc}" ]] || fc=/etc/selinux/targeted/contexts/files/file_contexts
+    sudo setfiles -F -r "${root}" "${fc}" "$@" \
+        || log "warning: couldn't label $* on the stick (SELinux may deny them there)"
 }
 
 installer() {
@@ -453,6 +485,10 @@ installer() {
         /dev/*) [[ -b "${where}" ]] || die "${where} isn't a disk" 2 ;;
         *) die "installer /dev/sdX | --image FILE" 2 ;;
     esac
+    sudo_for_the_run "the stick is written as root (bootc install, mount, losetup)"
+    # What's left when it ends, however it ends: sudo's keeper, the live
+    # address's files (its tunnel's token) and a stick image's loop device.
+    trap 'stick_cleanup' EXIT
     # What the stick carries: the base and the stream sidecar, as this
     # machine built them (images/build.sh) — never CI's, so what the stick
     # tests is what's here. Nothing is pulled for them: missing either one is
@@ -566,9 +602,6 @@ installer() {
     # one name running at once would share it (--live-name for another).
     # Retired with `wadd tunnel remove <name> --secrets …`.
     local live_dir=""
-    # What's left when it ends, however it ends: the live address's files
-    # (its tunnel's token) and a stick image's loop device.
-    trap 'stick_cleanup' EXIT
     if [[ -n "${keys}" ]] && ((live_address)); then
         live_dir="$(mktemp -d)"
         LIVE_DIR="${live_dir}"
@@ -587,7 +620,6 @@ installer() {
         log "no ${firebase}: machines this installs have no WadSpaces account"
         firebase=""
     fi
-    sudo -v
     log "copying ${image} into root's container storage"
     podman image scp "${USER}@localhost::${image}" root@localhost::
     local bootc=(sudo podman run --rm --privileged --pid=host --security-opt label=type:unconfined_t
@@ -641,7 +673,6 @@ installer() {
                 mount -t tmpfs tmpfs /run/containers
                 mount -t tmpfs tmpfs /run/libpod
                 podman load --quiet
-                restorecon -R /var/lib/containers 2>/dev/null || true
             ' _ "${var}/lib/containers"; then
             die "couldn't copy the images onto the stick (${var}/lib/containers)"
         fi
@@ -664,8 +695,15 @@ installer() {
         sudo git -c safe.directory='*' -C "${clone}" remote set-url origin "https://github.com/HungGod/wados.git" \
             || die "couldn't set the copy's origin (${clone})"
         sudo chown -R 1000:1000 "${clone}"
-        sudo restorecon -R "${var}/lib/wados/projects" 2> /dev/null || true
+        # The live session's library starts with the WadOS wadspace, on
+        # these parts (wadd's starts_with_wados); a stick without it has no
+        # wadspaces.
+        sudo touch "${var}/lib/wados/installer/wados"
     fi
+    local labelled=("${var}/lib/wados")
+    [[ -d "${var}/lib/containers" ]] && labelled+=("${var}/lib/containers")
+    log "labelling what's on the stick (SELinux, by the stick's policy)"
+    label_stick_var "${var}" "${labelled[@]}"
     sudo umount "${mnt}"
     rmdir "${mnt}"
     sync

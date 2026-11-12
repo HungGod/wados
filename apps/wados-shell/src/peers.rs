@@ -283,7 +283,11 @@ pub fn open_app(shell: &Shell, argv: &[&str]) {
             .is_ok()
     };
     if !started {
-        let name = if *prog == "wados-settings" { "Settings" } else { "Files" };
+        let name = match *prog {
+            "wados-settings" => "Settings",
+            "wadbrowser" => "WadBrowser",
+            _ => "Files",
+        };
         shell.toast(Level::Info, &format!("{name} isn't on this machine"), None);
     }
 }

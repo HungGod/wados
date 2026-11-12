@@ -93,10 +93,14 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
     && systemctl --global enable pipewire.socket pipewire-pulse.socket wireplumber.service
 
 # Networks: NetworkManager with Wi-Fi (and nmtui on a text console), and
-# BlueZ (wadd drives both over D-Bus).
+# BlueZ (wadd drives both over D-Bus). Fedora's connectivity check
+# (fedoraproject.org's hotspot.txt, as each network comes up and every 5
+# minutes): how NetworkManager finds a hotel's sign-in page in the way, which
+# wadd tells the shell and the shell opens (wados-shell's portal.rs).
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
-      NetworkManager-wifi NetworkManager-tui bluez \
-    && dnf clean all
+      NetworkManager-wifi NetworkManager-tui bluez NetworkManager-config-connectivity-fedora \
+    && dnf clean all \
+    && grep -q '^uri=http' /usr/lib/NetworkManager/conf.d/20-connectivity-fedora.conf
 
 # Power (Settings ▸ Power): UPower (the battery), a power-profiles service
 # (power-profiles-daemon, unless the base has tuned-ppd, which answers the
@@ -108,6 +112,11 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs upow
 
 # rclone: another machine's folder in a wadspace, mounted over Taildrive's WebDAV (wadd's taildrive.rs).
 RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs rclone fuse3 && dnf clean all
+
+# 7-Zip: Files' Extract here (and a double-click on an archive): 7z, zip and
+# rar; tar's own are tar's (local.rs' extract).
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs 7zip tar && dnf clean all \
+    && 7z i > /dev/null
 
 # git: wadd clones a wadspace's GitHub projects itself, as uid 1000 (wad-git
 # runs `git` from PATH; the base has none). Found by tools/vm/check-tailnet.sh.
@@ -254,7 +263,8 @@ RUN set -e; \
     grep -qx 'Exec=wadbrowser --default %U' /usr/share/applications/io.wados.Browser.desktop; \
     wados-settings --version; wados-files --version; wados-installer --version; wados-agents --version; \
     grep -qx 'Exec=wados-settings' /usr/share/applications/io.wados.Settings.desktop; \
-    grep -qx 'Exec=wados-files --machines' /usr/share/applications/io.wados.Files.desktop; \
+    grep -qx 'Exec=wados-files --machines %U' /usr/share/applications/io.wados.Files.desktop; \
+    grep -qx 'inode/directory=io.wados.Files.desktop' /etc/xdg/mimeapps.list; \
     test -s /usr/share/icons/hicolor/scalable/apps/io.wados.Browser.svg; \
     if command -v gtk-update-icon-cache > /dev/null; then gtk-update-icon-cache -q -f /usr/share/icons/hicolor; fi; \
     labwc --version; \
@@ -267,7 +277,7 @@ RUN set -e; \
     tailscale version | head -1; \
     cloudflared --version; \
     for t in Xwayland agreety podman skopeo bootc nmcli nmtui bluetoothctl wpctl pipewire wireplumber \
-             tailscaled vainfo wlr-randr dbus-update-activation-environment systemd-cat semodule restorecon \
+             tailscaled vainfo wlr-randr dbus-update-activation-environment systemd-cat semodule restorecon setfiles 7z tar \
              pw-play pw-record upower passwd; do \
         command -v "${t}" > /dev/null || { echo "missing ${t}" >&2; exit 1; }; \
     done; \

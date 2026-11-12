@@ -40,6 +40,10 @@ pub struct Network {
     /// The DNS servers it uses.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dns: Vec<String>,
+    /// The network wants a sign-in first (a hotel's, a café's captive
+    /// portal): the shell opens its page in WadBrowser.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub portal: bool,
     /// The tailnet device its internet traffic goes out through (`tailscale
     /// set --exit-node`), by its node's stable id; none: straight out. It
     /// may be offline (then nothing gets out until it's back).

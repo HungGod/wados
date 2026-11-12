@@ -207,7 +207,13 @@ pub struct State {
     /// The address on the network it's on (Wi-Fi's, else the wire's).
     pub ip: Option<String>,
     pub dns: Vec<String>,
+    /// The network wants a sign-in first (a hotel's, a café's): its page
+    /// comes up instead of the internet. NetworkManager's connectivity check.
+    pub portal: bool,
 }
+
+/// NetworkManager's connectivity: behind a captive portal (`NM_CONNECTIVITY_PORTAL`).
+pub const PORTAL: u32 = 2;
 
 /// A device's address and its DNS servers.
 type Addresses = (Option<String>, Vec<String>);
@@ -377,6 +383,7 @@ impl NetworkManager {
         let mut s = State {
             wifi_on: nm.wireless_enabled().await?,
             wifi_hardware: nm.wireless_hardware_enabled().await.unwrap_or(true),
+            portal: nm.connectivity().await.unwrap_or(0) == PORTAL,
             ..State::default()
         };
         let saved = self.profiles().await?;

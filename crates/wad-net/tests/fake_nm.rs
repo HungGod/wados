@@ -140,3 +140,14 @@ async fn the_radio_and_the_wire() {
     b.nm.set_wifi(true).await.unwrap();
     assert!(b.nm.state().await.unwrap().wifi_on);
 }
+
+#[tokio::test]
+async fn a_network_that_wants_a_sign_in_says_so() {
+    let b = up(World::with(home(), &[])).await;
+    b.nm.connect("Cafe", None).await.unwrap();
+    assert!(!b.nm.state().await.unwrap().portal, "the check found the internet");
+    // The café's page in the way (NetworkManager's connectivity check).
+    b.world.lock().unwrap().connectivity = wad_net::PORTAL;
+    let s = b.nm.state().await.unwrap();
+    assert!(s.portal && s.connected.as_deref() == Some("Cafe"));
+}

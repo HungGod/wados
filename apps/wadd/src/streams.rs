@@ -835,9 +835,16 @@ impl MachineStreams {
         if shown.is_some_and(|d| d != SessionDisplay::Stream) && !req.takeover {
             return Err(conflict(format!("{} is on the screen: streaming it takes it off the screen", doc.name)));
         }
+        // A game's own stream has player 1's gamepad (a phone's is the touch
+        // one on the stream's page), as Play together's has: Dolphin's and
+        // Steam's wadspaces. Not a secure one's (its VM has no interposer).
+        let players = match req.players {
+            0 if !req.mode.is_secure() && wad_model::games::plays_together(&doc) => 1,
+            n => n,
+        };
         // Off the screen as it runs, when it can (a secure one starts again in its VM).
         // Gamepads need its apps started with the interposer: it starts again too.
-        let moving = req.players == 0
+        let moving = players == 0
             && shown.is_some_and(|d| d != SessionDisplay::Stream)
             && !req.mode.is_secure()
             && self.runs.moves(ws);
@@ -870,7 +877,7 @@ impl MachineStreams {
             turn_users: vec![],
             job: Some(job.clone()),
             moved_from: shown.filter(|_| moving),
-            players: req.players,
+            players,
         };
         {
             let mut st = self.st.lock().unwrap();
@@ -1892,7 +1899,8 @@ impl Streams for MachineStreams {
             link: e.link,
             user: e.user.filter(|_| e.mode.is_public()),
             password,
-            players: if e.players == 0 { vec![] } else { players },
+            // Play together's links (one player's stream is its own link).
+            players: if e.players <= 1 { vec![] } else { players },
         })
     }
 

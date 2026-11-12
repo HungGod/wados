@@ -196,6 +196,7 @@ fn the_network() {
         }],
         ip: Some("192.168.1.42".into()),
         dns: vec!["192.168.1.1".into()],
+        portal: true,
         exit_node: Some("nDesk1".into()),
         exit_nodes: vec![ExitNodeChoice {
             id: "nDesk1".into(),
@@ -207,6 +208,9 @@ fn the_network() {
     let v = round_trip(&e, "network");
     assert_eq!((v["wifiOn"].as_bool(), v["networks"][0]["band"].as_str()), (Some(true), Some("5GHz")));
     assert_eq!(v["exitNodes"][0]["kind"], "desktop");
+    // A hotel's sign-in page in the way; none says nothing.
+    assert_eq!(v["portal"], true);
+    assert!(round_trip(&Event::Network(Box::default()), "network").get("portal").is_none());
     assert_eq!(e.latest_key().as_deref(), Some("network"));
     round_trip(&Event::Network(Box::default()), "network");
 }

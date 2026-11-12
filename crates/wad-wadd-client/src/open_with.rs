@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use wad_model::edit::Op;
+use wad_model::edit::{NewVariant, Op};
 use wad_model::{AppId, JobStatus, SessionDisplay};
 use wad_proto::WadspaceRun;
 
@@ -37,6 +37,21 @@ impl Wadd {
                 .created
                 .ok_or_else(|| failed("wadd made no wadspace for it".into()))?,
         };
+        // A disc opened with Dolphin is kept: one of this machine's discs
+        // (the mount below is for this run only) and the game this wadspace
+        // starts straight into, if it hasn't one. Neither stops it opening.
+        if app == AppId::Dolphin && machine.is_none() {
+            for f in files.iter().filter(|f| wad_model::games::is_disc_file(f)) {
+                let file = f.rsplit('/').next().unwrap_or(f);
+                if let Err(e) = self.disc_add(f, false).await {
+                    tracing::warn!("{file} isn't kept as a disc: {}", e.message);
+                }
+                let new = NewVariant::Named(wad_model::games::disc_name(file));
+                if let Err(e) = self.op(Op::NewVariant { ws: id.clone(), app, new }).await {
+                    tracing::warn!("{file} isn't its game: {}", e.message);
+                }
+            }
+        }
         self.built(&id).await?;
         let mut run = None;
         for f in files {

@@ -26,13 +26,25 @@ pub struct Item {
 
 const ATTRS: &str = "standard::name,standard::display-name,standard::type,standard::content-type,standard::size,standard::is-hidden,standard::is-backup,time::modified";
 
-/// What's in `dir` (not hidden ones or backups): folders first, then by name.
-pub fn list(dir: &Path) -> Result<Vec<Item>, String> {
+/// What's in `dir`: folders first, then by name. Hidden ones (dot-files,
+/// a `.hidden` file's names) and backups (`name~`) only with `hidden`.
+pub fn list(dir: &Path, hidden: bool) -> Result<Vec<Item>, String> {
     let f = gio::File::for_path(dir);
     let en = f.enumerate_children(ATTRS, gio::FileQueryInfoFlags::NONE, gio::Cancellable::NONE).map_err(|e| why(&e))?;
     let mut out = Vec::new();
-    while let Ok(Some(info)) = en.next_file(gio::Cancellable::NONE) {
-        if info.is_hidden() || info.is_backup() {
+    // One thing that can't be read is left out, not the rest after it.
+    let mut errors = 0;
+    loop {
+        let info = match en.next_file(gio::Cancellable::NONE) {
+            Ok(Some(i)) => i,
+            Ok(None) => break,
+            Err(_) if errors < 64 => {
+                errors += 1;
+                continue;
+            }
+            Err(_) => break,
+        };
+        if !hidden && (info.is_hidden() || info.is_backup()) {
             continue;
         }
         let name = info.name().to_string_lossy().into_owned();
@@ -42,7 +54,7 @@ pub fn list(dir: &Path) -> Result<Vec<Item>, String> {
         let ct = gio::content_type_get_mime_type(&ct).map(|m| m.to_string()).unwrap_or(ct);
         let count = folder.then(|| {
             std::fs::read_dir(&path)
-                .map(|d| d.flatten().filter(|e| !e.file_name().to_string_lossy().starts_with('.')).count())
+                .map(|d| d.flatten().filter(|e| hidden || !e.file_name().to_string_lossy().starts_with('.')).count())
                 .unwrap_or(0)
         });
         out.push(Item {
@@ -101,6 +113,76 @@ pub fn free_name(dir: &Path, wanted: &str) -> String {
 pub fn valid_name(name: &str) -> Option<String> {
     let n = name.trim();
     (!n.is_empty() && n != "." && n != ".." && !n.contains('/') && !n.contains('\0')).then(|| n.to_string())
+}
+
+// ------------------------------------------------------------ archives
+
+/// The archives Files extracts, by their endings: tar's (any compression
+/// tar knows), and what 7-Zip opens (7z, zip, rar).
+const TARS: [&str; 10] =
+    [".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tbz", ".tar.zst", ".tzst"];
+const SEVENS: [&str; 3] = [".7z", ".zip", ".rar"];
+
+/// The ending that makes `name` an archive (none: it isn't one).
+fn archive_ending(name: &str) -> Option<&'static str> {
+    let lower = name.to_ascii_lowercase();
+    TARS.iter()
+        .chain(SEVENS.iter())
+        .copied()
+        .filter(|e| lower.ends_with(e) && lower.len() > e.len())
+        .max_by_key(|e| e.len())
+}
+
+/// Whether Files can extract `name`.
+pub fn is_archive(name: &str) -> bool {
+    archive_ending(name).is_some()
+}
+
+/// The folder an archive extracts into, beside it: its name without its
+/// ending ("Mario Kart.7z" → "Mario Kart"), or "… (2)" when that's taken.
+pub fn extract_folder(dir: &Path, name: &str) -> String {
+    let stem = archive_ending(name).map_or(name, |e| &name[..name.len() - e.len()]);
+    let stem = stem.trim();
+    free_name(dir, if stem.is_empty() { "Extracted" } else { stem })
+}
+
+/// Extracts `archive` into a new folder beside it: the folder's name. Off
+/// the main thread (an archive can be gigabytes). A half-done folder is
+/// taken away when it fails.
+pub fn extract(archive: &Path) -> Result<String, String> {
+    let name = archive.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let dir = archive.parent().ok_or("It isn't in a folder")?;
+    let ending = archive_ending(&name).ok_or("It isn't an archive Files knows")?;
+    let folder = extract_folder(dir, &name);
+    let into = dir.join(&folder);
+    std::fs::create_dir(&into).map_err(|e| e.to_string())?;
+    let mut cmd = if TARS.contains(&ending) {
+        let mut c = std::process::Command::new("tar");
+        c.arg("-xf").arg(archive).arg("-C").arg(&into).arg("--no-same-owner");
+        c
+    } else {
+        let mut c = std::process::Command::new("7z");
+        // -y: yes to its questions (there are none in a new folder); -bso0 -bsp0: quiet.
+        c.args(["x", "-y", "-bso0", "-bsp0"]).arg(format!("-o{}", into.display())).arg("--").arg(archive);
+        c
+    };
+    let out = cmd.stdin(std::process::Stdio::null()).output();
+    let fail = |why: String| {
+        let _ = std::fs::remove_dir_all(&into);
+        Err(why)
+    };
+    match out {
+        Ok(o) if o.status.success() => Ok(folder),
+        Ok(o) => {
+            let err = String::from_utf8_lossy(&o.stderr);
+            let line = err.lines().map(str::trim).rfind(|l| !l.is_empty()).unwrap_or("it stopped").to_string();
+            fail(format!("Couldn’t extract {name}: {line}"))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            fail(format!("Couldn’t extract {name}: {} isn’t on this machine", cmd.get_program().to_string_lossy()))
+        }
+        Err(e) => fail(format!("Couldn’t extract {name}: {e}")),
+    }
 }
 
 /// A new folder in `dir` ("New folder", or "New folder (2)"…): its name.
@@ -389,6 +471,63 @@ pub fn pretty(p: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archives_by_their_endings() {
+        assert!(is_archive("Mario Kart.7z") && is_archive("a.ZIP") && is_archive("src.tar.gz") && is_archive("x.rar"));
+        assert!(!is_archive("game.rvz") && !is_archive("disc.iso") && !is_archive(".7z") && !is_archive("notes.txt"));
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(extract_folder(d.path(), "Mario Kart - Double Dash!! (USA).7z"), "Mario Kart - Double Dash!! (USA)");
+        assert_eq!(extract_folder(d.path(), "src.tar.gz"), "src");
+        std::fs::create_dir(d.path().join("src")).unwrap();
+        assert_eq!(extract_folder(d.path(), "src.tar.gz"), "src (2)");
+    }
+
+    #[test]
+    fn a_tar_extracts_beside_itself() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::create_dir(d.path().join("in")).unwrap();
+        std::fs::write(d.path().join("in/a.txt"), "hi").unwrap();
+        let ok = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(d.path().join("pack.tar.gz"))
+            .arg("-C")
+            .arg(d.path().join("in"))
+            .arg("a.txt")
+            .status()
+            .unwrap()
+            .success();
+        assert!(ok);
+        assert_eq!(extract(&d.path().join("pack.tar.gz")).unwrap(), "pack");
+        assert_eq!(std::fs::read_to_string(d.path().join("pack/a.txt")).unwrap(), "hi");
+        // A broken one leaves nothing behind.
+        std::fs::write(d.path().join("bad.zip"), "not a zip").unwrap();
+        assert!(extract(&d.path().join("bad.zip")).is_err());
+        assert!(!d.path().join("bad").exists());
+    }
+
+    #[test]
+    fn hidden_things_only_when_asked_for() {
+        let d = tempfile::tempdir().unwrap();
+        for dir in ["Documents", ".config", "Documents/.git"] {
+            std::fs::create_dir_all(d.path().join(dir)).unwrap();
+        }
+        std::fs::write(d.path().join("notes.txt~"), "").unwrap();
+        std::fs::write(d.path().join("notes.txt"), "").unwrap();
+        let names = |hidden| -> Vec<(String, Option<usize>)> {
+            list(d.path(), hidden).unwrap().into_iter().map(|i| (i.name, i.count)).collect()
+        };
+        assert_eq!(names(false), [("Documents".into(), Some(0)), ("notes.txt".into(), None)]);
+        assert_eq!(
+            names(true),
+            [
+                (".config".into(), Some(0)),
+                ("Documents".into(), Some(1)),
+                ("notes.txt".into(), None),
+                ("notes.txt~".into(), None),
+            ]
+        );
+    }
 
     #[test]
     fn names_that_are_free() {

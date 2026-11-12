@@ -30,6 +30,10 @@ pub trait Nm {
     /// The radio's switch (a key, a BIOS setting): off, nothing turns it on from here.
     #[zbus(property)]
     fn wireless_hardware_enabled(&self) -> zbus::Result<bool>;
+    /// What its connectivity check last found ([`crate::PORTAL`]: a sign-in
+    /// page in the way). Unknown (0) without a check configured.
+    #[zbus(property)]
+    fn connectivity(&self) -> zbus::Result<u32>;
 }
 
 #[zbus::proxy(interface = "org.freedesktop.NetworkManager.Device", default_service = "org.freedesktop.NetworkManager")]

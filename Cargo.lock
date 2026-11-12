@@ -3802,6 +3802,7 @@ dependencies = [
  "gtk4",
  "indexmap",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

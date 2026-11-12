@@ -454,6 +454,9 @@ pub enum Op {
 }
 
 /// Make one edit. On an error nothing changed.
+/// A wadspace's Steam app's key slot.
+pub const STEAM_SLOT: &str = "app:steam";
+
 pub fn apply(lib: &mut Library, op: Op, ctx: &Ctx) -> Result<Outcome, EditError> {
     let before = lib.clone();
     let mut tx = Tx { lib, ctx, out: Outcome::default() };
@@ -516,6 +519,24 @@ impl Tx<'_> {
 
     /// What it changed is a document still: and does it need a build?
     fn finish(&mut self, before: &Library) -> Result<(), EditError> {
+        // A wadspace that has just got Steam signs in to the machine's Steam
+        // key (made the first time): Steam's session and library live in
+        // that key's folder, where wadd reads them (the Builder's Steam
+        // games, and packaging one). Signing in is Steam's own, in the
+        // wadspace. Only as Steam comes in: a key taken off after stays off.
+        for id in self.out.changed.clone() {
+            let got_steam = self
+                .lib
+                .wadspace(&id)
+                .is_some_and(|x| x.has_app(AppId::Steam) && !x.secrets.by_slot.contains_key(STEAM_SLOT))
+                && before.wadspace(&id).is_none_or(|w| !w.has_app(AppId::Steam));
+            if got_steam {
+                let key = self.steam_key();
+                if let Some(x) = self.lib.wadspace_mut(&id) {
+                    x.secrets.by_slot.insert(STEAM_SLOT.to_string(), key);
+                }
+            }
+        }
         for id in &self.out.changed {
             let Some(x) = self.lib.wadspace(id) else { continue };
             check::wadspace(x)?;
@@ -1102,6 +1123,17 @@ impl Tx<'_> {
         match new {
             NewVariant::Addon(item) => {
                 self.must_add(ws, Section::Addons, &item, None)?;
+                // A gamespace's first Steam game (a packaged one, from the
+                // Builder's add-ons) is what it starts straight into, as
+                // its first Dolphin disc is.
+                if let Some(game) = item.strip_prefix("steam:") {
+                    let x = self.ws(ws)?;
+                    if x.look.launch.is_none() {
+                        x.look.launch = Some(format!("variant:{game}"));
+                    }
+                    x.category = Some(Category::Gaming);
+                    self.touched(ws);
+                }
                 Ok(Some(format!("ext:{item}")))
             }
             NewVariant::Site { name, url } => {
@@ -1113,7 +1145,14 @@ impl Tx<'_> {
                     return Err(refused(format!("{} has no variants of its own", app_name(app))));
                 }
                 let x = self.ws(ws)?;
-                let e = add_named(x, app, &name).ok_or_else(|| refused("Give it a name"))?;
+                // A disc it has already is that one, not a second of it ("Mario Kart 2").
+                let had = (app == AppId::Dolphin)
+                    .then(|| x.exts.iter().find(|e| e.app == app && e.name.as_deref() == Some(name.as_str())).cloned())
+                    .flatten();
+                let e = match had {
+                    Some(e) => e,
+                    None => add_named(x, app, &name).ok_or_else(|| refused("Give it a name"))?,
+                };
                 // A gamespace's first Dolphin game is what it starts straight into (as Steam's first is).
                 if app == AppId::Dolphin && x.look.launch.is_none() {
                     x.look.launch = Some(format!("variant:{}", e.id));
@@ -1164,18 +1203,35 @@ impl Tx<'_> {
 
     // ---------------------------------------------------------- sign-ins
 
+    /// The machine's Steam key: the first there is, else a new one ("Steam").
+    fn steam_key(&mut self) -> KeyRef {
+        if let Some(k) = self.lib.keys.iter().find(|k| k.kind == SecretKind::Steam) {
+            return k.key_ref();
+        }
+        let ids: Vec<&str> = self.lib.keys.iter().map(|k| k.id.as_str()).collect();
+        let id = free_id(&ids, "Steam");
+        let key = Secret {
+            id,
+            name: "Steam".into(),
+            kind: SecretKind::Steam,
+            paths: crate::STEAM_KEY_PATHS.map(String::from).to_vec(),
+            size: 0,
+            created_at: self.ctx.now_ms,
+            changed_at: None,
+            used_by: vec![],
+            sites: vec![],
+        };
+        let r = key.key_ref();
+        self.lib.keys.push(key);
+        r
+    }
+
     fn new_key(&mut self, name: &str, kind: SecretKind) -> Result<String, EditError> {
         let name = if name.trim().is_empty() { kind.as_str().to_string() } else { check::name(name)? };
         let ids: Vec<&str> = self.lib.keys.iter().map(|k| k.id.as_str()).collect();
         let id = free_id(&ids, &name);
         // A Steam account's sign-in is its Steam folders.
-        let paths = if kind == SecretKind::Steam {
-            [".steam/", ".local/share/Steam/config/", ".local/share/Steam/userdata/", ".local/share/Steam/steamapps/"]
-                .map(String::from)
-                .to_vec()
-        } else {
-            vec![]
-        };
+        let paths = if kind == SecretKind::Steam { crate::STEAM_KEY_PATHS.map(String::from).to_vec() } else { vec![] };
         self.lib.keys.push(Secret {
             id: id.clone(),
             name,

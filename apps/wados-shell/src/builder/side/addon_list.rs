@@ -12,7 +12,7 @@
 
 use wad_model::catalog::{WEB_APPS, extensions, tools};
 use wad_model::edit::{Library, Op, Payload};
-use wad_model::games::owned_games;
+use wad_model::games::game_of;
 use wad_model::suggest::{Suggestion, suggestions};
 use wad_model::{AppId, DiscImage, Ext, NewVariant, Section, Wadspace};
 
@@ -47,6 +47,9 @@ pub struct Item {
     pub drag: Option<Held>,
     /// Off, and why (what comes later).
     pub off: Option<String>,
+    /// Where it is, said after its name in its tooltip (a Steam game's:
+    /// "downloaded here", "in your packages").
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -135,6 +138,102 @@ pub fn disc_menu(lib: &Library, d: &DiscImage) -> Vec<Choice> {
     out
 }
 
+/// Where a Steam game is, for the Builder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GameState {
+    /// The account has it; not downloaded here.
+    InLibrary,
+    /// Downloaded into the account's folder here: it can be packaged.
+    Downloaded,
+    /// In your GitHub packages.
+    Packaged,
+}
+
+impl GameState {
+    pub fn words(self) -> &'static str {
+        match self {
+            GameState::InLibrary => "in your Steam library",
+            GameState::Downloaded => "downloaded here",
+            GameState::Packaged => "in your packages",
+        }
+    }
+}
+
+/// One of a Steam wadspace's games.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SteamGame {
+    pub id: String,
+    pub name: String,
+    pub state: GameState,
+    /// The Steam key whose library has it (none: only packaged).
+    pub account: Option<String>,
+}
+
+/// The key `x`'s Steam signs in with.
+pub fn steam_account(x: &Wadspace) -> Option<String> {
+    x.secrets.by_slot.get(wad_model::edit::STEAM_SLOT).map(|k| k.id.clone())
+}
+
+/// `x`'s Steam games: its account's library (as wadd last read it from
+/// the key's folder), then what's packaged that the library hasn't, by name.
+pub fn steam_games(lib: &Library, x: &Wadspace) -> Vec<SteamGame> {
+    let account = steam_account(x);
+    let library = account.as_ref().and_then(|a| lib.steam.get(a));
+    let mut out: Vec<SteamGame> = library
+        .map(|l| {
+            l.owned
+                .iter()
+                .map(|id| SteamGame {
+                    id: id.clone(),
+                    name: game_of(id, l.names.get(id).map(String::as_str)).name,
+                    state: if lib.game_packages.contains_key(id) {
+                        GameState::Packaged
+                    } else if l.has(id) {
+                        GameState::Downloaded
+                    } else {
+                        GameState::InLibrary
+                    },
+                    account: account.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    for p in lib.game_packages.values() {
+        if !out.iter().any(|g| g.id == p.game) {
+            out.push(SteamGame {
+                id: p.game.clone(),
+                name: game_of(&p.game, None).name,
+                state: GameState::Packaged,
+                account: None,
+            });
+        }
+    }
+    out.sort_by_key(|g| g.name.to_lowercase());
+    out
+}
+
+/// A Steam game's own menu (a right-click on its pill): keep it in your
+/// GitHub packages once it's downloaded here; else what it takes.
+pub fn steam_menu(g: &SteamGame) -> Vec<Choice> {
+    let mut out = vec![Choice::Heading(format!("{}: {}", g.name, g.state.words()))];
+    let (off, act) = match (g.state, &g.account) {
+        (GameState::Downloaded, Some(account)) => {
+            (None, Act::PackageGame { account: account.clone(), game: g.id.clone() })
+        }
+        (GameState::Packaged, _) => (Some("It's in your packages already".to_string()), Act::Ops(vec![])),
+        _ => (Some("Download it in Steam, in this wadspace, first".to_string()), Act::Ops(vec![])),
+    };
+    out.push(Choice::Item(Pick {
+        id: format!("steam-package:{}", g.id),
+        label: "Keep it in your GitHub packages".into(),
+        icon: "upload",
+        checked: false,
+        off,
+        act,
+    }));
+    out
+}
+
 /// WadBrowser's Focus in `x`, as its chip.
 pub fn focus(x: &Wadspace) -> Option<String> {
     ext_in(x, AppId::Wadbrowser, |e| e.id == "focus")
@@ -180,6 +279,7 @@ pub fn groups(lib: &Library, x: &Wadspace) -> Vec<Group> {
             add: addon(format!("wadbrowser:{}", s.id)),
             drag: piece(format!("wadbrowser:{}", s.id)),
             off: None,
+            note: None,
         })
         .collect();
     let known = |web: &[Item], url: &str| {
@@ -202,6 +302,7 @@ pub fn groups(lib: &Library, x: &Wadspace) -> Vec<Group> {
             // The machine's browser's own web app, by its id there.
             drag: Some(Held::WebApp { id: a.id.clone() }),
             off: None,
+            note: None,
         });
     }
     let its: Vec<&Ext> = x
@@ -226,6 +327,7 @@ pub fn groups(lib: &Library, x: &Wadspace) -> Vec<Group> {
                 },
             }),
             off: None,
+            note: None,
         });
     }
 
@@ -243,6 +345,7 @@ pub fn groups(lib: &Library, x: &Wadspace) -> Vec<Group> {
             add: addon(format!("vscode:{}", e.id)),
             drag: piece(format!("vscode:{}", e.id)),
             off: None,
+            note: None,
         })
         .collect();
     let tools = tools()
@@ -255,17 +358,22 @@ pub fn groups(lib: &Library, x: &Wadspace) -> Vec<Group> {
             add: addon(format!("terminal:{}", t.id)),
             drag: piece(format!("terminal:{}", t.id)),
             off: None,
+            note: None,
         })
         .collect();
-    // Your signed-in Steam accounts' games, and Dolphin's discs: listed, lit when in it, off till phase 10.
-    let steam = owned_games(&lib.steam)
+    // Steam's games: what the wadspace's Steam account has (signed in to in
+    // the wadspace, read by wadd from its key's folder), and what's packaged
+    // (in your GitHub packages, from any machine); and Dolphin's discs:
+    // listed, lit when in it.
+    let steam = steam_games(lib, x)
         .into_iter()
         .map(|g| Item {
-            key: format!("steam:{}:{}", g.account, g.game.id),
-            lit: has(AppId::Steam, &|y| y.id == g.game.id),
-            name: g.game.name,
+            key: format!("steam:{}", g.id),
+            lit: has(AppId::Steam, &|y| y.id == g.id),
+            add: addon(format!("steam:{}", g.id)),
             icon: ItemIcon::Glyph("gamepad-2"),
-            add: Some(Op::AddGame { ws: x.id.clone(), account: g.account, game: g.game.id }),
+            note: Some(g.state.words().to_string()),
+            name: g.name,
             drag: None,
             off: None,
         })
@@ -281,6 +389,7 @@ pub fn groups(lib: &Library, x: &Wadspace) -> Vec<Group> {
             add: Some(Op::NewVariant { ws: x.id.clone(), app: AppId::Dolphin, new: NewVariant::Named(d.name.clone()) }),
             drag: None,
             off: None,
+            note: None,
         })
         .collect();
 
@@ -406,15 +515,91 @@ mod tests {
     }
 
     #[test]
-    fn steams_games_and_discs_are_listed() {
-        let lib = sample();
-        let couch = lib.wadspace("couch-co-op").unwrap();
-        let gs = groups(&lib, couch);
+    fn a_steam_wadspaces_games_are_its_accounts_and_downloaded_ones_package() {
+        let mut lib = sample();
+        let mut x = lib.wadspace("couch-co-op").unwrap().clone();
+        let key = wad_model::KeyRef { id: "steam-1".into(), name: "Steam".into(), kind: wad_model::SecretKind::Steam };
+        x.secrets.by_slot.insert("app:steam".into(), key);
+        // Signed in to in the wadspace (wadd read the key's folder): two games, one downloaded.
+        let mut library =
+            wad_model::SteamLibrary { owned: vec!["portal-2".into(), "celeste".into()], ..Default::default() };
+        library.installed.insert("portal-2".into(), true);
+        lib.steam.insert("steam-1".into(), library);
+        // And one packaged on another machine.
+        lib.game_packages.insert(
+            "hollow-knight".into(),
+            wad_model::GamePackage {
+                game: "hollow-knight".into(),
+                reference: "ghcr.io/hunggod/wadspaces-game-hollow-knight:367520".into(),
+                mb: 0,
+                machine: "m-desk".into(),
+                at: 0,
+            },
+        );
+        let games = steam_games(&lib, &x);
+        let seen: Vec<(&str, GameState)> = games.iter().map(|g| (g.id.as_str(), g.state)).collect();
+        assert_eq!(
+            seen,
+            [
+                ("celeste", GameState::InLibrary),
+                ("hollow-knight", GameState::Packaged),
+                ("portal-2", GameState::Downloaded),
+            ]
+        );
+        let steam = group(&groups(&lib, &x), GroupId::Steam).clone();
+        assert_eq!(item(&steam, "steam:portal-2").note.as_deref(), Some("downloaded here"));
+        // Its menu: a downloaded one packages; the others say why not.
+        let pick = |g: &SteamGame| match &steam_menu(g)[1] {
+            Choice::Item(p) => p.clone(),
+            other => panic!("{other:?}"),
+        };
+        let portal = pick(&games[2]);
+        assert_eq!(
+            (portal.off, portal.act),
+            (None, Act::PackageGame { account: "steam-1".into(), game: "portal-2".into() })
+        );
+        assert_eq!(pick(&games[0]).off.as_deref(), Some("Download it in Steam, in this wadspace, first"));
+        assert_eq!(pick(&games[1]).off.as_deref(), Some("It's in your packages already"));
+        // Not signed in (no key): only what's packaged.
+        x.secrets.by_slot.clear();
+        assert_eq!(steam_games(&lib, &x).iter().map(|g| g.id.as_str()).collect::<Vec<_>>(), ["hollow-knight"]);
+    }
+
+    #[test]
+    fn packaged_games_and_discs_are_listed() {
+        let mut lib = sample();
+        // Not signed in to Steam (no key): only what's packaged.
+        let mut couch = lib.wadspace("couch-co-op").unwrap().clone();
+        couch.secrets.by_slot.shift_remove("app:steam");
+        assert!(group(&groups(&lib, &couch), GroupId::Steam).items.is_empty(), "nothing packaged yet");
+        for game in ["stardew-valley", "hollow-knight"] {
+            let p = wad_model::GamePackage {
+                game: game.into(),
+                reference: format!("ghcr.io/hunggod/wadspaces-game-{game}:1"),
+                mb: 500,
+                machine: "m-desk".into(),
+                at: 0,
+            };
+            lib.game_packages.insert(game.into(), p);
+        }
+        let gs = groups(&lib, &couch);
         let steam = group(&gs, GroupId::Steam);
-        assert_eq!(steam.items.len(), 6);
-        let stardew = item(steam, "steam:old-steam:stardew-valley");
-        assert!(stardew.lit.is_some());
+        assert_eq!(
+            steam.items.iter().map(|i| i.key.as_str()).collect::<Vec<_>>(),
+            ["steam:hollow-knight", "steam:stardew-valley"]
+        );
+        let stardew = item(steam, "steam:stardew-valley");
+        assert!(stardew.lit.is_some(), "couch-co-op has it");
         assert_eq!(stardew.off, None);
+        let hollow = item(steam, "steam:hollow-knight");
+        assert_eq!(
+            hollow.add,
+            Some(Op::NewVariant {
+                ws: "couch-co-op".into(),
+                app: AppId::Steam,
+                new: NewVariant::Addon("steam:hollow-knight".into())
+            })
+        );
         let retro = lib.wadspace("retro").unwrap();
         let dolphin = group(&groups(&lib, retro), GroupId::Dolphin).clone();
         assert_eq!(

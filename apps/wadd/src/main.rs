@@ -61,9 +61,11 @@ enum Cmd {
 enum TunnelCmd {
     /// A machine's public address made (or found again: the same id reuses
     /// its tunnel and record), and what its first boot puts in place written
-    /// to `--out`: `cloudflared-token`, `wadd.toml` (`[machine] id`,
-    /// `[streaming] host`) and `turn.toml` (when the keys have TURN's).
-    /// host/build.sh installer gives WadSpaces Live its own this way.
+    /// to `--out`: `cloudflared-token`, `wadd.toml` (`[streaming] host`) and
+    /// `turn.toml` (when the keys have TURN's). host/build.sh installer
+    /// gives WadSpaces Live its own this way. The address's name isn't the
+    /// machine's id: every stick of one name shares it, and each stick's
+    /// first boot gives itself an id of its own (host/usr/libexec/wados/provision).
     Provision {
         /// The machine's id (`<id>.wadspaces.com`).
         id: String,
@@ -141,7 +143,7 @@ fn tunnel_provision(id: &str, secrets: &std::path::Path, out: &std::path::Path) 
             std::io::Write::write_all(&mut f, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
         };
         write("cloudflared-token", &a.token, 0o600)?;
-        write("wadd.toml", &format!("[machine]\nid = \"{id}\"\n\n[streaming]\nhost = \"{}\"\n", a.host), 0o644)?;
+        write("wadd.toml", &format!("[streaming]\nhost = \"{}\"\n", a.host), 0o644)?;
         if let Some(turn) = keys.turn_file() {
             write("turn.toml", &turn, 0o600)?;
         }

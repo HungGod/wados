@@ -7,7 +7,8 @@
 #   hostname         /etc/hostname
 #   account          line 1 the person's name, line 2 their password's hash:
 #                    uid 1000, in wheel and wados
-#   wadd.toml        /etc/wados/wadd.toml ([machine] id, [streaming] host)
+#   wadd.toml        /etc/wados/wadd.toml ([machine] id, [streaming] host;
+#                    WadSpaces Live's id is its own, made here: below)
 #   cloudflared-token  /etc/cloudflared/token
 #   turn.toml        /etc/wados/turn.toml
 #   firebase.toml    /etc/wados/firebase.toml (the WadSpaces account's web app)
@@ -65,6 +66,24 @@ if [[ -e "${FROM}/account" ]]; then
     unset hash
 fi
 
+# WadSpaces Live: a machine id of its own, from this stick's /etc/machine-id
+# (made at its first boot, so two sticks written from one image differ).
+# Every stick is called wadspaces-live, and an id from that name was every
+# stick's: the account had one entry per stick with the same id, and the
+# phone, which knows machines by it, showed the first (an old stick) and
+# never the one that was on.
+if [[ -e "${FROM}/live" && ! -e /etc/wados/wadd.toml ]] && ! grep -qs '^\[machine\]' "${FROM}/wadd.toml"; then
+    mid="$(head -c 6 /etc/machine-id 2> /dev/null)"
+    [[ "${mid}" =~ ^[0-9a-f]{6}$ ]] || mid="$(od -An -N3 -tx1 /dev/urandom | tr -d ' \n')"
+    {
+        printf '[machine]\nid = "wadspaces-live-%s"\n' "${mid}"
+        if [[ -e "${FROM}/wadd.toml" ]]; then
+            echo
+            cat "${FROM}/wadd.toml"
+        fi
+    } > "${FROM}/wadd.toml.new" && mv "${FROM}/wadd.toml.new" "${FROM}/wadd.toml"
+    echo "WadSpaces Live is wadspaces-live-${mid}"
+fi
 put wadd.toml /etc/wados/wadd.toml 0644
 put cloudflared-token /etc/cloudflared/token 0600
 put turn.toml /etc/wados/turn.toml 0600

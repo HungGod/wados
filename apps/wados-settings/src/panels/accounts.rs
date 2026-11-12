@@ -40,8 +40,6 @@ use wad_wadd_client::{Failure, Incoming};
 use crate::link::Link;
 use crate::panel::{Ctx, Panel};
 
-const STEAM_DESC: &str = "Your game libraries: gamespaces play the games these accounts own. Optional.";
-
 /// What the panel knows, from wadd's events.
 #[derive(Debug, Default)]
 pub struct State {
@@ -54,9 +52,6 @@ pub struct State {
     pub jobs: IndexMap<String, JobInfo>,
     /// Sign-ins waiting in the browser.
     pub signins: HashSet<SignInProvider>,
-    /// The Steam accounts here, and the games ticked to push.
-    pub steam: Vec<wad_proto::SteamAccount>,
-    pub ticked: HashSet<String>,
     /// The machine's link to its WadSpaces account, and the secret files.
     pub account: Option<AccountLink>,
     pub secret_files: Option<SecretFiles>,
@@ -71,7 +66,7 @@ impl State {
             Event::Github { account } => self.github = Some(account),
             Event::Account(a) => self.account = Some(a),
             Event::SecretFiles(f) => self.secret_files = Some(f),
-            Event::Job { job } if matches!(job.job.kind, JobKind::Github | JobKind::Tailnet | JobKind::SteamLogin) => {
+            Event::Job { job } if matches!(job.job.kind, JobKind::Github | JobKind::Tailnet) => {
                 self.jobs.insert(job.job.id.clone(), *job);
             }
             Event::JobGone { id } => return self.jobs.shift_remove(&id).is_some(),
@@ -107,12 +102,6 @@ pub const DEVICES_DESC: &str = "On your tailnet. Trusted ones can manage this ma
 /// What signing out does (and doesn't: WadOS can't revoke the token without its app's secret).
 pub const SIGN_OUT_NOTE: &str = "Signing out forgets the sign-in on this machine and takes it off your WadSpaces \
      account. GitHub still lists WadOS under your authorized apps until you revoke it there.";
-
-/// A Steam account's line: how many games, and how many are here.
-pub fn steam_line(a: &wad_proto::SteamAccount) -> String {
-    let here = a.games.iter().filter(|g| g.installed).count();
-    format!("Signed in · {} games · {here} downloaded here", a.games.len())
-}
 
 /// The sign-in's row: its title and subtitle. `github`: who's signed in here;
 /// `account`: the machine's link (None until wadd says, or Off: no account).
@@ -300,8 +289,6 @@ pub struct Accounts {
     /// Calls on their way, by what they do ("signin", "trust:<id>"…).
     pending: RefCell<HashSet<String>>,
     queued: std::cell::Cell<bool>,
-    /// Set up WadSpaces leaves Steam out (it's Settings').
-    steam: std::cell::Cell<bool>,
 }
 
 impl Accounts {
@@ -333,7 +320,6 @@ impl Accounts {
             state: RefCell::default(),
             pending: RefCell::default(),
             queued: std::cell::Cell::new(false),
-            steam: std::cell::Cell::new(true),
         })
     }
 
@@ -394,9 +380,6 @@ impl Accounts {
             self.column.append(&g.root);
         }
         self.column.append(&self.tailscale(&st).root);
-        if self.steam.get() {
-            self.column.append(&self.steam(&st).root);
-        }
         let t = st.tailnet.clone().unwrap_or_default();
         if t.state == TailnetState::Running && !t.asks.is_empty() {
             self.column.append(&self.asks(&t).root);
@@ -404,101 +387,6 @@ impl Accounts {
         if !t.devices.is_empty() {
             self.column.append(&self.devices(&t).root);
         }
-    }
-
-    /// wadd's word on the Steam accounts, read again from their folders.
-    pub fn load_steam(&self) {
-        let w = self.me.clone();
-        self.link.call(
-            |wadd| async move { wadd.steam().await },
-            move |r| {
-                if let (Some(m), Ok(list)) = (w.upgrade(), r) {
-                    m.state.borrow_mut().steam = list;
-                    m.queue_draw();
-                }
-            },
-        );
-    }
-
-    fn steam(&self, st: &State) -> Group {
-        let g = Group::new("Steam", STEAM_DESC);
-        g.root.set_widget_name("group-steam");
-        let job = st.latest(JobKind::SteamLogin);
-        let busy = job.is_some_and(|j| j.job.status == JobStatus::Running) || self.busy("steam");
-        for a in &st.steam {
-            let row = Row::new(Some("gamepad-2"), Tone::Accent, &a.name, &steam_line(a)).named("steam");
-            g.add(&row.root);
-            for game in a.games.iter().filter(|x| x.installed && !x.pushed) {
-                let (w, id) = (self.me.clone(), game.id.clone());
-                let on = st.ticked.contains(&game.id);
-                let toggle = wad_gtk::form::Toggle::new(on, move |on| {
-                    if let Some(m) = w.upgrade() {
-                        let mut s = m.state.borrow_mut();
-                        if on {
-                            s.ticked.insert(id.clone());
-                        } else {
-                            s.ticked.remove(&id);
-                        }
-                    }
-                });
-                let r = Row::new(None, Tone::Plain, &game.name, "Downloaded here");
-                r.ctl.append(&toggle.root);
-                g.add(&r.root);
-            }
-            if a.games.iter().any(|x| x.installed && !x.pushed) {
-                let push = kit::button(
-                    "Keep the ones ticked in your GitHub packages",
-                    Variant::Secondary,
-                    Some("upload"),
-                    true,
-                );
-                let (w, account) = (self.me.clone(), a.id.clone());
-                let ids: Vec<String> = a.games.iter().map(|x| x.id.clone()).collect();
-                push.connect_clicked(move |_| {
-                    let Some(m) = w.upgrade() else { return };
-                    let chosen: Vec<String> =
-                        ids.iter().filter(|i| m.state.borrow().ticked.contains(*i)).cloned().collect();
-                    if chosen.is_empty() {
-                        return;
-                    }
-                    let account = account.clone();
-                    m.ask("steam-push".into(), move |wadd| async move { wadd.steam_push(&account, chosen).await });
-                });
-                g.add(&push);
-            }
-        }
-        let (title, sub) = match st.steam.is_empty() {
-            true => ("Not signed in", "Sign in to play the games you own in gamespaces"),
-            false => ("Another Steam account", "Its library joins the others"),
-        };
-        let row = Row::new(Some("gamepad-2"), Tone::Plain, title, sub).named("steam-new");
-        let b = kit::button(
-            if busy { "Signing in…" } else { "Sign in with Steam" },
-            Variant::Primary,
-            Some("log-in"),
-            true,
-        );
-        b.set_sensitive(!busy);
-        let w = self.me.clone();
-        b.connect_clicked(move |_| {
-            if let Some(m) = w.upgrade() {
-                m.ask("steam".into(), |wadd| async move { wadd.steam_signin("Steam").await });
-            }
-        });
-        row.ctl.append(&b);
-        g.add(&row.root);
-        if self.note.label().contains("sign in to WadSpaces once more") {
-            let again = kit::button("Sign in again for packages", Variant::Secondary, Some("log-in"), true);
-            let w = self.me.clone();
-            again.connect_clicked(move |_| {
-                if let Some(m) = w.upgrade() {
-                    let req = SignInRequest { scopes: vec!["write:packages".into()] };
-                    m.ask("signin".into(), move |wadd| async move { wadd.github_signin(&req).await });
-                }
-            });
-            g.add(&again);
-        }
-        g
     }
 
     fn wadspaces(&self, st: &State) -> Group {
@@ -892,11 +780,9 @@ pub fn make(ctx: &Ctx) -> Rc<dyn Panel> {
     Rc::new(AccountsPanel(Accounts::new(ctx.link.clone())))
 }
 
-/// Accounts as Set up WadSpaces' step: the WadSpaces sign-in and Tailscale, no Steam.
+/// Accounts as Set up WadSpaces' step: the WadSpaces sign-in and Tailscale.
 pub fn make_for_setup(ctx: &Ctx) -> Rc<dyn Panel> {
-    let a = Accounts::new(ctx.link.clone());
-    a.steam.set(false);
-    Rc::new(AccountsPanel(a))
+    Rc::new(AccountsPanel(Accounts::new(ctx.link.clone())))
 }
 
 struct AccountsPanel(Rc<Accounts>);
@@ -904,7 +790,6 @@ struct AccountsPanel(Rc<Accounts>);
 impl Panel for AccountsPanel {
     fn build(&self, _: &Ctx) -> gtk::Widget {
         self.0.draw();
-        self.0.load_steam();
         self.0.root.clone().upcast()
     }
 
@@ -912,13 +797,6 @@ impl Panel for AccountsPanel {
         let a = &self.0;
         let changed = match i {
             Incoming::Event(e) => {
-                // A sign-in or a push ending changes what the accounts say.
-                if let Event::Job { job } = e
-                    && matches!(job.job.kind, JobKind::SteamLogin | JobKind::GameStage)
-                    && job.job.status != JobStatus::Running
-                {
-                    a.load_steam();
-                }
                 let mut st = a.state.borrow_mut();
                 let was = st.connected;
                 st.connected = true;

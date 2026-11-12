@@ -187,7 +187,6 @@ if [[ -f /var/lib/wados/images.list ]]; then
                 mount -t tmpfs tmpfs /run/containers
                 mount -t tmpfs tmpfs /run/libpod
                 podman load --quiet
-                restorecon -R /var/lib/containers 2>/dev/null || true
             ' _ "${VAR}/lib/containers"; then
             fail "couldn't copy the stick's offline images onto the disk"
         fi
@@ -208,7 +207,18 @@ if [[ -d "${CLONE}" ]]; then
     rm -rf "${VAR}${CLONE#/var}"
     cp -a "${CLONE}" "${VAR}${CLONE#/var}"
     chown -R 1000:1000 "${VAR}${CLONE#/var}"
-    restorecon -R "${VAR}/lib/wados/projects" 2>/dev/null || true
+fi
+# SELinux labels for what was copied into the disk's /var, by this system's
+# policy (the disk's is the same image) and its paths as the disk will see
+# them: restorecon on ${VAR}/… would look up the mount's own path and find
+# no label for it.
+labelled=()
+for d in "${VAR}/lib/wados" "${VAR}/lib/containers"; do
+    [[ -d "${d}" ]] && labelled+=("${d}")
+done
+if ((${#labelled[@]})); then
+    setfiles -F -r "${VAR%/var}" /etc/selinux/targeted/contexts/files/file_contexts "${labelled[@]}" \
+        || echo "warning: couldn't label ${labelled[*]} (SELinux may deny them on the disk)"
 fi
 
 step "Finishing"

@@ -123,6 +123,22 @@ button.wb-pop-link {
 }
 button.wb-pop-link:hover { background-color: var(--surface-3); color: var(--fg); }
 
+/* ------------------------------------------------------------ downloads */
+
+button.wb-downloads { padding: 0 3px; }
+button.wb-downloads > overlay > drawingarea { color: var(--accent); }
+button.wb-downloads.running > overlay > wad-icon { color: var(--accent); }
+.wb-dl-row { padding: 8px; border-radius: 10px; }
+.wb-dl-row.done:hover { background-color: var(--surface-3); }
+.wb-dl-row.failed .wb-dl-name { color: var(--muted); }
+.wb-dl-row.failed .wb-pop-small { color: var(--danger); }
+.wb-dl-glyph { color: var(--muted); }
+.wb-dl-row.done .wb-dl-glyph { color: var(--accent); }
+.wb-dl-name { font-size: 13px; font-weight: 600; }
+progressbar.wb-dl-bar > trough { min-height: 4px; border-radius: 2px; background-color: var(--surface-3); }
+progressbar.wb-dl-bar > trough > progress { min-height: 4px; border-radius: 2px; background-color: var(--accent); }
+button.wb-dl-act { min-width: 28px; min-height: 28px; padding: 0; }
+
 /* A switch, as ui/Toggle: 40 × 24, its knob 18. */
 switch.wb-toggle {
   padding: 2px 1px;

@@ -2,7 +2,7 @@
 //! opened by the shell at the first sign-in on a new machine. Welcome,
 //! Wi-Fi, Accounts, WadOS (and NVIDIA's host image, if it's wanted), Done. wadd keeps where it's got to, so closed
 //! early it opens again where it was. Wi-Fi and Accounts are Settings' own
-//! panels, Accounts without Steam (signing in to it is for Settings).
+//! panels, Accounts (the WadSpaces sign-in and Tailscale).
 
 use std::cell::RefCell;
 use std::rc::Rc;

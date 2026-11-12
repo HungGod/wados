@@ -104,6 +104,8 @@ pub struct World {
     pub wired: Option<(bool, u32)>,
     /// Why the last join failed (NMDeviceStateReason).
     pub reason: u32,
+    /// What the connectivity check found (`crate::PORTAL`: a sign-in page).
+    pub connectivity: u32,
 }
 
 pub type W = Arc<Mutex<World>>;
@@ -235,6 +237,10 @@ impl Nm {
     #[zbus(property)]
     fn wireless_hardware_enabled(&self) -> bool {
         self.0.lock().unwrap().hardware
+    }
+    #[zbus(property)]
+    fn connectivity(&self) -> u32 {
+        self.0.lock().unwrap().connectivity
     }
 }
 

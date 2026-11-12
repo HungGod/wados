@@ -285,6 +285,8 @@ struct FakeImages {
     here: Mutex<HashMap<String, (String, u64, f64)>>,
     /// What the registry has, by reference: (id, size).
     remote: Mutex<HashMap<String, (String, u64)>>,
+    /// When the registry's were built (Unix seconds); none: later than any here.
+    remote_created: Mutex<HashMap<String, f64>>,
     token: Option<String>,
     pulls: Mutex<Vec<(String, bool)>>,
     /// Images this machine built (a WadOS wadspace's): reference → (id, version).
@@ -382,6 +384,13 @@ impl Images for FakeImages {
         let (_, reference, id, version) = found.ok_or("no such image in it")?;
         self.built.lock().unwrap().push((reference, id, version));
         Ok(())
+    }
+
+    async fn published_created(&self, reference: &str, _token: Option<String>) -> Res<f64> {
+        if !self.remote.lock().unwrap().contains_key(reference) {
+            return Err(format!("{reference}: manifest unknown"));
+        }
+        Ok(self.remote_created.lock().unwrap().get(reference).copied().unwrap_or(f64::MAX))
     }
 
     async fn remote(&self, reference: &str, _token: Option<String>) -> Res<Version> {
@@ -935,6 +944,68 @@ async fn the_bases_listed_and_refreshed() {
     assert_eq!(up.images.pulls.lock().unwrap()[0], ("ghcr.io/hunggod/wados-base:44".into(), false));
 }
 
+/// Both bases here (built at `here`), and published (built at `published`).
+fn bases_at(here: f64, published: f64) -> FakeImages {
+    let images = FakeImages::default();
+    for (local, remote, id) in [
+        ("localhost/wados-base:44", "ghcr.io/hunggod/wados-base:44", "base"),
+        ("localhost/wados-stream:44", "ghcr.io/hunggod/wados-stream:44", "stream"),
+    ] {
+        images.here.lock().unwrap().insert(local.into(), (format!("sha256:{id}-here"), 1_000, here));
+        images.remote.lock().unwrap().insert(remote.into(), (format!("sha256:{id}-published"), 2_000));
+        images.remote_created.lock().unwrap().insert(remote.into(), published);
+    }
+    images
+}
+
+fn pulls_of(up: &Up) -> Vec<JobInfo> {
+    up.jobs.list().into_iter().filter(|j| j.job.kind == JobKind::Pull).collect()
+}
+
+#[tokio::test]
+async fn a_base_here_as_new_or_newer_is_kept() {
+    // A stick's: built where the stick was made, after CI's.
+    let up = up_with(machine(), bases_at(2_000.0, 1_000.0), |_, _| {});
+    let j = up.ended(&up.u.refresh_bases().await.unwrap()).await;
+    assert_eq!(j.job.status, JobStatus::Done);
+    assert!(up.images.pulls.lock().unwrap().is_empty(), "nothing downloaded");
+    assert_eq!(up.images.here.lock().unwrap()["localhost/wados-base:44"].0, "sha256:base-here", "not replaced");
+    let lines = up.jobs.get(&j.job.id, 0).unwrap().lines;
+    assert!(lines.iter().any(|l| l.contains("the one here is as new")), "{lines:?}");
+}
+
+#[tokio::test]
+async fn the_daily_look_is_quiet_unless_a_newer_base_is_published() {
+    let daily = |_: &mut FakeBootc, s: &mut Settings| {
+        s.bases_every = BASES_EVERY;
+        s.schedule = true;
+    };
+    // As new as the published ones: no job, nothing downloaded; looked at, for a day.
+    let up = up_with(machine(), bases_at(1_000.0, 1_000.0), daily);
+    up.u.due().await;
+    tokio::time::sleep(Duration::from_millis(30)).await;
+    assert!(pulls_of(&up).is_empty(), "no refresh in Activity");
+    assert!(up.images.pulls.lock().unwrap().is_empty());
+    let saved: Saved =
+        serde_json::from_slice(&std::fs::read(up._dir.path().join("state/updates.json")).unwrap()).unwrap();
+    assert!(saved.bases_at.is_some());
+
+    // CI's newer: refreshed (both looked at; only the newer one's downloaded).
+    let up = up_with(machine(), bases_at(1_000.0, 5_000.0), daily);
+    up.u.due().await;
+    for _ in 0..100 {
+        if !pulls_of(&up).is_empty() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let pulls = pulls_of(&up);
+    assert_eq!(pulls.len(), 1, "one refresh");
+    let j = up.ended(&pulls[0]).await;
+    assert_eq!(j.job.status, JobStatus::Done);
+    assert_eq!(up.images.here.lock().unwrap()["localhost/wados-base:44"].0, "sha256:base-published");
+}
+
 #[test]
 fn the_nvidia_image_is_beside_the_plain_one() {
     assert_eq!(
@@ -980,6 +1051,16 @@ async fn registry_version_reads_ghcr() {
     assert!(ci_version(&v.version), "{v:?}");
     assert!(v.digest.as_deref().is_some_and(|d| d.starts_with("sha256:")), "{v:?}");
     eprintln!("ghcr has {v:?}");
+}
+
+/// The real registry (network): `cargo test -p wadd --lib -- --ignored registry_created_reads_ghcr`.
+#[tokio::test]
+#[ignore]
+async fn registry_created_reads_ghcr() {
+    let t = registry_created("ghcr.io/hunggod/wados-base:44", None).await.expect("ghcr answers");
+    // After WadOS's first base (2026), before a century from now.
+    assert!(t > 1.77e9 && t < 4.1e9, "{t}");
+    eprintln!("ghcr's base was built at {t}");
 }
 
 #[test]

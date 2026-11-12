@@ -27,6 +27,7 @@ mod overlays;
 mod pam;
 mod peers;
 mod placer;
+mod portal;
 mod session;
 mod shell;
 mod signin;
@@ -127,6 +128,8 @@ fn activate(app: &gtk::Application, with_builder: bool) {
     // Phase 6: my other machines' wadspaces and copies; sign-ins in WadBrowser.
     peers::start(&shell);
     signin::start(&shell);
+    // A hotel's (a café's) sign-in page, when its network wants one.
+    portal::start(&shell);
     let session = session::Session::new(&shell, &lock);
     first_run(&shell, &lock);
     // The lock screen's notifications: the unread ones, unless Settings turned them off.

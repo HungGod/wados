@@ -122,26 +122,6 @@ impl StreamUnit {
     }
 }
 
-/// What each of a wadspace's games runs: `{id, name, exec}`.
-fn game_launchers(ws: &Wadspace, lib: &wad_model::edit::Library) -> Vec<serde_json::Value> {
-    use wad_model::AppId;
-    let mut out = vec![];
-    if ws.has_app(AppId::Dolphin) {
-        for d in lib.discs.values() {
-            let exec = format!("wadspaces-dolphin -b -e \"/config/Games/{}/{}\"", d.id, d.file);
-            out.push(serde_json::json!({ "id": d.id, "name": d.name, "exec": exec }));
-        }
-    }
-    for e in ws.exts.iter().filter(|e| e.app == AppId::Steam) {
-        if let Some(appid) = wad_model::vdf::appid_of(&e.id) {
-            let exec = format!("gamescope -f -- wadspaces-steam -silent -applaunch {appid}");
-            let name = e.name.clone().unwrap_or_else(|| e.id.clone());
-            out.push(serde_json::json!({ "id": e.id, "name": name, "exec": exec }));
-        }
-    }
-    out
-}
-
 /// What ends a wadspace's stream when the person at the machine opens it (streams.rs).
 #[async_trait]
 pub trait StreamEnds: Send + Sync + 'static {
@@ -1130,11 +1110,11 @@ impl Runs {
             files.push(("mcp.json".into(), None));
         }
         // Its games' launchers (init-wadspaces-workspace).
-        let list = game_launchers(ws, &self.docs.snapshot());
+        let games = extras::games_json(ws, self.docs.snapshot().discs.values());
         if ws.has_app(wad_model::AppId::Dolphin) {
             let _ = std::fs::create_dir_all(self.settings.state_dir.join("discs"));
         }
-        files.push(("games.json".into(), (!list.is_empty()).then(|| serde_json::Value::Array(list).to_string())));
+        files.push(("games.json".into(), games));
         files.push(("display".into(), Some(format!("{display}\n"))));
         files.push(("screens".into(), Some(format!("{screens}\n"))));
         for (name, text) in files {

@@ -1085,3 +1085,29 @@ async fn after_a_restart_a_stream_that_moved_still_goes_back_on_the_screen() {
     assert!(routes.guids().is_empty());
     assert!(t.rig.fake.calls().contains(&format!("stop wad-{id}.service")));
 }
+
+#[tokio::test]
+async fn a_games_own_stream_has_player_ones_gamepad() {
+    let t = up(Opts::default()).await;
+    let game = t.rig.wadspace("Kart", &[AppId::Dolphin], &[]);
+    // Dolphin's a package: built first, as on a machine.
+    let build = t.rig.builds.request(&game).await.unwrap().job.expect("a build").job.id;
+    assert_eq!(t.rig.finished(&build).await, JobStatus::Done);
+    t.stream(&game, StreamMode::Private).await;
+    let side = t.unit(&format!("wadstream-{game}.container")).unwrap();
+    assert!(side.lines().any(|l| l == "Environment=SELKIES_GAMEPAD_ENABLED=true"), "{side}");
+    let ws = t.unit(&format!("wad-{game}.container")).unwrap();
+    assert!(ws.contains("LD_PRELOAD="), "its apps get the pads: {ws}");
+    // Player 1's slot, and no one else's; its link is its own, not Play together's.
+    let key = t.secret(&format!("wad_stream_key_{game}")).expect("its key");
+    let tokens: Value = serde_json::from_str(&read(&t.folder(&game).join("tokens.json"))).unwrap();
+    assert_eq!(tokens, json!({ key: {"role": "controller", "slot": 1} }));
+    assert!(t.s.share(&game).await.unwrap().players.is_empty());
+    assert!(t.secret(&format!("wad_stream_players_{game}")).is_none());
+
+    // A wadspace that isn't a game's has none.
+    let plain = t.wadspace("Studio");
+    t.stream(&plain, StreamMode::Private).await;
+    let side = t.unit(&format!("wadstream-{plain}.container")).unwrap();
+    assert!(!side.contains("SELKIES_GAMEPAD_ENABLED"), "{side}");
+}

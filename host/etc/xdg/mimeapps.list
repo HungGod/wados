@@ -1,0 +1,4 @@
+# Folders open in Files (a browser's "Open Downloads folder", any app
+# opening one). A user's own ~/.config/mimeapps.list wins.
+[Default Applications]
+inode/directory=io.wados.Files.desktop

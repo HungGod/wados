@@ -2,7 +2,7 @@
 //! `Browser.svelte`): the tab bar above the header bar, each tab its
 //! favicon, title and ×; the header bar's back, forward and reload, its
 //! middle (Full's address, Focus's page title, an app's offsite pill), the
-//! shield, the profile chip and ⋮, and the loading line under it; under
+//! downloads button (once there's a download), the shield, the profile chip and ⋮, and the loading line under it; under
 //! that, a GitHub sign-in window's code.
 //!
 //! Only drawing: what the buttons do is `window.rs`'s and `wire.rs`'s.
@@ -18,6 +18,7 @@ use webkit6::WebView;
 use webkit6::prelude::*;
 
 use crate::chip::{ChipInfo, ProfileChip};
+use crate::downloads::{DownloadsActions, DownloadsButton};
 use crate::shield::{Shield, ShieldActions};
 
 /// WadBrowser's logo: on its own pages, in place of a site's icon.
@@ -435,6 +436,7 @@ pub(super) struct Header {
     pub forward: gtk::Button,
     pub reload: gtk::Button,
     pub address: Address,
+    pub downloads: Rc<DownloadsButton>,
     pub shield: Rc<Shield>,
     pub chip: ProfileChip,
     pub menu: gtk::Button,
@@ -452,6 +454,7 @@ impl Header {
         title: &gtk::Label,
         offsite: &gtk::Box,
         shield: ShieldActions,
+        downloads: DownloadsActions,
         chip: ChipInfo,
         chip_clicked: impl Fn(&gtk::Button) + 'static,
     ) -> Header {
@@ -476,6 +479,8 @@ impl Header {
         row.append(&middle);
 
         let end = gtk::Box::builder().spacing(6).css_classes(["wb-end"]).build();
+        let downloads = DownloadsButton::new(downloads);
+        end.append(downloads.button());
         let shield = Shield::new(shield);
         end.append(shield.button());
         let chip = ProfileChip::new(&chip, chip_clicked);
@@ -499,6 +504,6 @@ impl Header {
         column.append(&overlay);
         column.append(&code.root);
         let root = gtk::WindowHandle::builder().child(&column).build();
-        Header { root, back, forward, reload, address, shield, chip, menu, loading, controls, code }
+        Header { root, back, forward, reload, address, downloads, shield, chip, menu, loading, controls, code }
     }
 }
