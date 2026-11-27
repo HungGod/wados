@@ -2,10 +2,16 @@
 ; with semodule and checks it's there. SELinux stays enforcing.
 ;
 ; What a wadspace on the screen may use of the person's session besides the
-; Wayland socket wadd makes it, which needs nothing here: wadd labels that
-; socket and its folder for containers (apps/wadd/src/screen.rs), and each
-; wadspace runs as container_t with categories of its own (wad-gen's
-; units.rs: SecurityLabelLevel), apart from the others.
+; Wayland socket wadd makes it: wadd labels that socket container_t and its
+; folder for containers (apps/wadd/src/screen.rs), and each wadspace runs as
+; container_t with categories of its own (wad-gen's units.rs:
+; SecurityLabelLevel), apart from the others.
+;
+; A wadspace with nested containers (podman, Steam's pressure-vessel: wad-gen's
+; units::nested) runs as container_engine_t instead, which container-selinux
+; doesn't let connect to a container_t socket: its desktop waited for the
+; screen for ever. So it's given each rule here that container_t has.
+(allow container_engine_t container_t (unix_stream_socket (connectto)))
 ;
 ; PulseAudio: the session's socket (pipewire-pulse.socket's, which the
 ; person's systemd makes in /run/user/1000/pulse) is born wadspaces_sock_t,
@@ -19,6 +25,8 @@
 (typetransition unconfined_t user_tmp_t sock_file "native" wadspaces_sock_t)
 (allow container_t wadspaces_sock_t (sock_file (getattr open read write append)))
 (allow container_t unconfined_t (unix_stream_socket (connectto)))
+(allow container_engine_t wadspaces_sock_t (sock_file (getattr open read write append)))
+(allow container_engine_t unconfined_t (unix_stream_socket (connectto)))
 
 ; The shared memory the session's labwc hands a wadspace's labwc on its
 ; socket: wlroots makes it in /dev/shm (user_tmp_t) and passes only the fd
@@ -28,6 +36,7 @@
 ; its screen folder's pulse/ holds only the socket above. Found in the VM
 ; (tools/vm.sh check).
 (allow container_t user_tmp_t (file (map read getattr)))
+(allow container_engine_t user_tmp_t (file (map read getattr)))
 
 ; greetd's config for this start (/usr/libexec/wados/greetd-config writes it,
 ; then restores its label): greetd runs as xdm_t, which reads files of its
