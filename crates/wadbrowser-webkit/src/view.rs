@@ -212,6 +212,16 @@ pub fn create_related_view(opener: &WebView, prefs: &Preferences) -> WebView {
     view
 }
 
+/// No `document.startViewTransition`, before a page's own scripts. Starting a
+/// view transition turns compositing on, and where WebKit can't composite
+/// (no GPU it can use, or acceleration off) WebKitGTK 2.54 aborts the page's
+/// process there (a release assert in `FrameRenderer::graphicsLayerFactory`):
+/// YouTube's watch pages call it, and their tab stopped. 2.54 has no setting
+/// for it (no runtime feature), so pages see a browser without the API, and
+/// change without the animation, as they check for it first.
+const NO_VIEW_TRANSITIONS_JS: &str =
+    "try{delete Document.prototype.startViewTransition;delete document.startViewTransition;}catch(e){}";
+
 fn setup(view: &WebView, st: ViewState, prefs: &Preferences) {
     let st = Rc::new(st);
     // SAFETY: the key is this module's, read back only as `Rc<ViewState>` (`state`).
@@ -219,6 +229,13 @@ fn setup(view: &WebView, st: ViewState, prefs: &Preferences) {
     VIEWS.with_borrow_mut(|all| all.push(view.downgrade()));
 
     apply_privacy_headers(view, prefs);
+    st.ucm.add_script(&UserScript::new(
+        NO_VIEW_TRANSITIONS_JS,
+        UserContentInjectedFrames::AllFrames,
+        UserScriptInjectionTime::Start,
+        &[],
+        &[],
+    ));
     let shield = UserScript::for_world(
         SHIELD_JS,
         UserContentInjectedFrames::AllFrames,
