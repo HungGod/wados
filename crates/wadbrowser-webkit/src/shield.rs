@@ -1,7 +1,8 @@
 //! The shield (the header bar's popover): what the blockers stopped on a
-//! page and in all, whether they're off for a site, and "Block all social
-//! media". Its toggles are kept (the allowlist in the store, the social
-//! blocker in the settings) and put into every view at once.
+//! page and in all, and whether the ad blocker's off for a site (its toggle,
+//! kept in the store's allowlist and put into every view at once). Whether
+//! it's on at all, and which sites are blocked, are wadbrowser.conf's
+//! ([`settings_changed`]).
 
 use crate::engine::engine;
 use crate::view::{self, state};
@@ -30,8 +31,6 @@ pub struct ShieldState {
     pub allowed: bool,
     /// The ad and tracker blocker is on at all.
     pub enabled: bool,
-    /// "Block all social media".
-    pub block_social: bool,
 }
 
 /// The shield for `view`'s page.
@@ -43,7 +42,6 @@ pub fn shield(view: &WebView) -> ShieldState {
         site: site_key(&uri).filter(|_| uri.starts_with("http")),
         allowed: site_allowed(&uri),
         enabled: engine().is_some_and(|e| e.privacy.is_enabled()),
-        block_social: social_blocking(),
     }
 }
 
@@ -89,47 +87,36 @@ pub fn set_site_allowed(uri: &str, allowed: bool) {
     changed(None);
 }
 
-/// "Block all social media" is on.
-pub fn social_blocking() -> bool {
-    engine().is_some_and(|e| e.prefs.borrow().block_social)
-}
-
-/// "Block all social media" on or off (kept in the settings); the social
-/// sites' pages open reload.
-pub fn set_social_blocking(on: bool) {
+/// The engine's side of new settings (wadbrowser.conf, already in the
+/// preferences and the blocker): the site blocker compiled again if its sites
+/// changed, every view's filters put right, and the pages that are blocked
+/// now (or no longer) loaded again.
+pub fn settings_changed(blocked_before: &[String]) {
     let Some(e) = engine() else { return };
-    {
-        let mut prefs = e.prefs.borrow_mut();
-        if prefs.block_social == on {
-            return;
-        }
-        prefs.block_social = on;
-        if let Err(err) = prefs.save(&e.paths) {
-            tracing::warn!("saving the settings: {err}");
-        }
+    let blocked = e.prefs.borrow().blocked_sites.clone();
+    if blocked != blocked_before {
+        crate::filters::sites_changed();
     }
     crate::filters::reapply_all();
     for v in view::live_views() {
-        let host = wadbrowser_core::site::host_of(&v.uri().unwrap_or_default());
-        if wadbrowser_privacy::social_site(&host).is_some() {
+        let uri = v.uri().map(String::from).unwrap_or_default();
+        // A blocked page: the page it stopped, if its site's no longer blocked.
+        if uri.starts_with("wadbrowser://blocked")
+            && let Some(back) = crate::scheme::query_value(&uri, "uri")
+        {
+            let host = wadbrowser_core::site::host_of(&back);
+            if wadbrowser_privacy::blocked_site(&blocked, &host).is_none() {
+                crate::navigate(&v, &back);
+            }
+            continue;
+        }
+        let host = wadbrowser_core::site::host_of(&uri);
+        let now = wadbrowser_privacy::blocked_site(&blocked, &host).is_some();
+        let was = wadbrowser_privacy::blocked_site(blocked_before, &host).is_some();
+        if now != was {
             v.reload();
         }
     }
-    changed(None);
-}
-
-/// The ad and tracker blocker on or off altogether (the settings' `block_ads_trackers`).
-pub fn set_blocker_enabled(on: bool) {
-    let Some(e) = engine() else { return };
-    e.privacy.set_enabled(on);
-    {
-        let mut prefs = e.prefs.borrow_mut();
-        prefs.block_ads_trackers = on;
-        if let Err(err) = prefs.save(&e.paths) {
-            tracing::warn!("saving the settings: {err}");
-        }
-    }
-    crate::filters::reapply_all();
     changed(None);
 }
 
@@ -152,6 +139,5 @@ mod tests {
     fn a_page_without_an_engine_counts_nothing() {
         assert_eq!(super::total_blocked(), 0);
         assert!(!super::site_allowed("https://example.com/"));
-        assert!(!super::social_blocking());
     }
 }

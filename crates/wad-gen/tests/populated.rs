@@ -553,8 +553,11 @@ fn its_extra_folder() {
     assert_eq!(extras::webapps_json(ws(&lib, "desk-lab")), "[]\n");
 
     // What links open in: Focus in IntelligenceQuest; none without WadBrowser.
-    assert!(extras::wadbrowser_conf(ws(&lib, "intelligencequest")).is_some_and(|c| c.ends_with("default = focus\n")));
-    assert!(extras::wadbrowser_conf(ws(&lib, "travel")).is_some_and(|c| c.ends_with("default = full\n")));
+    assert!(extras::wadbrowser_conf(ws(&lib, "intelligencequest")).is_some_and(|c| c.contains("\ndefault = focus\n")));
+    assert!(
+        extras::wadbrowser_conf(ws(&lib, "travel"))
+            .is_some_and(|c| c.contains("\ndefault = full\n") && c.contains("\nblocker = on\n"))
+    );
     assert_eq!(extras::wadbrowser_conf(ws(&lib, "desk-lab")), None);
 
     let files = extras::files(ws(&lib, "desk-lab"), &lib.keys, &Mounts::new());

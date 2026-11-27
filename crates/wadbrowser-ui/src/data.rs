@@ -1,34 +1,8 @@
-//! The plain data the v2 widgets show (menus, the chip, the dialogs), kept
-//! apart from the engine's own types: the chrome maps its profiles and keys
-//! into these.
+//! The plain data the v2 widgets show (menus, the dialogs), kept apart
+//! from the engine's own types: the chrome maps its keys into these.
 
 /// How a window shows the web: Full, Focus, App.
 pub use wadbrowser_core::modes::Mode;
-
-/// Each mode: its label, the hint under it, its icon.
-pub const MODES: [(Mode, &str, &str, &str); 3] = [
-    (Mode::Full, "Full", "Tabs and an address bar", "globe"),
-    (Mode::Focus, "Focus", "Tabs, no address bar", "eye"),
-    (Mode::App, "App", "This site in a window of its own", "app-window"),
-];
-
-/// A mode's id, as the menu's items are named (`full`).
-pub fn mode_id(m: Mode) -> &'static str {
-    match m {
-        Mode::Full => "full",
-        Mode::Focus => "focus",
-        Mode::App => "app",
-    }
-}
-
-/// A browser profile: its own sign-ins, cookies and history.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Profile {
-    pub id: String,
-    pub name: String,
-    /// Its colour, `#rrggbb`.
-    pub color: String,
-}
 
 /// A saved sign-in for the web (a key): the sites it signs in to.
 #[derive(Debug, Clone, PartialEq, Eq)]

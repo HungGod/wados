@@ -1,13 +1,13 @@
 //! WebKit's content filters (its content-blocker JSON, compiled by
 //! `webkit6::UserContentFilterStore`): the blocker's, made from the filter
-//! lists by the adblock crate's `content-blocking` converter, and the
-//! social media blocker's, made from [`SOCIAL`]. WebKit does the blocking;
-//! the browser only counts what it blocked.
+//! lists by the adblock crate's `content-blocking` converter, and the site
+//! blocker's, made from wadbrowser.conf's blocked sites ([`site_rules`]).
+//! WebKit does the blocking; the browser only counts what it blocked.
 //!
 //! The converter ends the lists' rules with one of its own: an
 //! `ignore-previous-rules` for first-party documents (a filter list never
 //! blocks the page you went to, only what it loads). It covers the rules
-//! before it in the same filter only, which is why the social blocker, whose
+//! before it in the same filter only, which is why the site blocker, whose
 //! point is the pages themselves, is a filter of its own.
 
 use anyhow::{Result, anyhow};
@@ -18,28 +18,12 @@ use serde_json::json;
 pub const FORMAT: &str = "wadbrowser-content-1/adblock-0.13";
 /// The blocker's filters' ids start so (then the lists' hash).
 pub const LISTS_PREFIX: &str = "wadbrowser-lists-";
-/// The social blocker's filter's id starts so.
-pub const SOCIAL_PREFIX: &str = "wadbrowser-social-";
+/// The site blocker's filter's id starts so (then its sites' hash).
+pub const SITES_PREFIX: &str = "wadbrowser-sites-";
 
-/// Social media the "Block all social media" blocker stops (the spike's catalog's).
-pub const SOCIAL: &[&str] = &[
-    "x.com",
-    "twitter.com",
-    "facebook.com",
-    "instagram.com",
-    "tiktok.com",
-    "reddit.com",
-    "threads.net",
-    "linkedin.com",
-    "snapchat.com",
-    "bsky.app",
-];
-
-/// The social site `host` is part of, if it's one the blocker stops.
-pub fn social_site(host: &str) -> Option<&'static str> {
-    let h = host.trim().to_ascii_lowercase();
-    let h = h.strip_prefix("www.").unwrap_or(&h);
-    SOCIAL.iter().copied().find(|s| h == *s || h.ends_with(&format!(".{s}")))
+/// The blocked site `host` is part of, if it's one of `blocked` (each with its subdomains).
+pub fn blocked_site<'a>(blocked: &'a [String], host: &str) -> Option<&'a str> {
+    wad_model::browser::blocked_site(blocked, host)
 }
 
 /// The lists as WebKit's rules (JSON), and how many rules there are.
@@ -57,9 +41,13 @@ pub fn lists_rules(lists: &[String]) -> Result<(String, usize)> {
     Ok((json, n))
 }
 
-/// The social blocker's rules: everything from each social site, its pages too.
-pub fn social_rules() -> String {
-    let rules: Vec<_> = SOCIAL
+/// The site blocker's rules: everything from each site and its
+/// subdomains, their pages too. None blocks nothing (but still compiles).
+pub fn site_rules(blocked: &[String]) -> String {
+    if blocked.is_empty() {
+        return nothing_rules();
+    }
+    let rules: Vec<_> = blocked
         .iter()
         .map(|s| {
             json!({
@@ -71,14 +59,14 @@ pub fn social_rules() -> String {
     serde_json::to_string(&rules).unwrap_or_default()
 }
 
-/// The social blocker's filter id (its sites' hash, so a change compiles again).
-pub fn social_identifier() -> String {
+/// The site blocker's filter id for `blocked` (its rules' hash, so a change compiles again).
+pub fn sites_identifier(blocked: &[String]) -> String {
     use sha2::{Digest, Sha256};
     let mut h = Sha256::new();
     h.update(FORMAT.as_bytes());
-    h.update(social_rules().as_bytes());
+    h.update(site_rules(blocked).as_bytes());
     let hex: String = h.finalize().iter().take(8).map(|b| format!("{b:02x}")).collect();
-    format!("{SOCIAL_PREFIX}{hex}")
+    format!("{SITES_PREFIX}{hex}")
 }
 
 /// A rule list that blocks nothing (WebKit won't compile an empty one).
@@ -125,16 +113,19 @@ mod tests {
     }
 
     #[test]
-    fn the_social_blocker_stops_each_site_and_its_subdomains() {
-        assert_eq!(social_site("www.reddit.com"), Some("reddit.com"));
-        assert_eq!(social_site("old.reddit.com"), Some("reddit.com"));
-        assert_eq!(social_site("notreddit.com"), None);
-        assert_eq!(social_site("github.com"), None);
-        let rules: serde_json::Value = serde_json::from_str(&social_rules()).unwrap();
-        assert_eq!(rules.as_array().unwrap().len(), SOCIAL.len());
+    fn the_site_blocker_stops_each_site_and_its_subdomains() {
+        let blocked = vec!["x.com".to_string(), "reddit.com".to_string()];
+        assert_eq!(blocked_site(&blocked, "www.reddit.com"), Some("reddit.com"));
+        assert_eq!(blocked_site(&blocked, "old.reddit.com"), Some("reddit.com"));
+        assert_eq!(blocked_site(&blocked, "notreddit.com"), None);
+        assert_eq!(blocked_site(&blocked, "github.com"), None);
+        let rules: serde_json::Value = serde_json::from_str(&site_rules(&blocked)).unwrap();
+        assert_eq!(rules.as_array().unwrap().len(), 2);
         assert_eq!(rules[0]["trigger"]["url-filter"], "^[a-z][a-z0-9.+-]*://([^/]*\\.)?x\\.com[:/]");
         assert!(rules[0]["trigger"].get("resource-type").is_none(), "pages too");
-        assert!(social_identifier().starts_with(SOCIAL_PREFIX));
-        assert_eq!(social_identifier(), social_identifier());
+        assert!(sites_identifier(&blocked).starts_with(SITES_PREFIX));
+        assert_eq!(sites_identifier(&blocked), sites_identifier(&blocked.clone()));
+        assert_ne!(sites_identifier(&blocked), sites_identifier(&blocked[..1]));
+        assert!(site_rules(&[]).contains("wadbrowser-matches-nothing"));
     }
 }

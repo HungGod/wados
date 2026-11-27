@@ -17,7 +17,6 @@ use std::rc::{Rc, Weak};
 use std::time::Duration;
 use tracing::info;
 use wadbrowser_core::internal::{self, PageAction, SiteCount};
-use wadbrowser_core::profiles::list_profiles;
 use wadbrowser_webkit::{
     Ask, DownloadEvent, Hooks, Page, PageRequest, SessionBundle, create_web_view, downloads, filters, navigate,
     profile_for_uri, scheme, shield, sleep, state, testlog,
@@ -242,31 +241,11 @@ fn page_action(view: &WebView, json: &str) {
             let target = wadbrowser_core::normalize_navigation_input(&to, &prefs);
             open(&ctx, view, &target);
         }
-        PageAction::BlockSocial { on } => shield::set_social_blocking(on),
+        // Privacy's "Block again".
         PageAction::Blockers { site, on } => {
             shield::set_site_allowed(&site, !on);
-            // The blocked page's "let it through": back to the page it stopped.
-            if !on
-                && uri.starts_with("wadbrowser://blocked")
-                && let Some(back) = scheme::query_value(&uri, "uri")
-                && let Some(ctx) = window_of(view)
-            {
-                open(&ctx, view, &back);
-            } else if uri.starts_with("wadbrowser://privacy") {
+            if uri.starts_with("wadbrowser://privacy") {
                 view.reload();
-            }
-        }
-        PageAction::SearchEngine { id } => {
-            let Some(ctx) = window_of(view) else { return };
-            if let Some(engine) = wadbrowser_core::search::engine_from_id(&id) {
-                ctx.state.prefs.borrow_mut().search_engine = engine;
-                let _ = ctx.state.prefs.borrow().save(&ctx.state.paths);
-            }
-        }
-        // The chrome's (wire.rs): the New profile dialog, a web app's window, one of yours removed.
-        PageAction::NewProfile | PageAction::OpenApp { .. } | PageAction::RemoveApp { .. } => {
-            if let Some(ctx) = window_of(view) {
-                super::wire::page_action(&ctx, &action);
             }
         }
     }
@@ -350,21 +329,6 @@ pub(super) fn render(ctx: &Rc<WindowCtx>, uri: &str) -> String {
             internal::newtab_page(&prefs, &super::wire::newtab_tiles())
         }
         "privacy" | "shield" => internal::privacy_page(&privacy(ctx)),
-        "settings" | "preferences" => {
-            let profiles = list_profiles(&ctx.state.paths)
-                .into_iter()
-                .map(|p| internal::ProfileRow { id: p.id, name: p.name, color: p.color })
-                .collect();
-            internal::settings_page(
-                &prefs,
-                &internal::Settings {
-                    block_social: prefs.block_social,
-                    profiles,
-                    apps: super::wire::settings_apps(),
-                    webkit_version: wadbrowser_webkit::webkit_version_string(),
-                },
-            )
-        }
         "history" => {
             let entries = if private { vec![] } else { ctx.state.store.list_history(200).unwrap_or_default() };
             internal::history_page(&entries, private, Utc::now())
@@ -375,6 +339,16 @@ pub(super) fn render(ctx: &Rc<WindowCtx>, uri: &str) -> String {
         "error" => internal::error_html(&q("title"), &q("message"), &q("uri")),
         "blocked" => internal::blocked_html(&q("site")),
         _ => internal::missing_html(uri),
+    }
+}
+
+/// Where the browser's settings change: a wadspace's in its design, the
+/// machine's in Settings.
+fn settings_place() -> &'static str {
+    if wadbrowser_core::wadd::Wadd::here().is_some() {
+        "Settings ▸ Browser"
+    } else {
+        "the Builder’s add-ons for this wadspace"
     }
 }
 
@@ -401,8 +375,9 @@ fn privacy(ctx: &WindowCtx) -> internal::Privacy {
         blocked: shield::total_blocked(),
         blocked_here: here,
         private: ctx.private,
-        block_social: prefs.block_social,
         block_ads: prefs.block_ads_trackers,
+        blocked_sites: prefs.blocked_sites.clone(),
+        set_in: settings_place().into(),
         sites: if ctx.private { vec![] } else { sites },
         allowed: ctx.state.privacy.allowlist().list(),
     }

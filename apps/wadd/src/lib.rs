@@ -494,6 +494,7 @@ impl Server {
             tokio::spawn(app.agents.clone().run()),
             tokio::spawn(app.secret_files.clone().run()),
             tokio::spawn(app.account.clone().run()),
+            tokio::spawn(app.runs.clone().follow_browser_settings()),
         ];
         if let Some(t) = &self.tailnet {
             loops.extend(t.start(app.clone()));

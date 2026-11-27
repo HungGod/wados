@@ -88,6 +88,7 @@
 //!   caller's to decide (the spike doesn't check either).
 
 pub mod agents;
+pub mod browser;
 pub mod catalog;
 pub mod check;
 pub mod chips;

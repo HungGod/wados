@@ -1295,6 +1295,43 @@ impl Runs {
         Ok(())
     }
 
+    /// Keeps each running wadspace's wadbrowser.conf as its design says,
+    /// for as long as wadd runs: the Builder's browser add-ons count at
+    /// once (WadBrowser reads the file again when it changes), not only from
+    /// its next start.
+    pub async fn follow_browser_settings(self: Arc<Self>) {
+        let (_, mut rx) = self.bus.subscribe();
+        loop {
+            match rx.recv().await {
+                Ok(Event::Library(lib)) => {
+                    for ws in &lib.wadspaces {
+                        if self.state(&ws.id).state.phase == Phase::Ready {
+                            self.write_browser_conf(ws);
+                        }
+                    }
+                }
+                Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// Its wadbrowser.conf, if its extra folder's there (written as it started).
+    fn write_browser_conf(&self, ws: &Wadspace) {
+        let dir = PathBuf::from(extras::dir(&self.settings.state_dir.to_string_lossy(), &ws.id));
+        if !dir.is_dir() {
+            return;
+        }
+        let path = dir.join(extras::WADBROWSER_CONF);
+        let done = match extras::wadbrowser_conf(ws) {
+            Some(t) => put(&path, t.as_bytes()),
+            None => remove(&path),
+        };
+        if let Err(e) = done {
+            tracing::warn!("{}: its browser's settings: {e}", ws.id);
+        }
+    }
+
     /// Its display file (and screens): where its desktop draws from its next start of labwc.
     fn write_display(&self, id: &str, streamed: bool) -> Res<()> {
         let dir = PathBuf::from(extras::dir(&self.settings.state_dir.to_string_lossy(), id));

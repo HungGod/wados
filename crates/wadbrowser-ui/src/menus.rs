@@ -1,11 +1,12 @@
 //! The browser's menus as data (the spike's `menus.ts`): right-clicking a
-//! page, the main ⋮ menu (with its Mode submenu) and the profile chip's.
+//! page, and the main ⋮ menu. Neither changes a setting: those are
+//! wadbrowser.conf's (the Builder's add-ons, Settings ▸ Browser).
 //! The chrome passes in what they show and what they do;
 //! [`crate::menu_popover::MenuPopover`] draws them.
 
 use std::rc::Rc;
 
-use crate::data::{MODES, Mode, Profile, WebKey, bare_host, is_own_page, mode_id};
+use crate::data::{WebKey, bare_host, is_own_page};
 
 pub type Run = Rc<dyn Fn()>;
 
@@ -141,7 +142,6 @@ pub struct PageActions {
     pub use_key: Rc<dyn Fn(&WebKey)>,
     pub add_key: Run,
     pub edit_keys: Run,
-    pub new_profile: Run,
     pub inspect: Run,
 }
 
@@ -155,7 +155,6 @@ impl Default for PageActions {
             use_key: Rc::new(|_| {}),
             add_key: noop(),
             edit_keys: noop(),
-            new_profile: noop(),
             inspect: noop(),
         }
     }
@@ -214,7 +213,6 @@ pub fn page_menu(m: &PageMenu, a: &PageActions) -> Vec<Entry> {
             .submenu(signins)
             .off_if(not_web, "Only on web pages")
             .entry(),
-        Item::new("page-new-profile", "New profile…", "user-round-plus", a.new_profile.clone()).entry(),
         Entry::Sep,
         Item::new("page-inspect", "Inspect", "code", a.inspect.clone())
             .off_if(!m.can_inspect, "The developer tools are off")
@@ -224,123 +222,38 @@ pub fn page_menu(m: &PageMenu, a: &PageActions) -> Vec<Entry> {
 
 // ------------------------------------------------------------ the ⋮ menu
 
-/// What the main menu shows.
-#[derive(Debug, Clone, Default)]
-pub struct MainMenu {
-    pub mode: Mode,
-    pub block_social: bool,
-    /// Why the mode can't change (a sign-in window stays one).
-    pub mode_off: Option<String>,
-}
-
 /// What the main menu does.
 #[derive(Clone)]
 pub struct MainActions {
     pub new_tab: Run,
     pub new_window: Run,
     pub new_private_window: Run,
-    pub new_profile: Run,
-    pub set_mode: Rc<dyn Fn(Mode)>,
-    pub set_block_social: Rc<dyn Fn(bool)>,
     /// Opens one of the browser's pages (`wadbrowser://history`).
     pub open: Rc<dyn Fn(&str)>,
 }
 
 impl Default for MainActions {
     fn default() -> Self {
-        Self {
-            new_tab: noop(),
-            new_window: noop(),
-            new_private_window: noop(),
-            new_profile: noop(),
-            set_mode: Rc::new(|_| {}),
-            set_block_social: Rc::new(|_| {}),
-            open: Rc::new(|_| {}),
-        }
+        Self { new_tab: noop(), new_window: noop(), new_private_window: noop(), open: Rc::new(|_| {}) }
     }
 }
 
 /// The ⋮ menu in the header bar.
-pub fn main_menu(m: &MainMenu, a: &MainActions) -> Vec<Entry> {
-    let modes = MODES
-        .iter()
-        .map(|&(mode, label, hint, icon)| {
-            let set = a.set_mode.clone();
-            Item::new(format!("menu-mode-{}", mode_id(mode)), label, icon, Rc::new(move || set(mode)))
-                .hint(hint)
-                .checked(m.mode == mode)
-                .entry()
-        })
-        .collect();
+pub fn main_menu(a: &MainActions) -> Vec<Entry> {
     let open = |url: &'static str| {
         let open = a.open.clone();
         Rc::new(move || open(url)) as Run
     };
-    let social = {
-        let (set, on) = (a.set_block_social.clone(), m.block_social);
-        Rc::new(move || set(!on)) as Run
-    };
     vec![
-        Item::new("menu-new-tab", "New tab", "plus", a.new_tab.clone()).entry(),
-        Item::new("menu-new-window", "New window", "app-window", a.new_window.clone()).entry(),
-        Item::new("menu-new-private", "New private window", "eye-off", a.new_private_window.clone()).entry(),
-        Item::new("menu-new-profile", "New profile…", "user-round-plus", a.new_profile.clone()).entry(),
-        Entry::Sep,
-        Item::new("menu-mode", "Mode", "layout-grid", noop())
-            .submenu(modes)
-            .off_if(m.mode_off.is_some(), m.mode_off.as_deref().unwrap_or_default())
+        Item::new("menu-new-tab", "New tab", "plus", a.new_tab.clone()).key("Ctrl+T").entry(),
+        Item::new("menu-new-window", "New window", "app-window", a.new_window.clone()).key("Ctrl+N").entry(),
+        Item::new("menu-new-private", "New private window", "eye-off", a.new_private_window.clone())
+            .key("Ctrl+Shift+N")
             .entry(),
-        Item::new("menu-block-social", "Block all social media", "shield-ban", social).checked(m.block_social).entry(),
         Entry::Sep,
         Item::new("menu-history", "History", "clock", open("wadbrowser://history")).entry(),
         Item::new("menu-privacy", "Privacy", "shield-check", open("wadbrowser://privacy")).entry(),
-        Item::new("menu-settings", "Settings", "settings", open("wadbrowser://settings")).entry(),
     ]
-}
-
-// ------------------------------------------------------------ the profile chip
-
-/// What the profile chip's menu shows.
-#[derive(Debug, Clone, Default)]
-pub struct ProfileMenu {
-    pub profiles: Vec<Profile>,
-    /// This window's profile.
-    pub current: String,
-    pub private: bool,
-}
-
-/// What it does.
-#[derive(Clone)]
-pub struct ProfileActions {
-    /// A window as profile `id` (this window's own: nothing to do).
-    pub open_as: Rc<dyn Fn(&str)>,
-    pub new_profile: Run,
-    pub new_private_window: Run,
-}
-
-impl Default for ProfileActions {
-    fn default() -> Self {
-        Self { open_as: Rc::new(|_| {}), new_profile: noop(), new_private_window: noop() }
-    }
-}
-
-/// The profile chip: this window's profile, a window as another, a new one.
-pub fn profile_menu(m: &ProfileMenu, a: &ProfileActions) -> Vec<Entry> {
-    let mut out = vec![Entry::Heading(if m.private { "A private window keeps nothing" } else { "Profiles" }.into())];
-    for p in &m.profiles {
-        let this = !m.private && p.id == m.current;
-        let (open_as, id) = (a.open_as.clone(), p.id.clone());
-        out.push(
-            Item::new(format!("profile-{}", p.id), &p.name, "user", Rc::new(move || open_as(&id)))
-                .checked(this)
-                .hint(if this { "This window" } else { "Open a window" })
-                .entry(),
-        );
-    }
-    out.push(Entry::Sep);
-    out.push(Item::new("profile-new", "New profile…", "user-round-plus", a.new_profile.clone()).entry());
-    out.push(Item::new("profile-private", "New private window", "eye-off", a.new_private_window.clone()).entry());
-    out
 }
 
 #[cfg(test)]
@@ -385,17 +298,7 @@ mod tests {
         let items = page("https://www.github.com/HungGod/Writing", keys());
         assert_eq!(
             ids(&items),
-            [
-                "page-back",
-                "page-forward",
-                "page-reload",
-                "|",
-                "page-create-app",
-                "page-signins",
-                "page-new-profile",
-                "|",
-                "page-inspect"
-            ]
+            ["page-back", "page-forward", "page-reload", "|", "page-create-app", "page-signins", "|", "page-inspect"]
         );
         assert_eq!(find(&items, "page-back").unwrap().disabled.as_deref(), Some(""));
         assert!(find(&items, "page-forward").unwrap().enabled());
@@ -481,66 +384,18 @@ mod tests {
     }
 
     #[test]
-    fn the_main_menu_ticks_the_mode_and_the_social_blocker() {
-        let set = Rc::new(RefCell::new(vec![]));
-        let s = set.clone();
-        let social = Rc::new(RefCell::new(None));
-        let so = social.clone();
-        let a = MainActions {
-            set_mode: Rc::new(move |m| s.borrow_mut().push(m)),
-            set_block_social: Rc::new(move |on| *so.borrow_mut() = Some(on)),
-            ..Default::default()
-        };
-        let items = main_menu(&MainMenu { mode: Mode::Focus, block_social: true, mode_off: None }, &a);
-        let modes = &find(&items, "menu-mode").unwrap().submenu;
-        let ticked: Vec<&str> = modes
-            .iter()
-            .filter_map(|e| match e {
-                Entry::Item(it) if it.checked => Some(it.id.as_str()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(ticked, ["menu-mode-focus"]);
-        assert_eq!(find(modes, "menu-mode-app").unwrap().hint.as_deref(), Some("This site in a window of its own"));
-        (find(&items, "menu-mode-app").unwrap().run.as_ref().unwrap())();
-        assert_eq!(*set.borrow(), [Mode::App]);
-        let block = find(&items, "menu-block-social").unwrap();
-        assert!(block.checked);
-        (block.run.as_ref().unwrap())();
-        assert_eq!(*social.borrow(), Some(false), "it turns it off");
-    }
-
-    #[test]
-    fn the_main_menu_opens_the_browsers_pages() {
+    fn the_main_menu_opens_windows_and_the_browsers_pages_but_no_settings() {
         let opened = Rc::new(RefCell::new(vec![]));
         let o = opened.clone();
         let a = MainActions { open: Rc::new(move |u: &str| o.borrow_mut().push(u.to_string())), ..Default::default() };
-        let items = main_menu(&MainMenu { mode: Mode::Full, block_social: false, mode_off: None }, &a);
-        for id in ["menu-history", "menu-privacy", "menu-settings"] {
-            (find(&items, id).unwrap().run.as_ref().unwrap())();
-        }
-        assert_eq!(*opened.borrow(), ["wadbrowser://history", "wadbrowser://privacy", "wadbrowser://settings"]);
-    }
-
-    #[test]
-    fn the_profile_menu_ticks_this_windows_profile_unless_its_private() {
-        let profiles = vec![
-            Profile { id: "default".into(), name: "Personal".into(), color: "#c6ff1f".into() },
-            Profile { id: "work".into(), name: "Work".into(), color: "#7fd3ff".into() },
-        ];
-        let m = ProfileMenu { profiles: profiles.clone(), current: "default".into(), private: false };
-        let items = profile_menu(&m, &ProfileActions::default());
+        let items = main_menu(&a);
         assert_eq!(
             ids(&items),
-            ["[Profiles]", "profile-default", "profile-work", "|", "profile-new", "profile-private"]
+            ["menu-new-tab", "menu-new-window", "menu-new-private", "|", "menu-history", "menu-privacy"]
         );
-        let me = find(&items, "profile-default").unwrap();
-        assert!(me.checked);
-        assert_eq!(me.hint.as_deref(), Some("This window"));
-        assert_eq!(find(&items, "profile-work").unwrap().hint.as_deref(), Some("Open a window"));
-
-        let private = profile_menu(&ProfileMenu { private: true, ..m }, &ProfileActions::default());
-        assert_eq!(ids(&private)[0], "[A private window keeps nothing]");
-        assert!(!find(&private, "profile-default").unwrap().checked);
+        for id in ["menu-history", "menu-privacy"] {
+            (find(&items, id).unwrap().run.as_ref().unwrap())();
+        }
+        assert_eq!(*opened.borrow(), ["wadbrowser://history", "wadbrowser://privacy"]);
     }
 }

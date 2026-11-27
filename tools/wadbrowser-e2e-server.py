@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The local pages tools/wadbrowser-e2e.sh opens in WadBrowser (no real sites).
 
-    wadbrowser-e2e-server.py PORT LOGFILE
+    wadbrowser-e2e-server.py PORT LOGFILE [MEDIA-DIR]
 
 Each request is a line in LOGFILE: "<path> cookie=<Cookie header> dnt=<DNT> gpc=<Sec-GPC>".
 Pages report back through their title (WADBROWSER_TEST_LOG has each title).
@@ -16,6 +16,10 @@ Pages report back through their title (WADBROWSER_TEST_LOG has each title).
   /go?to=URL            goes to URL (a page's own navigation, after it loads)
   /download             a file to download ("wb test #1.txt")
   /big?WORD             white, with "WORD" in huge black letters (for pixel checks); title "BIG WORD"
+  /video?FILE           plays MEDIA-DIR/FILE (muted); title "video FILE playing" once it has, else
+                        "video FILE error <code> <message>"
+  /mse                  what Media Source (YouTube's player) says it plays: title "mse avc1=… vp9=… av1=… aac=… opus=…"
+  /media/FILE           MEDIA-DIR's FILE (Range requests too, as a video's are)
 """
 import sys
 import urllib.parse
@@ -23,6 +27,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1])
 LOG = open(sys.argv[2], "a", buffering=1)
+MEDIA = sys.argv[3] if len(sys.argv) > 3 else None
+TYPES = {".mp4": "video/mp4", ".webm": "video/webm", ".mkv": "video/x-matroska"}
 
 PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
@@ -104,6 +110,28 @@ class H(BaseHTTPRequestHandler):
             self.send(
                 page(f"BIG {word}", body).replace(b"<body>", b'<body style="margin:0;background:#fff">'),
             )
+        elif p == "/video":
+            f = u.query
+            js = (
+                f"var v = document.querySelector('video'), f = {f!r};"
+                "v.addEventListener('timeupdate', function () {"
+                " if (v.currentTime > 0.3) document.title = 'video ' + f + ' playing'; });"
+                "v.addEventListener('error', function () { var e = v.error || {};"
+                " document.title = 'video ' + f + ' error ' + e.code + ' ' + (e.message || ''); });"
+                "v.play().catch(function (e) { document.title = 'video ' + f + ' error play ' + e; });"
+            )
+            self.send(page(f"video {f}", f'<video muted playsinline src="/media/{f}"></video>', js))
+        elif p == "/mse":
+            js = (
+                "var t = {avc1: 'video/mp4; codecs=\"avc1.64001f\"', vp9: 'video/webm; codecs=\"vp09.00.10.08\"',"
+                " av1: 'video/mp4; codecs=\"av01.0.05M.08\"', aac: 'audio/mp4; codecs=\"mp4a.40.2\"',"
+                " opus: 'audio/webm; codecs=\"opus\"'};"
+                "var out = ['mse']; for (var k in t) out.push(k + '=' + (window.MediaSource ? MediaSource.isTypeSupported(t[k]) : 'none'));"
+                "document.title = out.join(' ');"
+            )
+            self.send(page("mse", script=js))
+        elif p.startswith("/media/") and MEDIA:
+            self.media(p[len("/media/"):])
         elif p == "/download":
             self.send(
                 b"downloaded by WadBrowser\n",
@@ -113,6 +141,37 @@ class H(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.end_headers()
+
+
+    def media(self, name):
+        import os
+
+        path = os.path.join(MEDIA, os.path.basename(name))
+        if not os.path.isfile(path):
+            self.send_response(404)
+            self.end_headers()
+            return
+        data = open(path, "rb").read()
+        ctype = TYPES.get(os.path.splitext(path)[1], "application/octet-stream")
+        rng = self.headers.get("Range", "")
+        if rng.startswith("bytes="):
+            a, _, b = rng[6:].partition("-")
+            start = int(a or 0)
+            end = min(int(b) if b else len(data) - 1, len(data) - 1)
+            chunk = data[start : end + 1]
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{len(data)}")
+        else:
+            chunk = data
+            self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        self.send_header("Content-Length", str(len(chunk)))
+        self.end_headers()
+        try:
+            self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 
 ThreadingHTTPServer(("127.0.0.1", PORT), H).serve_forever()

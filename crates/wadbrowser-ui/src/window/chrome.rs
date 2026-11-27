@@ -2,8 +2,10 @@
 //! `Browser.svelte`): the tab bar above the header bar, each tab its
 //! favicon, title and ×; the header bar's back, forward and reload, its
 //! middle (Full's address, Focus's page title, an app's offsite pill), the
-//! downloads button (once there's a download), the shield, the profile chip and ⋮, and the loading line under it; under
-//! that, a GitHub sign-in window's code.
+//! downloads button (once there's a download), the shield and ⋮, and the
+//! loading line under it; under that, a GitHub sign-in window's code. Tabs
+//! drag: along the bar, onto another window's, or out of the window into a
+//! window of their own ([`TabDrag`]).
 //!
 //! Only drawing: what the buttons do is `window.rs`'s and `wire.rs`'s.
 
@@ -17,7 +19,6 @@ use wadbrowser_core::site;
 use webkit6::WebView;
 use webkit6::prelude::*;
 
-use crate::chip::{ChipInfo, ProfileChip};
 use crate::downloads::{DownloadsActions, DownloadsButton};
 use crate::shield::{Shield, ShieldActions};
 
@@ -45,35 +46,65 @@ struct Tab {
     handlers: Vec<(glib::Object, glib::SignalHandlerId)>,
 }
 
+/// What a drag of a tab carries (None: it can't move).
+type Payload = Rc<dyn Fn(&TabPage) -> Option<String>>;
+/// A dropped tab taken: whether it moved.
+type Take = Rc<dyn Fn(&str, u32) -> bool>;
+
+/// What dragging a tab does (the window's, window.rs).
+pub(super) struct TabDrag {
+    /// What a drag of `page` carries: its window and place (None: it can't move).
+    pub payload: Payload,
+    /// `page` dropped where nothing took it (outside every window): a window of its own.
+    pub tear_off: Rc<dyn Fn(&TabPage)>,
+    /// A tab (a payload) dropped on this bar, to go at `at`: whether it moved.
+    pub take: Take,
+}
+
 /// The tab bar (`.tabbar`): the tabs, then +, then room to drag the window
-/// by (a double click there opens a new tab), then the window's buttons.
+/// by (a double click there maximizes it, or puts it back), then the
+/// window's buttons.
 pub(super) struct TabStrip {
     pub root: gtk::WindowHandle,
     /// The view's pages (kept: the view only keeps it while someone does).
     pages: gtk::SelectionModel,
     list: gtk::Box,
     tabs: RefCell<Vec<Tab>>,
+    drag: TabDrag,
     /// The window's buttons, when the tab bar's the top of the window.
     pub controls: gtk::WindowControls,
 }
 
+/// Its window maximized, or put back.
+fn toggle_maximized(w: &impl IsA<gtk::Widget>) {
+    if let Some(win) = w.as_ref().root().and_downcast::<gtk::Window>() {
+        if win.is_maximized() {
+            win.unmaximize();
+        } else {
+            win.maximize();
+        }
+    }
+}
+
 impl TabStrip {
-    pub fn new(tab_view: &TabView, new_tab: Rc<dyn Fn()>) -> Rc<TabStrip> {
+    pub fn new(tab_view: &TabView, new_tab: Rc<dyn Fn()>, drag: TabDrag) -> Rc<TabStrip> {
         let row = gtk::Box::builder().css_classes(["wb-tabbar"]).spacing(4).build();
         let list = gtk::Box::builder().spacing(4).build();
         row.append(&list);
         let plus = icon_button("plus", 16, "New tab");
         plus.add_css_class("wb-new-tab");
         row.append(&plus);
-        // The room after the tabs: drags the window; a double click, a new tab.
+        // The room after the tabs: drags the window; a double click
+        // maximizes it (or puts it back), as a title bar's does.
         let room = gtk::Box::builder().hexpand(true).build();
         let twice = gtk::GestureClick::builder().button(1).build();
         twice.set_propagation_phase(gtk::PropagationPhase::Capture);
-        let nt = new_tab.clone();
         twice.connect_pressed(move |g, n, _, _| {
             if n == 2 {
                 g.set_state(gtk::EventSequenceState::Claimed);
-                nt();
+                if let Some(w) = g.widget() {
+                    toggle_maximized(&w);
+                }
             }
         });
         room.add_controller(twice);
@@ -84,7 +115,16 @@ impl TabStrip {
         let root = gtk::WindowHandle::builder().child(&row).build();
 
         let pages = tab_view.pages();
-        let strip = Rc::new(TabStrip { root, pages: pages.clone(), list, tabs: RefCell::default(), controls });
+        let strip = Rc::new(TabStrip { root, pages: pages.clone(), list, tabs: RefCell::default(), drag, controls });
+        // A tab dropped on the bar: there, from this window or another.
+        let drop = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
+        let s = Rc::downgrade(&strip);
+        drop.connect_drop(move |_, value, x, _| {
+            let (Some(s), Ok(payload)) = (s.upgrade(), value.get::<String>()) else { return false };
+            let at = s.place_at(x);
+            (s.drag.take)(&payload, at)
+        });
+        strip.root.add_controller(drop);
         let (s, tv) = (Rc::downgrade(&strip), tab_view.downgrade());
         pages.connect_items_changed(move |_, at, removed, added| {
             if let (Some(s), Some(tv)) = (s.upgrade(), tv.upgrade()) {
@@ -170,6 +210,7 @@ impl TabStrip {
             }
         });
         root.add_controller(click);
+        self.draggable(&root, page);
         let (p, t) = (page.downgrade(), tv.downgrade());
         x.connect_clicked(move |_| {
             if let (Some(p), Some(t)) = (p.upgrade(), t.upgrade()) {
@@ -199,6 +240,47 @@ impl TabStrip {
             set_favicon(&fav, &view);
         }
         Tab { page: page.clone(), root, handlers }
+    }
+
+    /// Where a tab dropped at `x` (the bar's) goes: before the first tab
+    /// whose middle is past it.
+    fn place_at(&self, x: f64) -> u32 {
+        let tabs = self.tabs.borrow();
+        let n = tabs
+            .iter()
+            .take_while(|t| t.root.compute_bounds(&self.root).is_none_or(|b| f64::from(b.x() + b.width() / 2.0) < x))
+            .count();
+        n as u32
+    }
+
+    /// A tab's drag: it carries the tab's window and place, shows the tab,
+    /// and dropped where no window takes it, the tab gets a window of its own.
+    fn draggable(&self, root: &gtk::Box, page: &TabPage) {
+        let source = gtk::DragSource::builder().actions(gtk::gdk::DragAction::MOVE).build();
+        let (payload, p) = (self.drag.payload.clone(), page.downgrade());
+        source.connect_prepare(move |_, _, _| {
+            let page = p.upgrade()?;
+            let s = payload(&page)?;
+            Some(gtk::gdk::ContentProvider::for_value(&s.to_value()))
+        });
+        let r = root.downgrade();
+        source.connect_drag_begin(move |src, _| {
+            if let Some(r) = r.upgrade() {
+                src.set_icon(Some(&gtk::WidgetPaintable::new(Some(&r))), 12, 12);
+            }
+        });
+        let (tear_off, p) = (self.drag.tear_off.clone(), page.downgrade());
+        source.connect_drag_cancel(move |_, _, reason| {
+            if reason != gtk::gdk::DragCancelReason::NoTarget {
+                return false;
+            }
+            let Some(page) = p.upgrade() else { return false };
+            // On a later turn: GTK's still finishing the drag.
+            let tear_off = tear_off.clone();
+            glib::idle_add_local_once(move || tear_off(&page));
+            true
+        });
+        root.add_controller(source);
     }
 
     fn mark_selected(&self, tv: &TabView) {
@@ -243,7 +325,6 @@ pub(super) fn favicon(view: &WebView, size: i32) -> gtk::Widget {
         let page = uri.strip_prefix("wadbrowser://").unwrap_or("").split(['/', '?', '#']).next().unwrap_or("");
         let icon = match page {
             "privacy" | "shield" => "shield-check",
-            "settings" => "settings",
             "history" => "clock",
             _ => return wad_gtk::icon::Svg::new(LOGO, size, size).upcast(),
         };
@@ -438,7 +519,6 @@ pub(super) struct Header {
     pub address: Address,
     pub downloads: Rc<DownloadsButton>,
     pub shield: Rc<Shield>,
-    pub chip: ProfileChip,
     pub menu: gtk::Button,
     pub loading: gtk::ProgressBar,
     /// The window's buttons, when the tab bar's hidden.
@@ -455,8 +535,6 @@ impl Header {
         offsite: &gtk::Box,
         shield: ShieldActions,
         downloads: DownloadsActions,
-        chip: ChipInfo,
-        chip_clicked: impl Fn(&gtk::Button) + 'static,
     ) -> Header {
         let row = gtk::Box::builder().css_classes(["wb-header"]).spacing(8).build();
         row.append(identity);
@@ -483,8 +561,6 @@ impl Header {
         end.append(downloads.button());
         let shield = Shield::new(shield);
         end.append(shield.button());
-        let chip = ProfileChip::new(&chip, chip_clicked);
-        end.append(chip.button());
         let menu = icon_button("ellipsis-vertical", 16, "Main menu");
         end.append(&menu);
         row.append(&end);
@@ -504,6 +580,6 @@ impl Header {
         column.append(&overlay);
         column.append(&code.root);
         let root = gtk::WindowHandle::builder().child(&column).build();
-        Header { root, back, forward, reload, address, downloads, shield, chip, menu, loading, controls, code }
+        Header { root, back, forward, reload, address, downloads, shield, menu, loading, controls, code }
     }
 }

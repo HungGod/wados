@@ -7,9 +7,10 @@ use std::fs;
 #[serde(default)]
 pub struct Preferences {
     pub homepage: String,
+    /// From wadbrowser.conf ([`Preferences::take_conf`]), not this file.
     pub search_engine: SearchEngine,
-    pub restore_session: bool,
     pub https_first: bool,
+    /// From wadbrowser.conf ([`Preferences::take_conf`]), not this file.
     pub block_ads_trackers: bool,
     pub send_dnt: bool,
     pub send_gpc: bool,
@@ -22,8 +23,9 @@ pub struct Preferences {
     pub clear_history_on_quit: bool,
     pub omnibox_suggestion_limit: usize,
     pub block_cosmetic_filters: bool,
-    /// "Block all social media": the social sites' pages, and what other pages load from them.
-    pub block_social: bool,
+    /// Sites that don't open (and their subdomains), from wadbrowser.conf.
+    #[serde(skip)]
+    pub blocked_sites: Vec<String>,
     /// A tab not looked at for this long sleeps (its page unloaded, reloaded when it's
     /// shown again); 0: tabs never sleep.
     pub sleep_tabs_after_minutes: u64,
@@ -43,7 +45,6 @@ impl Default for Preferences {
         Self {
             homepage: "wadbrowser://newtab".into(),
             search_engine: SearchEngine::DuckDuckGo,
-            restore_session: true,
             https_first: true,
             block_ads_trackers: true,
             send_dnt: true,
@@ -57,7 +58,7 @@ impl Default for Preferences {
             clear_history_on_quit: false,
             omnibox_suggestion_limit: 8,
             block_cosmetic_filters: true,
-            block_social: false,
+            blocked_sites: vec![],
             sleep_tabs_after_minutes: 30,
         }
     }
@@ -85,6 +86,19 @@ impl Preferences {
         let text = toml::to_string_pretty(self).context("serializing prefs")?;
         fs::write(&path, text).with_context(|| format!("writing prefs {}", path.display()))?;
         Ok(())
+    }
+
+    /// wadbrowser.conf's settings (the wadspace's design, or Settings ▸
+    /// Browser's), which the browser has no page for: they're never this file's.
+    pub fn take_conf(&mut self, c: &crate::conf::BrowserPrefs) {
+        use crate::conf::Search;
+        self.block_ads_trackers = c.ad_blocker;
+        self.search_engine = match c.search {
+            Search::DuckDuckGo => SearchEngine::DuckDuckGo,
+            Search::Startpage => SearchEngine::Startpage,
+            Search::Wikipedia => SearchEngine::Wikipedia,
+        };
+        self.blocked_sites = c.blocked.clone();
     }
 
     pub fn search_url(&self, query: &str) -> String {
@@ -134,5 +148,23 @@ mod tests {
         let p = Preferences::default();
         assert!(p.search_url("hello world").contains("duckduckgo.com"));
         assert!(p.search_url("hello world").contains("hello+world"));
+    }
+
+    #[test]
+    fn the_confs_settings_are_taken_and_never_kept() {
+        let mut p = Preferences::default();
+        let c = crate::conf::BrowserPrefs {
+            ad_blocker: false,
+            search: crate::conf::Search::Wikipedia,
+            blocked: vec!["x.com".into()],
+        };
+        p.take_conf(&c);
+        assert!(!p.block_ads_trackers);
+        assert!(p.search_url("a").starts_with("https://en.wikipedia.org/"));
+        assert_eq!(p.blocked_sites, vec!["x.com"]);
+        assert!(!toml::to_string(&p).unwrap().contains("x.com"));
+        // An old prefs.toml's keys that are gone are skipped.
+        let old: Preferences = toml::from_str("restore_session = true\nblock_social = true\n").unwrap();
+        assert!(old.blocked_sites.is_empty());
     }
 }

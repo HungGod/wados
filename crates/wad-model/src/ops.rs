@@ -281,6 +281,7 @@ pub fn blank(id: &str, name: &str, machine: &str, now: i64, order: i64) -> Wadsp
         starter: false,
         category: None,
         commands: Vec::new(),
+        browser: Default::default(),
     }
 }
 

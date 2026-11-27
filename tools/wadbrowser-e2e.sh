@@ -25,6 +25,13 @@
 #   error     a real failure gets an error page, at the address that failed
 #   pixels    a first tab, a second launch's tab and an --app window draw
 #             their page (huge black text on white, counted in grim shots)
+#   home      a start opens at the home page, not the last session's tabs
+#             (those only with --restore)
+#   blocked   a site wadbrowser.conf blocks shows the blocked page; the file
+#             changed (unblocked), the page it stopped loads, while it runs
+#   video     H.264 (High, with AAC), HEVC, VP9 (with Opus) and AV1 play, made
+#             here with GStreamer; Media Source (YouTube's player) says it
+#             plays them
 #
 # Runs are without a settings portal (GDK_DEBUG=no-portals), as in a
 # wadspace with none: GTK then has no font DPI, which once left every view
@@ -68,7 +75,8 @@ if ! start_labwc; then
   [ -S "$hl_rt/wayland-0" ] || { stop_labwc; exit 1; }
 fi
 
-python3 "$W/tools/wadbrowser-e2e-server.py" "$PORT" "$OUT/server.log" &
+mkdir -p "$OUT/media"
+python3 "$W/tools/wadbrowser-e2e-server.py" "$PORT" "$OUT/server.log" "$OUT/media" &
 http_pid=$!
 wadd_pid=
 cleanup() {
@@ -321,6 +329,99 @@ else
 fi
 quit
 
+fi
+
+if want home; then
+# ---------------------------------------------------------------- the home page on a start
+run home-1 home -- "$S/show"
+wait_for $'^title\tdefault\tcookies:' "$T" || fail "home: the first run didn't load"
+quit
+run home-2 home -- --restore
+if wait_for $'^loaded\tdefault\t.*/show' "$T"; then
+  pass "home: --restore brought the last session's tab back"
+else
+  fail "home: --restore didn't ($(grep $'^loaded' "$LOG" | head -1))"
+fi
+quit
+# The session's /show again (home-2 kept it): a plain start doesn't open it.
+run home-3 home --
+if wait_for $'^loaded\tdefault\twadbrowser://newtab' "$T" && ! grep -q '/show' "$LOG"; then
+  pass "home: a start opened at the home page, not the last session's tab"
+else
+  fail "home: a start opened $(grep $'^loaded' "$LOG" | head -1)"
+fi
+quit
+fi
+
+if want blocked; then
+# ---------------------------------------------------------------- blocked sites (wadbrowser.conf)
+conf=$OUT/blocked/config/wadbrowser/wadbrowser.conf
+mkdir -p "$(dirname "$conf")"
+printf 'block = 127.0.0.1\n' >"$conf"
+shows=$(grep -c '^/show' "$OUT/server.log")
+run blocked blocked -- "$S/show"
+if wait_for $'^title\tdefault\t127.0.0.1: blocked' "$T"; then
+  pass "blocked: a blocked site shows the blocked page"
+else
+  fail "blocked: no blocked page ($(grep $'^title' "$LOG" | tail -1))"
+fi
+if [ "$(grep -c '^/show' "$OUT/server.log")" != "$shows" ]; then
+  fail "blocked: the server saw the blocked page's request"
+else
+  pass "blocked: the request never left"
+fi
+printf '# unblocked\nblock =\n' >"$conf.tmp" && mv "$conf.tmp" "$conf"
+if wait_for $'^title\tdefault\tcookies:' "$T"; then
+  pass "blocked: unblocked in the file, the page it stopped loaded (while it ran)"
+else
+  fail "blocked: the page didn't come back ($(grep $'^title' "$LOG" | tail -1))"
+fi
+quit
+fi
+
+if want video; then
+# ---------------------------------------------------------------- video
+if ! command -v gst-launch-1.0 >/dev/null; then
+  echo "NOTE video: no gst-launch-1.0 to make the videos with"
+else
+  vt='videotestsrc num-buffers=90 ! video/x-raw,width=320,height=240,framerate=30/1'
+  at='audiotestsrc num-buffers=130 ! audioconvert ! audioresample'
+  make_media() { # FILE PIPELINE...
+    local f=$1; shift
+    gst-launch-1.0 -q -e "$@" >"$OUT/media/$f.gst.log" 2>&1 && [ -s "$OUT/media/$f" ] \
+      || { echo "NOTE video: couldn't make $f (an encoder missing?)"; rm -f "$OUT/media/$f"; }
+  }
+  make_media h264-high.mp4 $vt ! x264enc ! 'video/x-h264,profile=high' ! h264parse ! mp4mux faststart=true ! filesink location="$OUT/media/h264-high.mp4"
+  make_media h264-aac.mp4 mp4mux name=m faststart=true ! filesink location="$OUT/media/h264-aac.mp4" \
+    $vt ! x264enc ! 'video/x-h264,profile=main' ! h264parse ! m. $at ! avenc_aac ! aacparse ! m.
+  make_media hevc.mp4 $vt ! x265enc ! h265parse ! mp4mux faststart=true ! filesink location="$OUT/media/hevc.mp4"
+  make_media vp9-opus.webm webmmux name=m ! filesink location="$OUT/media/vp9-opus.webm" \
+    $vt ! vp9enc deadline=1 ! m. $at ! opusenc ! m.
+  make_media av1.mp4 $vt ! svtav1enc ! av1parse ! mp4mux faststart=true ! filesink location="$OUT/media/av1.mp4"
+  for f in "$OUT"/media/*.mp4 "$OUT"/media/*.webm; do
+    [ -e "$f" ] || continue
+    f=${f##*/}
+    run "video-$f" video -- "$S/video?$f"
+    if wait_for $'^title\tdefault\tvideo '"$f"' (playing|error)' "$T" \
+      && grep -q $'^title\tdefault\tvideo '"$f"' playing' "$LOG"; then
+      pass "video: $f plays"
+    else
+      fail "video: $f: $(grep $'^title' "$LOG" | tail -1 | cut -f3)"
+    fi
+    quit
+  done
+fi
+run mse video -- "$S/mse"
+if wait_for $'^title\tdefault\tmse ' "$T"; then
+  t=$(grep $'^title\tdefault\tmse ' "$LOG" | tail -1 | cut -f3)
+  case "$t" in
+    *=false* | *=none*) fail "video: Media Source: $t" ;;
+    *) pass "video: Media Source: $t" ;;
+  esac
+else
+  fail "video: the Media Source page didn't report"
+fi
+quit
 fi
 
 if want pixels; then

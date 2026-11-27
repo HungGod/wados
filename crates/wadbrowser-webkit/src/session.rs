@@ -112,7 +112,7 @@ fn make(paths: &AppPaths, id: &str) -> NetworkSession {
 #[derive(Clone)]
 pub struct SessionBundle {
     pub network: NetworkSession,
-    /// Its profile's id ("default", "work", "signin-<key>", "private-3"…).
+    /// Its profile's id ("default", "signin-<key>", "private-3"…).
     pub profile: String,
     /// A private window's (it keeps nothing, and its tabs never go into a key).
     pub private: bool,
@@ -139,6 +139,7 @@ impl SessionBundle {
 
     /// Profile `id`'s.
     pub fn for_profile(paths: &AppPaths, id: &str) -> Self {
+        let id = &profiles::canonical(id);
         Self { network: network_session(paths, id), profile: id.to_string(), private: profiles::is_private(id) }
     }
 

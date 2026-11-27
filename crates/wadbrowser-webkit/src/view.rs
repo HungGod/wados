@@ -26,7 +26,7 @@ use std::rc::Rc;
 use std::time::Instant;
 use wadbrowser_core::Preferences;
 use wadbrowser_core::profiles::profile_for;
-use wadbrowser_privacy::social_site;
+use wadbrowser_privacy::blocked_site;
 use webkit6::prelude::*;
 use webkit6::{
     HardwareAccelerationPolicy, LoadEvent, NavigationPolicyDecision, NavigationType, NetworkError, PolicyDecisionType,
@@ -433,8 +433,9 @@ fn count_if_blocked(view: &WebView, url: &str, kind: &str) {
     }
     let applied = st.applied.get();
     let lists = applied.lists && e.privacy.should_block(url, &page, kind).matched;
-    let social = applied.social && social_site(&wadbrowser_core::site::host_of(url)).is_some();
-    if !(lists || social) {
+    let sites =
+        applied.sites && blocked_site(&e.prefs.borrow().blocked_sites, &wadbrowser_core::site::host_of(url)).is_some();
+    if !(lists || sites) {
         return;
     }
     st.blocked.set(st.blocked.get() + 1);
@@ -535,13 +536,12 @@ fn load_failed(view: &WebView, _event: LoadEvent, uri: &str, err: &glib::Error) 
     }
     let host = wadbrowser_core::site::host_of(uri);
     testlog::line("load-failed", &[&profile_of(view), uri, err.message()]);
-    if let Some(e) = engine()
-        && e.prefs.borrow().block_social
-        && !e.privacy.allowlist().contains_url(uri)
-        && let Some(site) = social_site(&host)
-    {
-        scheme::show_blocked(view, uri, site);
-        return true;
+    if let Some(e) = engine() {
+        let blocked = e.prefs.borrow().blocked_sites.clone();
+        if let Some(site) = blocked_site(&blocked, &host) {
+            scheme::show_blocked(view, uri, site);
+            return true;
+        }
     }
     let what = if host.is_empty() { uri.to_string() } else { host };
     scheme::show_error(view, uri, "This page didn't load", &format!("{what} didn't answer: {}", err.message()));

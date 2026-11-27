@@ -9,6 +9,12 @@
 //! state (its store, its blocker, its network session) is only made in the
 //! first, as it starts up. Each command line goes through
 //! `wadbrowser_core::modes::plan`, which says which window it opens in.
+//!
+//! Its settings are wadbrowser.conf's (`wadbrowser_core::conf`): read as it
+//! starts, and again whenever either file changes ([`follow_conf`]), so a
+//! change in the Builder or in Settings ▸ Browser counts in the windows
+//! already open. The first window opens at its home, not the last session's
+//! tabs (those only with `--restore`).
 
 use crate::window::{self, AppState, restore_urls};
 use anyhow::Result;
@@ -20,7 +26,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{info, warn};
 use wadbrowser_core::conf::{self, Conf};
-use wadbrowser_core::modes::{self, Context, Mode, Plan, WindowSpec};
+use wadbrowser_core::modes::{self, Context, Plan, WindowSpec};
 use wadbrowser_core::signin::{self, Provider};
 use wadbrowser_core::{
     APP_VERSION, CACTUS_COMMIT, NEW_TAB_URI, Preferences, Request, Store, cli, help_text, instance,
@@ -77,9 +83,6 @@ pub fn run(req: &Request) -> Result<i32> {
             return glib::ExitCode::SUCCESS;
         }
         let is_first = first.replace(false);
-        if is_first && let Some(restore) = req.restore {
-            state.prefs.borrow_mut().restore_session = restore;
-        }
         match carry_out(app, &state, &req, is_first) {
             Ok(()) => glib::ExitCode::SUCCESS,
             Err(why) => {
@@ -96,7 +99,7 @@ pub fn run(req: &Request) -> Result<i32> {
         if let Some((id, _)) = window::open_windows(app).first() {
             window::present(*id);
         } else {
-            let spec = WindowSpec::browser(Mode::Full, false, None);
+            let spec = WindowSpec::browser(state.conf.borrow().default_mode, false, None);
             window::build_window_as(app, state, spec, vec![], 0).present();
         }
     });
@@ -110,8 +113,10 @@ pub fn run(req: &Request) -> Result<i32> {
 fn start(instance: Option<&str>, ephemeral: bool) -> Result<Rc<AppState>> {
     wadbrowser_webkit::set_ephemeral_run(ephemeral);
     let paths = instance::paths(instance)?;
-    let prefs = Preferences::load(&paths)?;
+    let mut prefs = Preferences::load(&paths)?;
     prefs.validate()?;
+    let conf = read_conf(&paths);
+    prefs.take_conf(&conf.prefs);
 
     let store = Arc::new(Store::open(&paths)?);
     let privacy = PrivacyEngine::new(prefs.block_ads_trackers);
@@ -124,21 +129,90 @@ fn start(instance: Option<&str>, ephemeral: bool) -> Result<Rc<AppState>> {
     }
 
     let normal_session = SessionBundle::persistent(&paths)?;
-    info!(instance, ephemeral, data = %paths.data_dir.display(), "WadBrowser started");
-    Ok(Rc::new(AppState { paths, prefs: Rc::new(RefCell::new(prefs)), store, privacy, normal_session }))
+    info!(instance, ephemeral, data = %paths.data_dir.display(), ?conf, "WadBrowser started");
+    let state = Rc::new(AppState {
+        paths,
+        prefs: Rc::new(RefCell::new(prefs)),
+        store,
+        privacy,
+        normal_session,
+        conf: RefCell::new(conf),
+    });
+    follow_conf(&state);
+    Ok(state)
+}
+
+/// wadbrowser.conf's files: the wadspace's, then the user's (whatever the instance).
+fn conf_files(paths: &wadbrowser_core::AppPaths) -> Vec<PathBuf> {
+    let user = instance::user_config_dir().unwrap_or_else(|| paths.config_dir.clone());
+    conf::files(&user)
+}
+
+fn read_conf(paths: &wadbrowser_core::AppPaths) -> Conf {
+    Conf::load(&conf_files(paths))
+}
+
+thread_local! {
+    /// The files' monitors (dropped, they stop).
+    static MONITORS: RefCell<Vec<gio::FileMonitor>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Each of wadbrowser.conf's files watched (one that isn't there yet too: a
+/// user's is made when they first change a setting). A change is read a
+/// moment later, once the writer's done, and put into the browser.
+fn follow_conf(state: &Rc<AppState>) {
+    let pending = Rc::new(Cell::new(false));
+    for f in conf_files(&state.paths) {
+        let file = gio::File::for_path(&f);
+        let monitor = match file.monitor_file(gio::FileMonitorFlags::WATCH_MOVES, None::<&gio::Cancellable>) {
+            Ok(m) => m,
+            Err(e) => {
+                warn!("{}: can't watch it: {e}", f.display());
+                continue;
+            }
+        };
+        let (w, pending) = (Rc::downgrade(state), pending.clone());
+        monitor.connect_changed(move |_, _, _, _| {
+            if pending.replace(true) {
+                return;
+            }
+            let (w, pending) = (w.clone(), pending.clone());
+            glib::timeout_add_local_once(std::time::Duration::from_millis(200), move || {
+                pending.set(false);
+                if let Some(state) = w.upgrade() {
+                    apply_conf(&state, read_conf(&state.paths));
+                }
+            });
+        });
+        MONITORS.with_borrow_mut(|m| m.push(monitor));
+    }
+}
+
+/// New settings, into the browser: the blocker, the search engine and the
+/// blocked sites (the engine's filters and the pages they change), and Full
+/// or Focus in the browser's own windows.
+fn apply_conf(state: &AppState, conf: Conf) {
+    if *state.conf.borrow() == conf {
+        return;
+    }
+    info!(?conf, "wadbrowser.conf changed");
+    let before = state.conf.replace(conf.clone());
+    let blocked_before = state.prefs.borrow().blocked_sites.clone();
+    state.prefs.borrow_mut().take_conf(&conf.prefs);
+    state.privacy.set_enabled(conf.prefs.ad_blocker);
+    wadbrowser_webkit::shield::settings_changed(&blocked_before);
+    if before.default_mode != conf.default_mode {
+        window::set_default_mode(conf.default_mode);
+    }
+    window::sync_all();
 }
 
 /// Opens what `req` asks for, in a window already open where that fits
 /// (`modes::plan`). An error is what to tell the launch.
 fn carry_out(app: &adw::Application, state: &Rc<AppState>, req: &Request, first: bool) -> Result<(), String> {
     let open = window::open_windows(app);
-    // What links open in: read when it's asked, so a change counts at once.
-    let default_mode = if req.default {
-        let user = instance::user_config_dir().unwrap_or_else(|| state.paths.config_dir.clone());
-        Conf::load(&conf::files(&user)).default_mode
-    } else {
-        Mode::Full
-    };
+    // Full or Focus: wadbrowser.conf's, for every window of the browser's own.
+    let default_mode = state.conf.borrow().default_mode;
     let saved = |p: Provider| signin::Saved::load(&state.paths, p);
     let cx = Context {
         open: open.iter().map(|(id, spec)| modes::Open { id: *id, spec }).collect(),
@@ -166,7 +240,10 @@ fn carry_out(app: &adw::Application, state: &Rc<AppState>, req: &Request, first:
             window::build_window_as(app, state.clone(), spec, urls, 0).present();
         }
         Plan::Restore { spec } => {
-            let (urls, active) = restore_urls(state).unwrap_or_else(|| (vec![NEW_TAB_URI.into()], 0));
+            // Its home, unless --restore asks for the last session's tabs.
+            let restored = if req.restore == Some(true) { restore_urls(state) } else { None };
+            let home = spec.home(NEW_TAB_URI).to_string();
+            let (urls, active) = restored.unwrap_or_else(|| (vec![home], 0));
             info!("starting a window with {} tab(s)", urls.len());
             window::build_window_as(app, state.clone(), spec, urls, active).present();
         }

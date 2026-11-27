@@ -5,12 +5,10 @@
 //! `parent` and returning it.
 //!
 //! - [`create_app`]: "Create app from this page", then "<name> is an app".
-//! - [`new_profile`]: a name and a colour.
 //! - [`signins`]: a new sign-in for this site, or every saved one's sites.
 //! - [`permission`]: a site asking for the camera, a location, …
 
 pub mod create_app;
-pub mod new_profile;
 pub mod permission;
 pub mod signins;
 

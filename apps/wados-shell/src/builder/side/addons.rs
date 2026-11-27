@@ -2,7 +2,9 @@
 //! are [`addon_list`]'s, `addons.ts`): only the add-ons of the apps in it.
 //! **Suggested** first (for its apps, not in it yet: what goes with what it
 //! has first; a click adds one), then by app: web apps for WadBrowser
-//! (Focus, the usual sites, your own, **Add a site**), VS Code's
+//! (the usual sites, your own, **Add a site**) and its settings (the
+//! address bar, the ad blocker, the search engine, and the sites it
+//! blocks: social media a tap each, or one typed), VS Code's
 //! extensions, the command line (its tools, then its own **commands**,
 //! RUN or COPY typed exactly, each named RUN_1…, a step of its build),
 //! Steam's games and Dolphin's (listed, off till phase 10).
@@ -18,13 +20,14 @@ use std::rc::{Rc, Weak};
 
 use gtk::prelude::*;
 use wad_gtk::keyed::Keyed;
+use wad_model::browser::Search;
 use wad_model::catalog::{app_name, url_host};
 use wad_model::commands::parse_command;
 use wad_model::edit::{NewVariant, Op};
 use wad_model::suggest::Suggestion;
 use wad_model::{AppId, BuildCommand, CommandKind, Wadspace};
 
-use super::addon_list::{self, Group, GroupId, Item, focus, focus_toggle, toggle};
+use super::addon_list::{self, Group, GroupId, Item, focus_toggle, toggle};
 use super::ctl::{self, Row};
 use super::keys::Act;
 use super::kit::{self, Field};
@@ -39,8 +42,22 @@ struct Part {
     head: gtk::Label,
     card: gtk::Box,
     pills: Wrap,
-    /// WadBrowser's Focus, at the end of its "for" line.
-    focus: Option<gtk::Button>,
+}
+
+/// WadBrowser's settings in it, under its web apps (wadbrowser.conf's, by
+/// wad-gen: the browser has no settings of its own).
+struct BrowserPart {
+    root: gtk::Box,
+    /// On unless it has the Focus add-on.
+    address: gtk::Button,
+    blocker: gtk::Button,
+    search: Vec<(Search, gtk::Button)>,
+    /// Social media's and its own: lit when blocked.
+    sites: Wrap,
+    form: gtk::Box,
+    entry: gtk::Entry,
+    add: gtk::Button,
+    err: gtk::Label,
 }
 
 /// The command line's own commands, typed exactly.
@@ -67,6 +84,7 @@ pub struct Panel {
     disc_upload: gtk::Button,
     no_discs: gtk::Label,
     cmds: Commands,
+    browser: BrowserPart,
     none: gtk::Label,
     /// The wadspace shown, and whether it can be changed here.
     now: RefCell<Option<Wadspace>>,
@@ -112,6 +130,7 @@ impl Panel {
             });
             let no_discs = note("Its games are discs: upload one and it shows here.");
             let cmds = commands(me);
+            let browser = browser_part(me);
             let mut parts = vec![];
             for g in GROUPS {
                 let (title, app) = match g {
@@ -124,18 +143,7 @@ impl Panel {
                 let head = kit::heading(title);
                 let card = card(&[]);
                 card.set_widget_name(&format!("addons:{}", g.id()));
-                let focus = (g == GroupId::Web).then(|| {
-                    let f = pill_button("eye", "Focus", "Focus: its web apps alone, no address bar");
-                    f.add_css_class("side-focus");
-                    let w = me.clone();
-                    f.connect_clicked(move |_| {
-                        if let Some(p) = w.upgrade() {
-                            p.focus_click();
-                        }
-                    });
-                    f
-                });
-                card.append(&for_line(&format!("for {}", app_name(app)), Some((app, focus.as_ref()))));
+                card.append(&for_line(&format!("for {}", app_name(app)), Some((app, None))));
                 // Steam's sign-in is the wadspace's own: Steam's, as it opens.
                 if g == GroupId::Steam {
                     card.append(&note(
@@ -145,7 +153,10 @@ impl Panel {
                 let pills = Wrap::new(6, 6);
                 card.append(&pills);
                 match g {
-                    GroupId::Web => card.append(&site_add),
+                    GroupId::Web => {
+                        card.append(&site_add);
+                        card.append(&browser.root);
+                    }
                     GroupId::Tools => card.append(&cmds.root),
                     GroupId::Dolphin => {
                         card.append(&no_discs);
@@ -155,7 +166,7 @@ impl Panel {
                 }
                 root.append(&head);
                 root.append(&card);
-                parts.push((g, Part { head, card, pills, focus }));
+                parts.push((g, Part { head, card, pills }));
             }
             let none = note(
                 "No add-ons for its apps. Add VS Code, WadBrowser, the command line, Steam or Dolphin in Apps for theirs.",
@@ -173,6 +184,7 @@ impl Panel {
                 disc_upload,
                 no_discs,
                 cmds,
+                browser,
                 none,
                 now: RefCell::default(),
                 editable: Cell::new(false),
@@ -247,15 +259,8 @@ impl Panel {
                     w.add_controller(g);
                 }
             }
-            if let Some(f) = &part.focus {
-                let on = focus(x).is_some();
-                lit(f, on);
-                f.set_sensitive(editable);
-                f.set_tooltip_text(Some(if on {
-                    "Focus: its web apps alone, no address bar (on: click to take it off)"
-                } else {
-                    "Focus: its web apps alone, no address bar"
-                }));
+            if *id == GroupId::Web {
+                self.show_browser(x, editable);
             }
             if *id == GroupId::Dolphin {
                 self.no_discs.set_visible(g.items.is_empty());
@@ -413,10 +418,55 @@ impl Panel {
         });
     }
 
-    fn focus_click(&self) {
+    /// Its browser's settings, as `x` has them.
+    fn show_browser(&self, x: &Wadspace, editable: bool) {
+        let b = &self.browser;
+        let me = self.me.clone();
+        lit(&b.address, addon_list::address_bar(x));
+        lit(&b.blocker, x.browser.ad_blocker);
+        for (s, w) in &b.search {
+            lit(w, x.browser.search == *s);
+        }
+        let sites = addon_list::block_pills(x);
+        let keyed: Vec<(String, (String, bool))> = sites.into_iter().map(|(s, on)| (s.clone(), (s, on))).collect();
+        let make = |(s, on): &(String, bool)| {
+            let w = site_pill(&me, s);
+            lit(&w, *on);
+            w
+        };
+        b.sites.set(&keyed, make, |w, (_, on)| lit(w, *on));
+        for w in [b.address.upcast_ref::<gtk::Widget>(), b.blocker.upcast_ref()]
+            .into_iter()
+            .chain(b.search.iter().map(|(_, w)| w.upcast_ref()))
+            .chain(b.sites.keyed().iter().map(|(_, w)| w))
+        {
+            w.set_sensitive(editable);
+        }
+        b.form.set_visible(editable);
+        b.add.set_sensitive(!b.entry.text().trim().is_empty());
+    }
+
+    fn browser_click(&self, f: impl FnOnce(&Wadspace) -> Op) {
         let x = self.now.borrow().clone();
         if let Some(x) = x {
-            self.act(Some(focus_toggle(&x)));
+            self.act(Some(f(&x)));
+        }
+    }
+
+    /// The site typed, blocked (or why it can't be, under it).
+    fn block_typed(&self) {
+        let Some(x) = self.now.borrow().clone() else { return };
+        let b = &self.browser;
+        match addon_list::block_typed(&x, &b.entry.text()) {
+            Ok(op) => {
+                b.entry.set_text("");
+                b.err.set_visible(false);
+                self.act(Some(op));
+            }
+            Err(why) => {
+                b.err.set_label(&why);
+                b.err.set_visible(true);
+            }
         }
     }
 
@@ -518,9 +568,6 @@ impl ctl::Rows for Panel {
             if !p.card.is_visible() {
                 continue;
             }
-            if let Some(f) = &p.focus {
-                out.push(Row::new("focus", f, "Focus").lit(f.has_css_class("in")));
-            }
             for (k, w) in p.pills.keyed() {
                 let row = Row::new(format!("addon:{k}"), &w, label_of(&w)).lit(w.has_css_class("in"));
                 // A disc's pill, right-clicked: take it off this machine
@@ -542,6 +589,25 @@ impl ctl::Rows for Panel {
         let card_of = |g: GroupId| self.parts.iter().find(|(id, _)| *id == g).is_some_and(|(_, p)| p.card.is_visible());
         if card_of(GroupId::Web) && self.site_add.is_visible() {
             out.push(Row::new("site-add", &self.site_add, "Add a site"));
+        }
+        if card_of(GroupId::Web) {
+            let b = &self.browser;
+            let on = |w: &gtk::Button| w.has_css_class("in");
+            out.push(Row::new("browser:address-bar", &b.address, "Address bar").lit(on(&b.address)));
+            out.push(Row::new("browser:ad-blocker", &b.blocker, "Ad blocker").lit(on(&b.blocker)));
+            for (s, w) in &b.search {
+                out.push(Row::new(format!("browser:search:{}", s.id()), w, s.name()).lit(on(w)));
+            }
+            for (k, w) in b.sites.keyed() {
+                out.push(Row::new(format!("browser:block:{k}"), &w, k.clone()).lit(w.has_css_class("in")));
+            }
+            if b.form.is_visible() {
+                out.push(Row::new("browser:block-input", &b.entry, b.entry.text()));
+                out.push(Row::new("browser:block-add", &b.add, "Block the site"));
+            }
+            if b.err.is_visible() {
+                out.push(Row::new("browser:block-error", &b.err, b.err.label()));
+            }
         }
         if card_of(GroupId::Tools) {
             for (id, l) in self.cmds.lines.borrow().widgets() {
@@ -734,6 +800,109 @@ fn placeholder(k: CommandKind) -> &'static str {
         CommandKind::Run => "cargo install ripgrep",
         CommandKind::Copy => "~/dotfiles/.zshrc /home/you/.zshrc",
     }
+}
+
+/// WadBrowser's settings: its address bar and ad blocker (switches), its
+/// search engine (one of them), and the sites it blocks.
+fn browser_part(me: &Weak<Panel>) -> BrowserPart {
+    let root =
+        gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(8).css_classes(["side-commands"]).build();
+    let sub = |t: &str| gtk::Label::builder().label(t).xalign(0.0).wrap(true).css_classes(["side-sub"]).build();
+    root.append(&sub("Its settings"));
+    let switches = Wrap::new(6, 6);
+    let address = pill_button("globe", "Address bar", "Tabs and an address bar (off: Focus, its tabs alone)");
+    let blocker = pill_button("shield-check", "Ad blocker", "Blocks ads and trackers (EasyList and EasyPrivacy)");
+    switches.append(&address);
+    switches.append(&blocker);
+    root.append(&switches);
+    let w = me.clone();
+    address.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.browser_click(focus_toggle);
+        }
+    });
+    let w = me.clone();
+    blocker.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.browser_click(addon_list::blocker_toggle);
+        }
+    });
+
+    root.append(&sub("Searches with"));
+    let engines = Wrap::new(6, 6);
+    let mut search = vec![];
+    for s in Search::ALL {
+        let b = pill_button("search", s.name(), &format!("The address bar searches with {}", s.name()));
+        let w = me.clone();
+        b.connect_clicked(move |_| {
+            if let Some(p) = w.upgrade() {
+                p.browser_click(|x| addon_list::browser_op(x, |prefs| prefs.search = s));
+            }
+        });
+        engines.append(&b);
+        search.push((s, b));
+    }
+    root.append(&engines);
+
+    root.append(&sub("Blocked sites: tap one to block it (and its subdomains), or type your own"));
+    let sites = Wrap::new(6, 6);
+    root.append(&sites);
+    let form = gtk::Box::builder().spacing(6).css_classes(["side-type"]).build();
+    let entry = gtk::Entry::builder()
+        .placeholder_text("Another site: example.com")
+        .hexpand(true)
+        .valign(gtk::Align::Center)
+        .css_classes(["side-entry"])
+        .tooltip_text("A website to block")
+        .input_purpose(gtk::InputPurpose::Url)
+        .build();
+    entry.set_input_hints(gtk::InputHints::NO_SPELLCHECK);
+    let add = gtk::Button::builder()
+        .css_classes(["side-add"])
+        .valign(gtk::Align::Center)
+        .tooltip_text("Block the site")
+        .sensitive(false)
+        .build();
+    add.set_child(Some(&wad_gtk::Icon::new("plus", 14)));
+    form.append(&entry);
+    form.append(&add);
+    root.append(&form);
+    let err = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).css_classes(["side-err"]).build();
+    root.append(&err);
+    let w = me.clone();
+    entry.connect_activate(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.block_typed();
+        }
+    });
+    let (a, e) = (add.downgrade(), err.downgrade());
+    entry.connect_changed(move |en| {
+        if let Some(a) = a.upgrade() {
+            a.set_sensitive(!en.text().trim().is_empty());
+        }
+        if let Some(e) = e.upgrade() {
+            e.set_visible(false);
+        }
+    });
+    let w = me.clone();
+    add.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.block_typed();
+        }
+    });
+    BrowserPart { root, address, blocker, search, sites, form, entry, add, err }
+}
+
+/// A site to block's pill: a tap blocks it, or unblocks it.
+fn site_pill(me: &Weak<Panel>, site: &str) -> gtk::Widget {
+    let b = pill_button("ban", site, &format!("{site} and its subdomains don’t open"));
+    let (w, site) = (me.clone(), site.to_string());
+    b.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.browser_click(|x| addon_list::block_toggle(x, &site));
+        }
+    });
+    b.upcast()
 }
 
 fn commands(me: &Weak<Panel>) -> Commands {

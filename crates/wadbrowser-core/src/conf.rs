@@ -1,15 +1,22 @@
-//! `wadbrowser.conf`: what links open in. The wadspace's first
-//! (`/run/wadspaces-extra/wadbrowser.conf`, which wadd writes from its
-//! design: wad-gen's `extras::wadbrowser_conf`), then the user's own
-//! (`~/.config/wadbrowser/wadbrowser.conf`), which wins. `key = value`
-//! lines; `#` starts a comment.
+//! `wadbrowser.conf`: the browser's settings, which it has no page of its
+//! own for. The wadspace's first (`/run/wadspaces-extra/wadbrowser.conf`,
+//! which wadd writes from its design, the Builder's add-ons: wad-gen's
+//! `extras::wadbrowser_conf`), then the user's own
+//! (`~/.config/wadbrowser/wadbrowser.conf`: on the machine, Settings ▸
+//! Browser's), whose keys win. The format is wad-model's
+//! ([`wad_model::browser`]):
 //!
 //! ```text
-//! default = focus     # what links open in (--default): full (an address bar) or focus
+//! default = focus         # full (an address bar) or focus (none)
+//! blocker = on            # the ad and tracker blocker
+//! search = duckduckgo     # duckduckgo, startpage or wikipedia
+//! block = x.com reddit.com
 //! ```
 
 use crate::modes::Mode;
 use std::path::{Path, PathBuf};
+use wad_model::browser::ConfText;
+pub use wad_model::browser::{BrowserPrefs, Search};
 
 /// The wadspace's, from wadd.
 pub const SYSTEM: &str = "/run/wadspaces-extra/wadbrowser.conf";
@@ -17,13 +24,15 @@ pub const FILE: &str = "wadbrowser.conf";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Conf {
-    /// What `--default` opens (links, `BROWSER`, xdg-open).
+    /// What the browser's windows open as: Full (an address bar) or Focus.
     pub default_mode: Mode,
+    /// Its blocker, search engine and blocked sites.
+    pub prefs: BrowserPrefs,
 }
 
 impl Default for Conf {
     fn default() -> Conf {
-        Conf { default_mode: Mode::Full }
+        Conf { default_mode: Mode::Full, prefs: BrowserPrefs::default() }
     }
 }
 
@@ -47,17 +56,9 @@ impl Conf {
 
     /// One file's settings over these. Lines it can't read are skipped.
     pub fn apply(&mut self, text: &str) {
-        for line in text.lines() {
-            let line = line.split_once('#').map_or(line, |(l, _)| l).trim();
-            let Some((key, value)) = line.split_once('=').map(|(k, v)| (k.trim(), v.trim())) else { continue };
-            if key == "default" {
-                match value {
-                    "full" => self.default_mode = Mode::Full,
-                    "focus" | "lite" => self.default_mode = Mode::Focus,
-                    _ => {}
-                }
-            }
-        }
+        let mut bar = self.default_mode == Mode::Full;
+        ConfText::parse(text).over(&mut self.prefs, &mut bar);
+        self.default_mode = if bar { Mode::Full } else { Mode::Focus };
     }
 }
 
@@ -71,10 +72,12 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let system = dir.join("system.conf");
         let user = dir.join("user.conf");
-        std::fs::write(&system, "# the wadspace's\ndefault = focus\n").unwrap();
+        std::fs::write(&system, "# the wadspace's\ndefault = focus\nblock = x.com\n").unwrap();
         assert_eq!(Conf::load(std::slice::from_ref(&system)).default_mode, Mode::Focus);
         std::fs::write(&user, "default = full   # mine\nbogus\nhome = x\n").unwrap();
-        assert_eq!(Conf::load(&[system.clone(), user.clone(), dir.join("missing.conf")]).default_mode, Mode::Full);
+        let both = Conf::load(&[system.clone(), user.clone(), dir.join("missing.conf")]);
+        assert_eq!(both.default_mode, Mode::Full);
+        assert_eq!(both.prefs.blocked, vec!["x.com"]);
         // A user file without the key leaves the wadspace's.
         std::fs::write(&user, "# nothing\n").unwrap();
         assert_eq!(Conf::load(&[system, user]).default_mode, Mode::Focus);
@@ -83,12 +86,17 @@ mod tests {
 
     #[test]
     fn defaults_and_bad_values() {
-        assert_eq!(Conf::load(&[]).default_mode, Mode::Full);
-        let mut c = Conf::default();
-        c.apply("default = kiosk");
+        let c = Conf::load(&[]);
         assert_eq!(c.default_mode, Mode::Full);
-        c.apply("default=lite");
+        assert!(c.prefs.ad_blocker);
+        assert_eq!(c.prefs.search, Search::DuckDuckGo);
+        let mut c = Conf::default();
+        c.apply("default = kiosk\nsearch = altavista\nblocker = maybe");
+        assert_eq!(c, Conf::default());
+        c.apply("default=lite\nblocker = off\nsearch = wikipedia");
         assert_eq!(c.default_mode, Mode::Focus);
+        assert!(!c.prefs.ad_blocker);
+        assert_eq!(c.prefs.search, Search::Wikipedia);
     }
 
     #[test]
@@ -98,16 +106,10 @@ mod tests {
     }
 
     #[test]
-    fn wad_gens_file_reads() {
-        // As crates/wad-gen/src/extras.rs writes it.
+    fn wad_models_file_reads() {
+        let prefs = BrowserPrefs { ad_blocker: false, search: Search::Startpage, blocked: vec!["tiktok.com".into()] };
         let mut c = Conf::default();
-        c.apply(
-            "# WadBrowser's settings for this wadspace, from its design (a\n\
-             # user's own go in ~/.config/wadbrowser/wadbrowser.conf).\n\
-             #\n\
-             # What links open in: full (tabs and an address bar) or focus (no address bar).\n\
-             default = focus\n",
-        );
-        assert_eq!(c.default_mode, Mode::Focus);
+        c.apply(&wad_model::browser::conf("A wadspace's", false, &prefs));
+        assert_eq!(c, Conf { default_mode: Mode::Focus, prefs });
     }
 }

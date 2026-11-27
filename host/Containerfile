@@ -83,6 +83,22 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
     && rpm -q --qf '%{RELEASE}\n' labwc | grep -q '\.wados1$' \
     && ! rpm -q xdg-desktop-portal xdg-desktop-portal-wlr > /dev/null
 
+# Video in WadBrowser (WebKit plays it through GStreamer): Fedora's codecs
+# leave out H.264 (all but OpenH264's profiles) and HEVC, and decode AV1
+# (YouTube's) only with libaom, too slow to keep up. So dav1d from Fedora,
+# then RPM Fusion's ffmpeg (in place of ffmpeg-free: gst-libav's H.264,
+# HEVC, AAC…) and its GStreamer plugins; RPM Fusion for the install only, as
+# Containerfile.nvidia has it. Checked: the decoders are there.
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs gstreamer1-plugin-dav1d \
+      "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+    && dnf -y swap --setopt=install_weak_deps=False ffmpeg-free ffmpeg --allowerasing \
+    && dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+      gstreamer1-plugins-bad-freeworld gstreamer1-plugins-ugly \
+    && dnf -y remove rpmfusion-free-release \
+    && for e in avdec_h264 avdec_h265 openh264dec dav1ddec vp9dec avdec_aac opusdec; do \
+         gst-inspect-1.0 "$e" > /dev/null || { echo "no $e"; exit 1; }; done \
+    && rm -rf /root/.cache/gstreamer-1.0 && dnf clean all
+
 # Sound: PipeWire, its PulseAudio socket (the session's, which wadd binds
 # into each wadspace on the screen: PULSE_SERVER) and WirePlumber, as the
 # person's user units, socket-activated; pw-play and pw-record (Settings ▸

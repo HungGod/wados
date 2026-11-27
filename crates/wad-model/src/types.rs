@@ -489,6 +489,10 @@ pub struct Wadspace {
     /// Add-ons and downloads of its own, typed exactly: steps on top of its packages when it's built.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commands: Vec<BuildCommand>,
+    /// WadBrowser's settings in it (the Builder's add-ons): its blocker,
+    /// search engine and blocked sites. Its address bar is the Focus add-on.
+    #[serde(default, skip_serializing_if = "crate::browser::BrowserPrefs::is_default")]
+    pub browser: crate::browser::BrowserPrefs,
 }
 
 impl Wadspace {

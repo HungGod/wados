@@ -253,6 +253,9 @@ pub enum Op {
     /// Let agents in it message the desktop and ask for sandboxes (the wadspaces MCP server).
     #[serde(rename = "builder.agents")]
     SetAgents { ws: String, on: bool },
+    /// WadBrowser's settings in it (its blocker, search engine and blocked sites).
+    #[serde(rename = "builder.browser")]
+    SetBrowser { ws: String, prefs: crate::browser::BrowserPrefs },
 
     // ---------------------------------------------------------- what's in it
     /// One thing into a section (`ops::add_item`'s items), from `from` if it's another's.
@@ -625,6 +628,11 @@ impl Tx<'_> {
             }
             Op::SetAgents { ws, on } => {
                 self.ws(&ws)?.agents = on;
+                self.touched(&ws);
+                Ok(())
+            }
+            Op::SetBrowser { ws, prefs } => {
+                self.ws(&ws)?.browser = prefs.tidied();
                 self.touched(&ws);
                 Ok(())
             }

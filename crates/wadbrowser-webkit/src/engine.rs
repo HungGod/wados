@@ -82,7 +82,7 @@ pub fn init(
     let zoom = RefCell::new(SiteZoom::open(&paths));
     let e = Rc::new(Engine { paths, prefs, store, privacy, filters, zoom, unsaved_blocks: Cell::new(0) });
     ENGINE.set(Some(e.clone()));
-    crate::filters::start(&e);
+    crate::filters::start();
     // The total blocked, saved every few seconds rather than per request.
     glib::timeout_add_local(Duration::from_secs(3), || {
         if let Some(e) = engine() {

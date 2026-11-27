@@ -1,8 +1,10 @@
 //! The browser's own `wadbrowser://` pages, as the v2 design draws them (the
-//! spike's `src/apps/browser/pages/`): the new tab, Privacy, Settings,
-//! History and About, and the pages that say why there's no page (a load
-//! that failed, a social site blocked, a `wadbrowser://` page that doesn't
-//! exist).
+//! spike's `src/apps/browser/pages/`): the new tab, Privacy, History and
+//! About, and the pages that say why there's no page (a load that failed, a
+//! blocked site, a `wadbrowser://` page that doesn't exist). There's no
+//! settings page: the browser's settings are wadbrowser.conf's (conf.rs), a
+//! wadspace's from the Builder's add-ons and the machine's from Settings ▸
+//! Browser.
 //!
 //! Each page is a function of the plain data it shows, and links the files
 //! the pages share, served at `wadbrowser://res/<file>` ([`resource`]): the
@@ -72,7 +74,7 @@ pub fn resource(path: &str) -> Option<(&'static [u8], &'static str)> {
 // ------------------------------------------------------------ what a page asks of the browser
 
 /// What a `wadbrowser://` page asks the browser to do. Its script posts JSON to
-/// the "wadbrowser" script message handler (`{"do": "block-social", "on": true}`);
+/// the "wadbrowser" script message handler (`{"do": "blockers", "site": "x.com", "on": true}`);
 /// read it with [`PageAction::from_page`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "do", rename_all = "kebab-case")]
@@ -80,20 +82,8 @@ pub enum PageAction {
     /// The new tab's search box: what was typed (an address or words), to
     /// open as the address bar would.
     Go { to: String },
-    /// "Block all social media", on or off.
-    BlockSocial { on: bool },
-    /// The blockers on or off for a site: Privacy's "Block again" (on), the
-    /// blocked page's "Turn the blocker off for this site" (off).
+    /// The ad blocker on or off for a site: Privacy's "Block again" (on).
     Blockers { site: String, on: bool },
-    /// Settings' search engine: an id of [`crate::search::BUILTIN_ENGINES`]
-    /// (see [`crate::search::engine_from_id`]).
-    SearchEngine { id: String },
-    /// "New profile…".
-    NewProfile,
-    /// A web app of yours, in a window of its own.
-    OpenApp { id: String },
-    /// A web app of yours, removed.
-    RemoveApp { id: String },
 }
 
 impl PageAction {
@@ -226,9 +216,12 @@ pub struct Privacy {
     pub blocked_here: u64,
     /// A private window (it keeps no list of sites).
     pub private: bool,
-    pub block_social: bool,
     /// `block_ads_trackers`.
     pub block_ads: bool,
+    /// The sites that don't open.
+    pub blocked_sites: Vec<String>,
+    /// Where they're changed ("the Builder's add-ons", "Settings ▸ Browser").
+    pub set_in: String,
     /// This window, by site, most blocked first.
     pub sites: Vec<SiteCount>,
     /// The sites with the blockers off.
@@ -236,8 +229,9 @@ pub struct Privacy {
 }
 
 /// `wadbrowser://privacy`: what the blockers have stopped (on this machine, and
-/// in this window by site), the social media blocker, and the sites they're
-/// off for.
+/// in this window by site), whether they're on and which sites don't open
+/// (said, not set: they're [`Privacy::set_in`]'s), and the sites the ad
+/// blocker's off for.
 pub fn privacy_page(p: &Privacy) -> String {
     let sites = if !p.sites.is_empty() {
         let mut rows = String::new();
@@ -273,10 +267,15 @@ pub fn privacy_page(p: &Privacy) -> String {
         }
         format!(r#"<ul class="plain allowed" data-empty="{NO_ALLOWED}">{li}</ul>"#)
     };
-    let ads_note = if p.block_ads {
-        "Brave’s adblock engine, with EasyList and EasyPrivacy’s filters. Always on."
+    let set_in = esc_html(&p.set_in);
+    let ads_note = format!(
+        "{}. Brave’s adblock engine, with EasyList and EasyPrivacy’s filters: set in {set_in}.",
+        if p.block_ads { "On" } else { "Off" }
+    );
+    let blocked_note = if p.blocked_sites.is_empty() {
+        format!("None. Set in {set_in}.")
     } else {
-        "Brave’s adblock engine, with EasyList and EasyPrivacy’s filters. Off in prefs.toml."
+        format!("{}: set in {set_in}.", esc_html(&p.blocked_sites.join(", ")))
     };
     page(
         "Privacy",
@@ -289,8 +288,8 @@ pub fn privacy_page(p: &Privacy) -> String {
 <div class="stat"><b>{n_allowed}</b><span>sites with the blockers off</span></div>
 </div>
 <section>
-<div class="row">{ban}<div class="grow"><span>Block all social media</span><small>X, Facebook, Instagram, TikTok, Reddit, Threads, LinkedIn, Snapchat and Bluesky, in every window and web app.</small></div>{social}</div>
-<div class="row">{shield}<div class="grow"><span>Block ads and trackers</span><small>{ads_note}</small></div>{ads}</div>
+<div class="row">{shield}<div class="grow"><span>Ad and tracker blocker</span><small>{ads_note}</small></div></div>
+<div class="row">{ban}<div class="grow"><span>Blocked sites</span><small>{blocked_note}</small></div></div>
 </section>
 <h2>This window, by site</h2>
 {sites}
@@ -304,114 +303,6 @@ pub fn privacy_page(p: &Privacy) -> String {
             n_allowed = p.allowed.len(),
             ban = icon("shield-ban", 18),
             shield = icon("shield", 18),
-            social = toggle("block-social", p.block_social, false, "Block all social media"),
-            ads = toggle("", p.block_ads, true, "Block ads and trackers"),
-        ),
-    )
-}
-
-// ------------------------------------------------------------ settings
-
-/// A profile, as Settings lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileRow {
-    pub id: String,
-    pub name: String,
-    /// Its colour, `#rrggbb`.
-    pub color: String,
-}
-
-/// What `wadbrowser://settings` shows besides the preferences.
-#[derive(Debug, Clone, Default)]
-pub struct Settings {
-    pub block_social: bool,
-    pub profiles: Vec<ProfileRow>,
-    /// Your web apps (made from pages).
-    pub apps: Vec<Tile>,
-    /// WebKitGTK's version, for About.
-    pub webkit_version: String,
-}
-
-/// `wadbrowser://settings`: privacy, search, profiles, your web apps, and what
-/// this browser is built from. Of Cactus's preferences, only what the v2
-/// design shows: blocking ads and trackers, and the search engine.
-pub fn settings_page(prefs: &Preferences, s: &Settings) -> String {
-    let chosen = crate::search::id_for_engine(&prefs.search_engine);
-    let mut options = String::new();
-    for e in crate::search::BUILTIN_ENGINES {
-        options.push_str(&format!(
-            r#"<option value="{id}"{sel}>{name}</option>"#,
-            id = e.id,
-            sel = if e.id == chosen { " selected" } else { "" },
-            name = esc_html(e.name),
-        ));
-    }
-    if chosen == "custom" {
-        options.push_str(&format!(
-            r#"<option value="custom" selected disabled>{}</option>"#,
-            esc_html(engine_name(&prefs.search_engine))
-        ));
-    }
-
-    let mut profiles = String::new();
-    for p in &s.profiles {
-        profiles.push_str(&format!(
-            r#"<div class="row"><span class="swatch" style="background:{color}"></span><div class="grow"><span>{name}</span><small class="line">Its own sign-ins, cookies and history.</small></div></div>"#,
-            color = safe_color(&p.color),
-            name = esc_html(&p.name),
-        ));
-    }
-    profiles.push_str(&format!(
-        r#"<div class="row"><button class="btn quiet sm" data-do="new-profile">{}<span>New profile…</span></button></div>"#,
-        icon("user-round-plus", 14)
-    ));
-
-    let mut apps = String::new();
-    for a in &s.apps {
-        let id = esc_attr(&serde_json::json!({ "id": a.id }).to_string());
-        apps.push_str(&format!(
-            r#"<div class="row" data-row>{icon}<div class="grow"><span>{name}</span><small class="line">{url}</small></div><button class="btn ghost sm" data-do="open-app" data-args="{id}">Open</button><button class="btn danger sm" data-do="remove-app" data-args="{id}" data-gone>Remove</button></div>"#,
-            icon = web_icon(&a.id, &a.name, a.icon.as_deref(), 28),
-            name = esc_html(&a.name),
-            url = esc_html(&a.url),
-        ));
-    }
-    const NO_APPS: &str = "None yet. Right-click a page and choose “Create app from this page…”.";
-    if apps.is_empty() {
-        apps = format!(r#"<div class="row"><small>{NO_APPS}</small></div>"#);
-    }
-
-    page(
-        "Settings",
-        &format!(
-            r#"<main class="wadbrowser-page">
-<h1>{h1icon} Settings</h1>
-<h2>Privacy</h2>
-<section>
-<div class="row"><div class="grow"><span>Block all social media</span><small class="line">A plugin of WadSpaces’ own: social sites show a blocked page instead.</small></div>{social}</div>
-<div class="row"><div class="grow"><span>Block ads and trackers</span><small class="line">{ads_note} <a href="wadbrowser://privacy" class="inline">See what it’s blocked</a></small></div>{ads}</div>
-</section>
-<h2>Search</h2>
-<section>
-<div class="row"><div class="grow"><span>Search engine</span><small class="line">What the address bar and new tabs search with.</small></div><select class="choice" data-do="search-engine" aria-label="Search engine">{options}</select></div>
-</section>
-<h2>Profiles</h2>
-<section>{profiles}</section>
-<h2>Web apps</h2>
-<section data-empty="{NO_APPS}">{apps}</section>
-<h2>About</h2>
-<section>
-<div class="row"><div class="grow"><span>{name} {version} (WadOS’ fork of Cactus {cactus})</span><small class="line">WebKitGTK {webkit} · GTK 4 · libadwaita · adblock-rust · <a href="wadbrowser://about" class="inline">More</a></small></div></div>
-</section>
-</main>"#,
-            h1icon = icon("settings", 24),
-            social = toggle("block-social", s.block_social, false, "Block all social media"),
-            ads_note = if prefs.block_ads_trackers { "Always on." } else { "Off in prefs.toml." },
-            ads = toggle("", prefs.block_ads_trackers, true, "Block ads and trackers"),
-            name = crate::APP_NAME,
-            version = crate::APP_VERSION,
-            cactus = CACTUS_VERSION,
-            webkit = esc_html(&s.webkit_version),
         ),
     )
 }
@@ -579,28 +470,28 @@ pub fn social_name(site: &str) -> &str {
     }
 }
 
-/// What a social site shows while "Block all social media" is on: Go back
-/// (when there's a page to go back to), and the blockers off for `site`.
-/// Load it at a `wadbrowser://` address (`wadbrowser://blocked?site=x.com`), so its
-/// button may ask ([`PageAction::from_page`]).
+/// What a blocked site shows (one of wadbrowser.conf's `block`, the
+/// Builder's add-ons' or Settings ▸ Browser's): Go back, when there's a page
+/// to go back to. There's no way through from here: the list is its owner's.
 pub fn blocked_html(site: &str) -> String {
     let name = social_name(site);
+    let named = if name == site {
+        format!("<b>{}</b>", esc_html(site))
+    } else {
+        format!("<b>{}</b> ({})", esc_html(name), esc_html(site))
+    };
     page(
         &format!("{name}: blocked"),
         &format!(
             r#"<main class="notice blocked">
 <span class="badge">{badge}</span>
-<h1>Blocked: social media</h1>
-<p>{name} ({site}) is social media, and <b>Block all social media</b> is on in this browser.</p>
-<div class="acts"><button class="btn ghost" data-back hidden>{back}<span>Go back</span></button><button class="btn secondary" data-do="blockers" data-args="{args}">{off}<span>Turn the blocker off for this site</span></button></div>
+<h1>This site is blocked</h1>
+<p>{named} is on this browser’s list of blocked sites.</p>
+<div class="acts"><button class="btn ghost" data-back hidden>{back}<span>Go back</span></button></div>
 </main>
 <script>if (history.length > 1) document.querySelector('[data-back]').hidden = false;</script>"#,
             badge = icon("shield-ban", 34),
-            name = esc_html(name),
-            site = esc_html(site),
-            args = esc_attr(&serde_json::json!({ "site": site, "on": false }).to_string()),
             back = icon("arrow-left", 16),
-            off = icon("shield-off", 16),
         ),
     )
 }
@@ -639,17 +530,6 @@ fn page(title: &str, body: &str) -> String {
         title = esc_html(title),
         css = res_url("pages.css"),
         js = res_url("pages.js"),
-    )
-}
-
-/// A switch (ui/Toggle): `action` is posted with its new state (`on`).
-fn toggle(action: &str, on: bool, disabled: bool, label: &str) -> String {
-    format!(
-        r#"<button class="toggle{on_class}" role="switch" aria-checked="{on}" aria-label="{label}"{dis}{act}><span class="knob"></span></button>"#,
-        on_class = if on { " on" } else { "" },
-        label = esc_attr(label),
-        dis = if disabled { " disabled" } else { "" },
-        act = if action.is_empty() { String::new() } else { format!(r#" data-do="{}""#, esc_attr(action)) },
     )
 }
 
@@ -781,12 +661,6 @@ fn safe_img(src: &str) -> Option<&str> {
         .then_some(src.trim())
 }
 
-/// A colour for a style attribute: `#rgb` or `#rrggbb`, else the accent.
-fn safe_color(c: &str) -> &str {
-    let hex = c.strip_prefix('#').unwrap_or("");
-    if matches!(hex.len(), 3 | 6) && hex.bytes().all(|b| b.is_ascii_hexdigit()) { c } else { "#c6ff1f" }
-}
-
 fn esc_html(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
@@ -844,7 +718,6 @@ mod tests {
                 &[tile("github", "GitHub", "https://github.com", Some("wadbrowser://res/icons/web/github.svg"))],
             ),
             privacy_page(&Privacy::default()),
-            settings_page(&prefs, &Settings::default()),
             history_page(&[], false, Utc::now()),
             bookmarks_html(&[]),
             downloads_html(&[]),
@@ -929,15 +802,7 @@ mod tests {
         };
         clean(&privacy_page(&p));
 
-        let s = Settings {
-            profiles: vec![ProfileRow { id: "p".into(), name: EVIL.into(), color: "red;background:url(x)".into() }],
-            apps: vec![evil_tile],
-            webkit_version: EVIL.into(),
-            ..Settings::default()
-        };
-        let html = settings_page(&prefs, &s);
-        clean(&html);
-        assert!(html.contains("background:#c6ff1f"), "a colour that isn't one falls back to the accent");
+        clean(&privacy_page(&Privacy { blocked_sites: vec![EVIL.into()], set_in: EVIL.into(), ..Privacy::default() }));
 
         clean(&history_page(&[entry(EVIL, "javascript:alert(1)", Duration::minutes(1))], false, Utc::now()));
         clean(&error_html(EVIL, EVIL, "javascript:alert(1)"));
@@ -959,8 +824,9 @@ mod tests {
         let p = Privacy {
             blocked: 1291,
             blocked_here: 7,
-            block_social: true,
             block_ads: true,
+            blocked_sites: vec!["tiktok.com".into(), "x.com".into()],
+            set_in: "Settings ▸ Browser".into(),
             sites: vec![SiteCount { site: "x.com".into(), url: "https://x.com".into(), pages: 1, blocked: 7 }],
             allowed: vec!["old.reddit.com".into()],
             ..Privacy::default()
@@ -970,7 +836,9 @@ mod tests {
         assert!(html.contains("<b>7</b><span>in this window</span>"));
         assert!(html.contains("<b>1</b><span>sites with the blockers off</span>"));
         assert!(html.contains(r#"<td><a href="https://x.com">x.com</a></td><td>1</td><td>7</td>"#));
-        assert!(html.contains(r#"class="toggle on" role="switch" aria-checked="true" aria-label="Block all social media" data-do="block-social""#));
+        assert!(html.contains("On. Brave’s adblock engine"));
+        assert!(html.contains("tiktok.com, x.com: set in Settings ▸ Browser."));
+        assert!(!html.contains(r#"class="toggle"#), "it says what's set, it doesn't set it");
         assert!(html.contains(r#"data-args="{&quot;site&quot;:&quot;old.reddit.com&quot;,&quot;on&quot;:true}""#));
 
         let private = privacy_page(&Privacy { private: true, ..Privacy::default() });
@@ -980,22 +848,11 @@ mod tests {
     }
 
     #[test]
-    fn settings_shows_the_engine_profiles_and_apps() {
-        let prefs = Preferences { search_engine: SearchEngine::Wikipedia, ..Preferences::default() };
-        let s = Settings {
-            profiles: vec![ProfileRow { id: "default".into(), name: "Personal".into(), color: "#c6ff1f".into() }],
-            apps: vec![tile("cal", "Calendar", "https://calendar.google.com", None)],
-            webkit_version: "2.54.2".into(),
-            ..Settings::default()
-        };
-        let html = settings_page(&prefs, &s);
-        assert!(html.contains(r#"<option value="wikipedia" selected>Wikipedia</option>"#));
-        assert!(html.contains(r#"<option value="duckduckgo">DuckDuckGo</option>"#));
-        assert!(html.contains(r#"<span class="swatch" style="background:#c6ff1f"></span>"#));
-        assert!(html.contains(r#"data-do="remove-app" data-args="{&quot;id&quot;:&quot;cal&quot;}""#));
-        assert!(html.contains("WebKitGTK 2.54.2"));
-        assert!(!html.contains("Restore session"), "only what the v2 design shows");
-        assert!(settings_page(&prefs, &Settings::default()).contains("None yet. Right-click a page"));
+    fn a_blocked_site_has_no_way_through() {
+        let html = blocked_html("tiktok.com");
+        assert!(html.contains("<b>TikTok</b> (tiktok.com) is on this browser’s list of blocked sites."));
+        assert!(!html.contains("data-do"), "only Go back");
+        assert!(blocked_html("example.com").contains("<b>example.com</b> is on"));
     }
 
     #[test]
@@ -1046,18 +903,6 @@ mod tests {
     }
 
     #[test]
-    fn the_blocked_page_names_the_site_and_offers_to_unblock_it() {
-        let html = blocked_html("x.com");
-        assert!(html.contains("X (x.com) is social media"));
-        assert!(
-            html.contains(
-                r#"data-do="blockers" data-args="{&quot;site&quot;:&quot;x.com&quot;,&quot;on&quot;:false}""#
-            )
-        );
-        assert!(blocked_html("bsky.app").contains("Bluesky (bsky.app)"));
-    }
-
-    #[test]
     fn error_pages_offer_another_go() {
         let html = error_html("This page didn’t load", "Could not resolve host", "https://nowhere.invalid/a?b=1&c=2");
         assert!(html.contains(r#"<a class="btn secondary" href="https://nowhere.invalid/a?b=1&amp;c=2">"#));
@@ -1090,29 +935,22 @@ mod tests {
     #[test]
     fn pages_ask_with_actions_only_their_own() {
         assert_eq!(
-            PageAction::from_page("wadbrowser://privacy", r#"{"do":"block-social","on":true}"#),
-            Some(PageAction::BlockSocial { on: true })
+            PageAction::from_page("wadbrowser://privacy", r#"{"do":"blockers","site":"x.com","on":true}"#),
+            Some(PageAction::Blockers { site: "x.com".into(), on: true })
         );
         assert_eq!(
             PageAction::parse(r#"{"do":"blockers","site":"x.com","on":false}"#),
             Some(PageAction::Blockers { site: "x.com".into(), on: false })
         );
         assert_eq!(PageAction::parse(r#"{"do":"go","to":"rust gtk"}"#), Some(PageAction::Go { to: "rust gtk".into() }));
-        assert_eq!(
-            PageAction::parse(r#"{"do":"search-engine","id":"startpage"}"#),
-            Some(PageAction::SearchEngine { id: "startpage".into() })
-        );
-        assert_eq!(PageAction::parse(r#"{"do":"new-profile"}"#), Some(PageAction::NewProfile));
-        assert_eq!(
-            PageAction::parse(r#"{"do":"open-app","id":"cal"}"#),
-            Some(PageAction::OpenApp { id: "cal".into() })
-        );
-        assert_eq!(
-            PageAction::parse(r#"{"do":"remove-app","id":"cal"}"#),
-            Some(PageAction::RemoveApp { id: "cal".into() })
-        );
+        // Settings are wadbrowser.conf's: a page can't change them.
+        assert_eq!(PageAction::parse(r#"{"do":"search-engine","id":"startpage"}"#), None);
+        assert_eq!(PageAction::parse(r#"{"do":"block-social","on":true}"#), None);
         assert_eq!(PageAction::parse(r#"{"do":"format-disk"}"#), None);
         assert_eq!(PageAction::parse("not json"), None);
-        assert_eq!(PageAction::from_page("https://evil.example", r#"{"do":"block-social","on":false}"#), None);
+        assert_eq!(
+            PageAction::from_page("https://evil.example", r#"{"do":"blockers","site":"x.com","on":false}"#),
+            None
+        );
     }
 }

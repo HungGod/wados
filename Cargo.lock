@@ -3690,6 +3690,7 @@ dependencies = [
  "tempfile",
  "tracing",
  "ureq",
+ "wad-model",
  "wadbrowser-core",
 ]
 

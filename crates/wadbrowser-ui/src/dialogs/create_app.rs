@@ -1,5 +1,5 @@
 //! "Create app from this page…" (the spike's `CreateAppDialog.svelte`): a
-//! name, the address it opens at and the profile it signs in with; then
+//! name and the address it opens at; then
 //! "<name> is an app", with Open it.
 
 use std::cell::RefCell;
@@ -8,7 +8,6 @@ use std::rc::Rc;
 use adw::prelude::*;
 
 use super::{Field, Frame, Tone, Variant, button};
-use crate::data::Profile;
 
 /// What the dialog starts with.
 #[derive(Debug, Clone, Default)]
@@ -17,9 +16,6 @@ pub struct CreateAppInfo {
     pub title: String,
     /// The page's address.
     pub url: String,
-    pub profiles: Vec<Profile>,
-    /// The profile picked to begin with (this window's).
-    pub profile: String,
 }
 
 /// The app it makes.
@@ -27,7 +23,6 @@ pub struct CreateAppInfo {
 pub struct NewApp {
     pub name: String,
     pub url: String,
-    pub profile: String,
 }
 
 /// Told how making it went: an error is said in the dialog (it stays).
@@ -88,19 +83,6 @@ pub fn create_app(parent: &impl IsA<gtk::Widget>, info: &CreateAppInfo, actions:
     frame.body.append(&name.root);
     frame.body.append(&address.root);
 
-    // The profile.
-    let pick = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(6).build();
-    pick.append(&gtk::Label::builder().label("Profile").xalign(0.0).css_classes(["wb-field-label"]).build());
-    let names: Vec<&str> = info.profiles.iter().map(|p| p.name.as_str()).collect();
-    let profiles = gtk::DropDown::from_strings(&names);
-    profiles.add_css_class("wb-select");
-    profiles.update_property(&[gtk::accessible::Property::Label("Profile")]);
-    if let Some(i) = info.profiles.iter().position(|p| p.id == info.profile) {
-        profiles.set_selected(i as u32);
-    }
-    pick.append(&profiles);
-    frame.body.append(&pick);
-
     let cancel = button("Cancel", Variant::Ghost, None);
     let create = button("Create app", Variant::Primary, None);
     frame.footer.append(&cancel);
@@ -112,14 +94,12 @@ pub fn create_app(parent: &impl IsA<gtk::Widget>, info: &CreateAppInfo, actions:
         }
     });
 
-    let ids: Vec<String> = info.profiles.iter().map(|p| p.id.clone()).collect();
     let fallback = info.title.clone();
     let name = Rc::new(name);
     let address = Rc::new(address);
     let busy = Rc::new(RefCell::new(false));
     let submit: Rc<dyn Fn()> = {
-        let (frame, name, address, profiles, create) =
-            (frame.clone(), name.clone(), address.clone(), profiles.clone(), create.clone());
+        let (frame, name, address, create) = (frame.clone(), name.clone(), address.clone(), create.clone());
         let actions = actions.clone();
         Rc::new(move || {
             if *busy.borrow() {
@@ -130,11 +110,7 @@ pub fn create_app(parent: &impl IsA<gtk::Widget>, info: &CreateAppInfo, actions:
                 return;
             };
             let shown = name.text().trim().to_string();
-            let app = NewApp {
-                name: if shown.is_empty() { fallback.clone() } else { shown },
-                url,
-                profile: ids.get(profiles.selected() as usize).cloned().unwrap_or_default(),
-            };
+            let app = NewApp { name: if shown.is_empty() { fallback.clone() } else { shown }, url };
             *busy.borrow_mut() = true;
             create.set_sensitive(false);
             let (frame, address, create, busy, open) =

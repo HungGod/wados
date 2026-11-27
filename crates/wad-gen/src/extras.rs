@@ -207,20 +207,18 @@ pub fn games_json<'a>(ws: &Wadspace, discs: impl IntoIterator<Item = &'a DiscIma
     (!out.is_empty()).then(|| serde_json::Value::Array(out).to_string())
 }
 
-/// wadbrowser.conf, with WadBrowser: links open in it, full or Focus (its
-/// add-on: no address bar).
+/// wadbrowser.conf, with WadBrowser: its address bar (none with the Focus
+/// add-on), its blocker, search engine and blocked sites (the Builder's
+/// add-ons: `Wadspace::browser`).
 pub fn wadbrowser_conf(ws: &Wadspace) -> Option<String> {
     if !ws.has_app(AppId::Wadbrowser) {
         return None;
     }
     let focus = ws.ext(AppId::Wadbrowser, "focus").is_some_and(|e| e.url.is_none());
-    let mode = if focus { "focus" } else { "full" };
-    Some(format!(
-        "# WadBrowser's settings for this wadspace, from its design (a\n\
-         # user's own go in ~/.config/wadbrowser/wadbrowser.conf).\n\
-         #\n\
-         # What links open in: full (tabs and an address bar) or focus (no address bar).\n\
-         default = {mode}\n"
+    Some(wad_model::browser::conf(
+        "WadBrowser's settings for this wadspace, from its design (the\nBuilder's add-ons). The browser has none of its own.",
+        !focus,
+        &ws.browser,
     ))
 }
 

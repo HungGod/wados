@@ -251,6 +251,59 @@ pub fn focus_toggle(x: &Wadspace) -> Op {
     }
 }
 
+/// WadBrowser's address bar in `x`: on unless it has Focus.
+pub fn address_bar(x: &Wadspace) -> bool {
+    focus(x).is_none()
+}
+
+/// Its browser's settings, with `f` done to them: the op that sets them.
+pub fn browser_op(x: &Wadspace, f: impl FnOnce(&mut wad_model::browser::BrowserPrefs)) -> Op {
+    let mut prefs = x.browser.clone();
+    f(&mut prefs);
+    Op::SetBrowser { ws: x.id.clone(), prefs }
+}
+
+/// The ad blocker on, or off.
+pub fn blocker_toggle(x: &Wadspace) -> Op {
+    browser_op(x, |p| p.ad_blocker = !p.ad_blocker)
+}
+
+/// `site` blocked, or no longer.
+pub fn block_toggle(x: &Wadspace, site: &str) -> Op {
+    browser_op(x, |p| {
+        if !p.unblock(site) {
+            p.block(site);
+        }
+    })
+}
+
+/// A site typed to block: its op, or why it can't be.
+pub fn block_typed(x: &Wadspace, text: &str) -> Result<Op, String> {
+    let Some(site) = wad_model::browser::site(text) else {
+        return Err("That isn’t a website: type one like example.com".into());
+    };
+    if x.browser.blocked.contains(&site) {
+        return Err(format!("{site} is blocked already"));
+    }
+    Ok(browser_op(x, |p| {
+        p.block(&site);
+    }))
+}
+
+/// The sites shown to block: the suggested ones (social media), then its
+/// own; each with whether it's blocked.
+pub fn block_pills(x: &Wadspace) -> Vec<(String, bool)> {
+    let blocked = &x.browser.blocked;
+    let mut out: Vec<(String, bool)> =
+        wad_model::browser::SUGGESTED_BLOCKS.iter().map(|s| (s.to_string(), blocked.iter().any(|b| b == s))).collect();
+    for b in blocked {
+        if !out.iter().any(|(s, _)| s == b) {
+            out.push((b.clone(), true));
+        }
+    }
+    out
+}
+
 /// What's suggested for it (none for one that can't be changed here).
 pub fn suggested(x: &Wadspace, editable: bool) -> Vec<Suggestion> {
     if editable { suggestions(x, SUGGESTED) } else { vec![] }
@@ -649,5 +702,27 @@ mod tests {
         }
         let menu = disc_menu(&lib, &disc);
         assert!(matches!(menu[0], Choice::Item(_)), "nothing to say about where: {menu:?}");
+    }
+
+    #[test]
+    fn the_browsers_settings_change_by_op() {
+        let mut x = wad_model::ops::blank("w", "W", "m", 0, 0);
+        assert!(address_bar(&x));
+        let Op::SetBrowser { prefs, .. } = blocker_toggle(&x) else { panic!("an op") };
+        assert!(!prefs.ad_blocker);
+        let Op::SetBrowser { prefs, .. } = block_toggle(&x, "tiktok.com") else { panic!("an op") };
+        assert_eq!(prefs.blocked, vec!["tiktok.com"]);
+        x.browser = prefs;
+        let Op::SetBrowser { prefs, .. } = block_toggle(&x, "tiktok.com") else { panic!("an op") };
+        assert!(prefs.blocked.is_empty(), "a second tap unblocks it");
+        assert!(block_typed(&x, "not a site").is_err());
+        assert_eq!(block_typed(&x, "tiktok.com"), Err("tiktok.com is blocked already".into()));
+        let Ok(Op::SetBrowser { prefs, .. }) = block_typed(&x, "https://www.Example.org/x") else { panic!("an op") };
+        assert_eq!(prefs.blocked, vec!["tiktok.com", "example.org"]);
+        x.browser = prefs;
+        let pills = block_pills(&x);
+        assert_eq!(pills.len(), wad_model::browser::SUGGESTED_BLOCKS.len() + 1, "its own after the suggested");
+        assert!(pills.contains(&("tiktok.com".into(), true)) && pills.contains(&("x.com".into(), false)));
+        assert_eq!(pills.last(), Some(&("example.org".into(), true)));
     }
 }
