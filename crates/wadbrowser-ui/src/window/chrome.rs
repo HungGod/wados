@@ -63,9 +63,10 @@ pub(super) struct TabDrag {
 
 /// The tab bar (`.tabbar`): the tabs, then +, then room to drag the window
 /// by (a double click there maximizes it, or puts it back), then the
-/// window's buttons.
+/// window's buttons. Only that room is a window handle: a handle round the
+/// tabs too would start moving the window with every tab's drag.
 pub(super) struct TabStrip {
-    pub root: gtk::WindowHandle,
+    pub root: gtk::Box,
     /// The view's pages (kept: the view only keeps it while someone does).
     pages: gtk::SelectionModel,
     list: gtk::Box,
@@ -108,11 +109,11 @@ impl TabStrip {
             }
         });
         room.add_controller(twice);
-        row.append(&room);
+        row.append(&gtk::WindowHandle::builder().hexpand(true).child(&room).build());
         let controls = gtk::WindowControls::builder().side(gtk::PackType::End).valign(gtk::Align::Center).build();
         row.append(&controls);
         plus.connect_clicked(move |_| new_tab());
-        let root = gtk::WindowHandle::builder().child(&row).build();
+        let root = row;
 
         let pages = tab_view.pages();
         let strip = Rc::new(TabStrip { root, pages: pages.clone(), list, tabs: RefCell::default(), drag, controls });
