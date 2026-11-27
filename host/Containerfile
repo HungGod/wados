@@ -1,7 +1,7 @@
 # WadOS's host image: the machine's own OS. Fedora 44 bootc, which boots
 # through greetd straight into labwc (ours, patched) and the WadSpaces shell,
 # locked first; wadd runs the wadspaces with root's podman; tailscaled and
-# cloudflared are its ways in from outside (docs/decisions/0003-host-image.md).
+# cloudflared are its ways in from outside.
 #
 # The open graphics drivers (Intel, AMD, nouveau/NVK) and their firmware: the
 # installer stick, a new machine and the Surface run this. A machine with an
@@ -17,7 +17,7 @@
 
 # ------------------------------------------------------------ labwc
 # labwc 0.9.6 from Fedora's own source package, with WadOS's patches
-# (host/labwc/*.patch, docs/decisions/0001-labwc.md), built against Fedora
+# (host/labwc/*.patch), built against Fedora
 # 44's wlroots0.19 as tools/build-labwc.sh does for a laptop. It's an RPM, so
 # dnf brings what it needs to run and rpm knows it's ours (release .wados1);
 # Fedora's unpatched labwc is never installed. Its one Requires dropped:
@@ -250,7 +250,7 @@ RUN systemctl enable greetd.service podman.socket wadd.socket wadd.service wados
 # Checks: every binary loads (all its libraries and symbols are here), the
 # tools are there, the firmware is there, and greetd's config is made right
 # for a machine with its person and one without. And no firebase.toml: the
-# image is public, and the account's web app is the stick's to give (0013).
+# image is public, and the account's web app is the stick's to give.
 RUN set -e; \
     for b in /usr/bin/wadd /usr/bin/wados-shell /usr/bin/wadsctl /usr/libexec/wados/wadspaces-clipboard \
              /usr/bin/wadbrowser /usr/bin/wados-settings /usr/bin/wados-files /usr/bin/wados-installer /usr/bin/wados-agents /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \

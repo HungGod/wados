@@ -4,9 +4,8 @@
 //!
 //! A wadspace's window is the one whose app id is `io.wadspaces.<id>`: labwc
 //! (with host/labwc/0001-…) reports a sandboxed client's security-context
-//! app id, which wadd set and the wadspace can't change
-//! (docs/decisions/0001-labwc.md). The machine's own apps keep theirs
-//! (`io.wados.*`).
+//! app id, which wadd set and the wadspace can't change.
+//! The machine's own apps keep theirs (`io.wados.*`).
 
 use std::collections::BTreeMap;
 use std::os::fd::{AsFd, AsRawFd, FromRawFd, OwnedFd};

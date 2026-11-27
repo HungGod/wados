@@ -14,7 +14,7 @@ wadspaces-session restore > /dev/null 2>&1 &
 # One clipboard for the machine: copies here paste in every other wadspace,
 # and theirs here (crates/wad-clip). On the screen that bridge runs on the
 # machine (wadd: the machine's labwc hides data-control from a wadspace's
-# socket, docs/decisions/0001-labwc.md); here only for a stream.
+# socket); here only for a stream.
 if [ "$(cat /run/wadspaces-extra/display 2> /dev/null)" = stream ] && [ -n "${WADSPACES_HOST_WAYLAND:-}" ] &&
   command -v wadspaces-clipboard > /dev/null; then
   wadspaces-clipboard --host "${WADSPACES_HOST_WAYLAND}" > /dev/null &
