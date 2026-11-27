@@ -294,7 +294,7 @@ struct FakeImages {
     /// Built in a running wadspace's own podman: (container, reference, id, version).
     in_wadspaces: Mutex<Vec<(String, String, String, String)>>,
     /// What was copied out of a wadspace: (container, id).
-    imports: Mutex<Vec<(String, String)>>,
+    imports: Mutex<Vec<(String, String, String)>>,
     /// What registries have, by reference (read without bootc).
     registry: Mutex<HashMap<String, Version>>,
     /// How many times a registry was read.
@@ -377,12 +377,13 @@ impl Images for FakeImages {
             .collect())
     }
 
-    async fn import(&self, container: &str, id: &str, mut on_line: OnLine) -> Res<()> {
+    async fn import(&self, container: &str, id: &str, tag: &str, mut on_line: OnLine) -> Res<()> {
         on_line(&format!("Loaded image: sha256:{id}"));
-        self.imports.lock().unwrap().push((container.into(), id.into()));
+        self.imports.lock().unwrap().push((container.into(), id.into(), tag.into()));
         let found = self.in_wadspaces.lock().unwrap().iter().find(|(c, _, i, _)| c == container && i == id).cloned();
-        let (_, reference, id, version) = found.ok_or("no such image in it")?;
-        self.built.lock().unwrap().push((reference, id, version));
+        let (_, _, id, version) = found.ok_or("no such image in it")?;
+        // Saved by id, it's loaded with no name: here it's only the one it's tagged.
+        self.built.lock().unwrap().push((tag.into(), id, version));
         Ok(())
     }
 
@@ -812,7 +813,11 @@ async fn a_build_in_the_wados_wadspace_is_copied_out_then_switched_to() {
     let u = up.until(|u| u.job.is_none() && u.staged.is_some()).await;
     assert_eq!(u.staged.map(|s| s.version), Some("44.20261111.1302".into()));
     // Copied out of the wadspace (its podman's save), then switched to here.
-    assert_eq!(*up.images.imports.lock().unwrap(), [("wad-wadspaces".to_string(), "fresh".to_string())]);
+    // Named here as it was there: bootc's `name@<id>` needs both.
+    assert_eq!(
+        *up.images.imports.lock().unwrap(),
+        [("wad-wadspaces".to_string(), "fresh".to_string(), "localhost/wados-host:latest".to_string())]
+    );
     assert!(
         up.calls().iter().any(|c| c == "bootc switch --transport containers-storage localhost/wados-host@fresh"),
         "{:?}",

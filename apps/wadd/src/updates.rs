@@ -644,8 +644,11 @@ pub trait Images: Send + Sync + 'static {
     async fn built_in_wadspaces(&self) -> Res<Vec<(String, ImageInfo)>>;
     /// One of those copied into the machine's store, where bootc reads it:
     /// `podman save` inside the wadspace (its own user namespace, so the
-    /// files keep their owners), `podman load` here. Its id stays the same.
-    async fn import(&self, container: &str, id: &str, on_line: OnLine) -> Res<()>;
+    /// files keep their owners), `podman load` here, then named `tag` here.
+    /// Its id stays the same, but an archive saved by id names nothing
+    /// (`RepoTags: []`), and bootc's `name@<id>` needs the name too: an
+    /// image of that id without it is "identifier is not an image".
+    async fn import(&self, container: &str, id: &str, tag: &str, on_line: OnLine) -> Res<()>;
     /// What a registry has at `reference` (its version label and manifest
     /// digest), without downloading it: for a source bootc doesn't follow.
     async fn remote(&self, reference: &str, token: Option<String>) -> Res<Version>;
@@ -707,15 +710,19 @@ impl Images for PodmanImages {
         Ok(out)
     }
 
-    async fn import(&self, container: &str, id: &str, mut on_line: OnLine) -> Res<()> {
+    async fn import(&self, container: &str, id: &str, tag: &str, mut on_line: OnLine) -> Res<()> {
         if !container.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
             || !id.chars().all(|c| c.is_ascii_hexdigit())
+            || id.is_empty()
+            || !tag.starts_with("localhost/")
+            || !tag.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:".contains(c))
         {
-            return Err(format!("not an image to copy: {container} {id}"));
+            return Err(format!("not an image to copy: {container} {id} {tag}"));
         }
         let script = r#"set -euo pipefail
-podman exec --user abc -e HOME=/config "$1" podman save --format docker-archive "$2" | podman load"#;
-        outside(&["bash", "-c", script, "import", container, id], &mut |l| on_line(l)).await.map(drop)
+podman exec --user abc -e HOME=/config "$1" podman save --format docker-archive "$2" | podman load
+podman tag "$2" "$3""#;
+        outside(&["bash", "-c", script, "import", container, id, tag], &mut |l| on_line(l)).await.map(drop)
     }
 
     async fn remote(&self, reference: &str, token: Option<String>) -> Res<Version> {
@@ -1689,7 +1696,7 @@ impl Inner {
                         jobs.line(&id_, l);
                     }
                 });
-                if let Err(e) = self.images.import(&container, &id, on).await {
+                if let Err(e) = self.images.import(&container, &id, &next.image, on).await {
                     let e = format!("couldn't copy it out of {container}: {e}");
                     self.failed(&e);
                     self.publish();
