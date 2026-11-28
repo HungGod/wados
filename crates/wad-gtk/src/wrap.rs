@@ -19,6 +19,8 @@ mod imp {
     pub struct Wrap {
         pub gap: Cell<i32>,
         pub line_gap: Cell<i32>,
+        /// The most it asks for across (0: its children in one line).
+        pub max_natural: Cell<i32>,
         pub keyed: RefCell<Vec<(String, gtk::Widget)>>,
     }
 
@@ -60,6 +62,8 @@ mod imp {
                         min = min.max(m);
                         nat += n + if i > 0 { self.gap.get() } else { 0 };
                     }
+                    let cap = self.max_natural.get();
+                    let nat = if cap > 0 { nat.min(cap.max(min)) } else { nat };
                     (min, nat, -1, -1)
                 }
                 _ => {
@@ -144,6 +148,14 @@ impl Wrap {
         me.imp().gap.set(gap);
         me.imp().line_gap.set(line_gap);
         me
+    }
+
+    /// Asks for no more than `width` across (its children wrap within it),
+    /// rather than for them all in one line: for a parent that takes its
+    /// child's natural width, as a popover does.
+    pub fn set_max_width(&self, width: i32) {
+        self.imp().max_natural.set(width.max(0));
+        self.queue_resize();
     }
 
     pub fn append(&self, w: &impl IsA<gtk::Widget>) {

@@ -2,8 +2,8 @@
 //! are [`addon_list`]'s, `addons.ts`): only the add-ons of the apps in it,
 //! by app: web apps for WadBrowser (the usual sites, your own, **Add a
 //! site**) and its settings (the address bar, the ad blocker, and what it
-//! blocks: the machine's blocker groups a tap each, each one's sites shown
-//! and changed under it (its pencil), and **New group**), VS Code's
+//! blocks: the machine's blocker groups a tap each, each one's sites
+//! changed in a popup (its pencil), and **New group**), VS Code's
 //! extensions, the command line (its tools, then its own **commands**,
 //! RUN or COPY typed exactly, each named RUN_1…, a step of its build),
 //! Steam's games and Dolphin's (listed, off till phase 10).
@@ -52,10 +52,13 @@ struct BrowserPart {
     /// The machine's blocker groups: lit when on in it; each with its pencil.
     groups: Wrap,
     group_new: gtk::Button,
-    /// The group open (its pencil): its sites, a tap takes one out, and one typed goes in.
-    editor: gtk::Box,
+    /// The group open (its pencil), in a popup by it: its sites (a tap takes
+    /// one out), one typed goes in, and Remove group.
+    popover: gtk::Popover,
     editor_title: gtk::Label,
     sites: Wrap,
+    remove: gtk::Button,
+    done: gtk::Button,
     entry: gtk::Entry,
     add: gtk::Button,
     err: gtk::Label,
@@ -86,7 +89,7 @@ pub struct Panel {
     none: gtk::Label,
     /// The wadspace shown, and whether it can be changed here.
     now: RefCell<Option<Wadspace>>,
-    /// The blocker group whose sites are shown (its pencil).
+    /// The blocker group whose sites are in the popup (its pencil).
     open_group: RefCell<Option<String>>,
     editable: Cell<bool>,
     /// Its groups' items, by group and key (what a click or a drag reads).
@@ -419,14 +422,13 @@ impl Panel {
             |(g, on, shown)| group_pill(&me, g, *on, *shown),
             |w, (g, on, shown)| paint_group(w, g, *on, *shown),
         );
-        // The open group's sites (none open, or it's gone: the editor's away).
+        // The open group's sites (it's gone, or can't be changed here: the popup's away).
         let group = open.and_then(|id| lib.block_groups.iter().find(|g| g.id == id).cloned());
-        if group.is_none() {
-            self.open_group.borrow_mut().take();
+        if (group.is_none() || !editable) && b.popover.is_visible() {
+            b.popover.popdown();
         }
-        b.editor.set_visible(group.is_some() && editable);
         if let Some(g) = &group {
-            b.editor_title.set_label(&format!("Sites {} blocks", g.name));
+            b.editor_title.set_label(&g.name);
             let sites: Vec<(String, (String, String))> =
                 g.sites.iter().map(|s| (s.clone(), (g.id.clone(), s.clone()))).collect();
             b.sites.set(&sites, |(id, s)| site_pill(&me, id, s), |_, _| {});
@@ -440,17 +442,50 @@ impl Panel {
         b.add.set_sensitive(!b.entry.text().trim().is_empty());
     }
 
-    /// A group's pencil: its sites shown under the groups, or put away.
-    fn toggle_group_editor(&self, id: &str) {
-        {
-            let mut open = self.open_group.borrow_mut();
-            *open = if open.as_deref() == Some(id) { None } else { Some(id.to_string()) };
+    /// A group's pencil: its sites in a popup by it.
+    fn open_group_editor(&self, anchor: &gtk::Widget, id: &str) {
+        if !self.editable.get() {
+            return;
         }
-        self.browser.entry.set_text("");
-        self.browser.err.set_visible(false);
+        *self.open_group.borrow_mut() = Some(id.to_string());
+        let b = &self.browser;
+        b.entry.set_text("");
+        b.err.set_visible(false);
+        if b.popover.parent().is_some() {
+            b.popover.unparent();
+        }
+        b.popover.set_parent(anchor);
+        b.popover.set_autohide(!kit::from_ctl());
         if let Some(x) = self.now.borrow().clone() {
             self.show_browser(&x, self.editable.get());
         }
+        b.popover.popup();
+        b.entry.grab_focus();
+    }
+
+    /// The popup put away: no group open, and it's let go of its pencil
+    /// (which may go: its group removed, another wadspace shown).
+    fn group_editor_closed(&self) {
+        self.open_group.borrow_mut().take();
+        let pw = self.browser.popover.downgrade();
+        gtk::glib::idle_add_local_once(move || {
+            if let Some(p) = pw.upgrade()
+                && !p.is_visible()
+                && p.parent().is_some()
+            {
+                p.unparent();
+            }
+        });
+        if let Some(x) = self.now.borrow().clone() {
+            self.show_browser(&x, self.editable.get());
+        }
+    }
+
+    /// The open group removed (from the machine, and every wadspace with it on).
+    fn remove_open_group(&self) {
+        let Some(id) = self.open_group.borrow().clone() else { return };
+        self.browser.popover.popdown();
+        self.act(Some(Op::RemoveBlockGroup { id }));
     }
 
     /// A blocker group's pill, right-clicked: edit it, or remove it.
@@ -684,12 +719,14 @@ impl ctl::Rows for Panel {
             if b.group_new.is_sensitive() {
                 out.push(Row::new("browser:group-new", &b.group_new, "New group"));
             }
-            if b.editor.is_visible() {
+            if b.popover.is_visible() {
                 for (k, w) in b.sites.keyed() {
                     out.push(Row::new(format!("browser:site:{k}"), &w, k.clone()));
                 }
+                out.push(Row::new("browser:group-remove", &b.remove, "Remove group"));
+                out.push(Row::new("browser:group-done", &b.done, "Done"));
             }
-            if b.editor.is_visible() {
+            if b.popover.is_visible() {
                 out.push(Row::new("browser:block-input", &b.entry, b.entry.text()));
                 out.push(Row::new("browser:block-add", &b.add, "Add the site to the group"));
             }
@@ -904,14 +941,30 @@ fn browser_part(me: &Weak<Panel>) -> BrowserPart {
     });
     root.append(&group_new);
 
-    // The open group's sites, under the groups.
-    let editor =
-        gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(8).css_classes(["side-group-edit"]).build();
-    editor.set_visible(false);
-    let editor_title = sub("");
+    // The open group's sites, in a popup by its pencil.
+    let editor = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(10).build();
+    editor.set_size_request(320, -1);
+    let editor_title = gtk::Label::builder().xalign(0.0).css_classes(["side-ask-title"]).build();
     editor.append(&editor_title);
+    editor.append(
+        &gtk::Label::builder()
+            .label("Sites it blocks: tap one to take it out")
+            .xalign(0.0)
+            .css_classes(["side-ask-label"])
+            .build(),
+    );
     let sites = Wrap::new(6, 6);
-    editor.append(&sites);
+    // As wide as the popup, the sites wrapping under each other (and a long
+    // group's scrolling).
+    sites.set_max_width(320);
+    let fit = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .max_content_height(260)
+        .propagate_natural_width(true)
+        .propagate_natural_height(true)
+        .child(&sites)
+        .build();
+    editor.append(&fit);
     let form = gtk::Box::builder().spacing(6).css_classes(["side-type"]).build();
     let entry = gtk::Entry::builder()
         .placeholder_text("Add a site to it: example.com")
@@ -934,8 +987,42 @@ fn browser_part(me: &Weak<Panel>) -> BrowserPart {
     editor.append(&form);
     let err = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).css_classes(["side-err"]).build();
     editor.append(&err);
-    // Under the groups, before New group.
-    root.insert_child_after(&editor, Some(&groups));
+    let buttons = gtk::Box::builder().spacing(8).build();
+    let remove = gtk::Button::builder()
+        .label("Remove group")
+        .css_classes(["side-ask-cancel"])
+        .hexpand(true)
+        .halign(gtk::Align::Start)
+        .build();
+    let done = gtk::Button::builder().label("Done").css_classes(["side-ask-ok"]).build();
+    buttons.append(&remove);
+    buttons.append(&done);
+    editor.append(&buttons);
+    let popover = gtk::Popover::builder()
+        .has_arrow(false)
+        .position(gtk::PositionType::Bottom)
+        .halign(gtk::Align::Start)
+        .css_classes(["side-ask"])
+        .child(&editor)
+        .build();
+    let w = me.clone();
+    popover.connect_closed(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.group_editor_closed();
+        }
+    });
+    let pw = popover.downgrade();
+    done.connect_clicked(move |_| {
+        if let Some(p) = pw.upgrade() {
+            p.popdown();
+        }
+    });
+    let w = me.clone();
+    remove.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.remove_open_group();
+        }
+    });
     let w = me.clone();
     entry.connect_activate(move |_| {
         if let Some(p) = w.upgrade() {
@@ -957,15 +1044,33 @@ fn browser_part(me: &Weak<Panel>) -> BrowserPart {
             p.block_typed();
         }
     });
-    BrowserPart { root, address, blocker, groups, group_new, editor, editor_title, sites, entry, add, err }
+    BrowserPart {
+        root,
+        address,
+        blocker,
+        groups,
+        group_new,
+        popover,
+        editor_title,
+        sites,
+        remove,
+        done,
+        entry,
+        add,
+        err,
+    }
 }
 
-/// A blocker group's pill: a tap turns it on in the wadspace, or off;
-/// right-clicked, its menu (edit it, remove it). Beside it its pencil: its
-/// sites, under the groups.
+/// A blocker group's pill, one container: its name (a tap turns it on in
+/// the wadspace, or off; right-clicked, its menu) and its pencil (its sites,
+/// in a popup).
 fn group_pill(me: &Weak<Panel>, g: &BlockGroup, on: bool, shown: bool) -> gtk::Widget {
-    let row = gtk::Box::builder().spacing(2).css_classes(["side-group"]).build();
-    let b = pill_button("layers", &g.name, "");
+    let row = gtk::Box::builder().css_classes(["side-blocks"]).build();
+    let b = gtk::Button::builder().css_classes(["side-blocks-name"]).build();
+    let h = gtk::Box::builder().spacing(6).build();
+    h.append(&wad_gtk::Icon::new("layers", 13));
+    h.append(&gtk::Label::new(Some(&g.name)));
+    b.set_child(Some(&h));
     b.set_widget_name(&format!("browser:group:{}", g.id));
     let (w, id) = (me.clone(), g.id.clone());
     b.connect_clicked(move |_| {
@@ -981,13 +1086,13 @@ fn group_pill(me: &Weak<Panel>, g: &BlockGroup, on: bool, shown: bool) -> gtk::W
         }
     });
     b.add_controller(gesture);
-    let pencil = gtk::Button::builder().css_classes(["side-pill", "side-pencil"]).build();
-    pencil.set_child(Some(&wad_gtk::Icon::new("pencil", 13)));
+    let pencil = gtk::Button::builder().css_classes(["side-blocks-edit"]).build();
+    pencil.set_child(Some(&wad_gtk::Icon::new("pencil", 12)));
     pencil.set_widget_name(&format!("browser:group-sites:{}", g.id));
     let (w, id) = (me.clone(), g.id.clone());
-    pencil.connect_clicked(move |_| {
+    pencil.connect_clicked(move |p2| {
         if let Some(p) = w.upgrade() {
-            p.toggle_group_editor(&id);
+            p.open_group_editor(p2.upcast_ref(), &id);
         }
     });
     row.append(&b);
@@ -998,25 +1103,22 @@ fn group_pill(me: &Weak<Panel>, g: &BlockGroup, on: bool, shown: bool) -> gtk::W
 }
 
 /// A group's pill as the group is: its name, lit when on, and what it
-/// blocks; its pencil lit while its sites are shown.
+/// blocks; its pencil lit while its popup's up.
 fn paint_group(w: &gtk::Widget, g: &BlockGroup, on: bool, shown: bool) {
-    let (Some(pill), Some(pencil)) = (w.first_child(), w.last_child()) else { return };
-    lit(&pill, on);
+    let (Some(name), Some(pencil)) = (w.first_child(), w.last_child()) else { return };
+    lit(w, on);
+    lit(&name, on);
     lit(&pencil, shown);
-    if let Some(l) = name_label(&pill) {
+    if let Some(l) = name_label(&name) {
         l.set_label(&g.name);
     }
     let n = g.sites.len();
-    pill.set_tooltip_text(Some(&format!(
+    name.set_tooltip_text(Some(&format!(
         "{} {n} site{}. Right-click to rename or remove it.",
         if on { "On: it blocks" } else { "Off: tap to block its" },
         if n == 1 { "" } else { "s" }
     )));
-    pencil.set_tooltip_text(Some(&if shown {
-        format!("Hide {}’s sites", g.name)
-    } else {
-        format!("{}’s sites: add or take out", g.name)
-    }));
+    pencil.set_tooltip_text(Some(&format!("{}’s sites: add or take out", g.name)));
 }
 
 /// A site in the open group: a tap takes it out of the group.
