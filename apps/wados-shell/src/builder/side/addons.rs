@@ -724,7 +724,7 @@ impl ctl::Rows for Panel {
                     out.push(Row::new(format!("browser:site:{k}"), &w, k.clone()));
                 }
                 out.push(Row::new("browser:group-remove", &b.remove, "Remove group"));
-                out.push(Row::new("browser:group-done", &b.done, "Done"));
+                out.push(Row::new("browser:group-save", &b.done, "Save"));
             }
             if b.popover.is_visible() {
                 out.push(Row::new("browser:block-input", &b.entry, b.entry.text()));
@@ -987,7 +987,8 @@ fn browser_part(me: &Weak<Panel>) -> BrowserPart {
     editor.append(&form);
     let err = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).css_classes(["side-err"]).build();
     editor.append(&err);
-    // Delete (red: the group goes from the machine) at the left, Done at the right.
+    // Delete (red: the group goes from the machine) at the left, Save at the right
+    // (each change is kept as it's made: Save puts the popup away).
     let buttons = gtk::Box::builder().spacing(8).build();
     let remove = gtk::Button::builder()
         .label("Delete")
@@ -996,7 +997,7 @@ fn browser_part(me: &Weak<Panel>) -> BrowserPart {
         .halign(gtk::Align::Start)
         .tooltip_text("Delete the group: from this machine and every wadspace with it on")
         .build();
-    let done = gtk::Button::builder().label("Done").css_classes(["side-ask-ok"]).build();
+    let done = gtk::Button::builder().label("Save").css_classes(["side-ask-ok"]).build();
     buttons.append(&remove);
     buttons.append(&done);
     editor.append(&buttons);
