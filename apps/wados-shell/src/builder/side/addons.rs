@@ -944,8 +944,19 @@ fn browser_part(me: &Weak<Panel>) -> BrowserPart {
     // The open group's sites, in a popup by its pencil.
     let editor = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(10).build();
     editor.set_size_request(320, -1);
-    let editor_title = gtk::Label::builder().xalign(0.0).css_classes(["side-ask-title"]).build();
-    editor.append(&editor_title);
+    // Its name, and at the top right a trash can: Remove group.
+    let head = gtk::Box::builder().spacing(8).build();
+    let editor_title = gtk::Label::builder().xalign(0.0).hexpand(true).css_classes(["side-ask-title"]).build();
+    let remove = gtk::Button::builder()
+        .css_classes(["side-trash"])
+        .valign(gtk::Align::Center)
+        .tooltip_text("Remove group: from this machine and every wadspace with it on")
+        .build();
+    remove.set_child(Some(&wad_gtk::Icon::new("trash", 15)));
+    remove.update_property(&[gtk::accessible::Property::Label("Remove group")]);
+    head.append(&editor_title);
+    head.append(&remove);
+    editor.append(&head);
     editor.append(
         &gtk::Label::builder()
             .label("Sites it blocks: tap one to take it out")
@@ -987,17 +998,8 @@ fn browser_part(me: &Weak<Panel>) -> BrowserPart {
     editor.append(&form);
     let err = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).css_classes(["side-err"]).build();
     editor.append(&err);
-    let buttons = gtk::Box::builder().spacing(8).build();
-    let remove = gtk::Button::builder()
-        .label("Remove group")
-        .css_classes(["side-ask-cancel"])
-        .hexpand(true)
-        .halign(gtk::Align::Start)
-        .build();
-    let done = gtk::Button::builder().label("Done").css_classes(["side-ask-ok"]).build();
-    buttons.append(&remove);
-    buttons.append(&done);
-    editor.append(&buttons);
+    let done = gtk::Button::builder().label("Done").css_classes(["side-ask-ok"]).halign(gtk::Align::End).build();
+    editor.append(&done);
     let popover = gtk::Popover::builder()
         .has_arrow(false)
         .position(gtk::PositionType::Bottom)
