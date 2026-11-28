@@ -1,7 +1,7 @@
 //! Settings ▸ Browser: WadBrowser's settings on this machine, which the
 //! browser has no page for. Its address bar, its ad and tracker blocker,
 //! what it blocks (the machine's blocker groups, each on or off here, made
-//! and changed here or in the Builder; and sites of its own, typed), and the
+//! and changed here or in the Builder: a site is blocked in a group), and the
 //! machine's web apps (made from pages: Remove). It searches with
 //! DuckDuckGo: that isn't a setting.
 //!
@@ -55,31 +55,29 @@ button.br-site.on {
 }
 "#;
 
-/// The settings as the browser reads them here: the address bar, and the rest.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The settings as the browser reads them here.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Conf {
-    pub address_bar: bool,
     pub prefs: BrowserPrefs,
-}
-
-impl Default for Conf {
-    fn default() -> Self {
-        Conf { address_bar: true, prefs: BrowserPrefs::default() }
-    }
+    /// Sites an older Settings blocked one by one (`block`): made a group
+    /// of their own the next time this page is shown, then gone from the file.
+    pub old_sites: Vec<String>,
 }
 
 impl Conf {
     pub fn parse(text: &str) -> Conf {
         let mut c = Conf::default();
-        ConfText::parse(text).over(&mut c.prefs, &mut c.address_bar);
+        let t = ConfText::parse(text);
+        t.over(&mut c.prefs);
+        c.old_sites = t.blocked.unwrap_or_default();
         c
     }
 
     pub fn text(&self) -> String {
         browser::conf(
             "WadBrowser's settings on this machine: Settings ▸ Browser's (the\nbrowser reads them again when they change).",
-            self.address_bar,
             &self.prefs,
+            &self.old_sites,
         )
     }
 }
@@ -125,9 +123,6 @@ struct Ui {
     groups_note: gtk::Label,
     /// The group being made or changed (its form), under the list.
     edit: GroupForm,
-    own: gtk::Box,
-    own_note: gtk::Label,
-    field: TextField,
     apps: gtk::Box,
     apps_note: gtk::Label,
     note: gtk::Label,
@@ -172,57 +167,37 @@ impl BrowserPanel {
         self.paint(&c);
     }
 
-    fn block_typed(&self) {
-        let Some(text) = self.ui.borrow().as_ref().map(|u| u.field.text.text().to_string()) else { return };
-        let site = browser::site(&text);
-        let have = load();
-        let why = match &site {
-            None => Some("That isn’t a website: type one like example.com".to_string()),
-            Some(s) if have.prefs.blocked.contains(s) => Some(format!("{s} is blocked already")),
-            Some(_) => None,
-        };
-        if let Some(ui) = &*self.ui.borrow() {
-            if let Some(why) = &why {
-                ui.field.set_error(Some(why));
-                return;
-            }
-            ui.field.set_error(None);
-            ui.field.text.set_text("");
+    /// Sites an older Settings blocked one by one, made a group of their
+    /// own (on here), so none stops being blocked.
+    fn upgrade(&self) {
+        let c = load();
+        if c.old_sites.is_empty() {
+            return;
         }
-        if let Some(s) = site {
-            self.change(move |c| {
-                c.prefs.block(&s);
-            });
-        }
+        let Some(ctx) = CTX.with_borrow(|c| c.clone()) else { return };
+        let group = BlockGroup { id: String::new(), name: "This machine’s sites".into(), sites: c.old_sites.clone() };
+        let w = self.me.clone();
+        ctx.link.call(
+            move |wadd| async move { wadd.op(wad_model::Op::SaveBlockGroup { group }).await },
+            move |r| {
+                let (Some(me), Ok(out)) = (w.upgrade(), r) else { return };
+                let Some(id) = out.created else { return };
+                me.change(move |c| {
+                    c.old_sites.clear();
+                    if !c.prefs.groups.contains(&id) {
+                        c.prefs.groups.push(id);
+                    }
+                });
+            },
+        );
     }
 
     /// The page as `c` says.
     fn paint(&self, c: &Conf) {
         let Some(ui) = &*self.ui.borrow() else { return };
-        ui.address.set(c.address_bar);
+        ui.address.set(c.prefs.address_bar);
         ui.blocker.set(c.prefs.ad_blocker);
         self.paint_groups(c);
-        while let Some(c) = ui.own.first_child() {
-            ui.own.remove(&c);
-        }
-        for site in &c.prefs.blocked {
-            let row = Row::new(Some("ban"), Tone::Plain, site, "And its subdomains").named(&format!("blocked-{site}"));
-            let b = kit::button("Unblock", Variant::Secondary, None, true);
-            b.set_widget_name(&format!("unblock-{site}"));
-            let (w, s) = (self.me.clone(), site.to_string());
-            b.connect_clicked(move |_| {
-                if let Some(me) = w.upgrade() {
-                    let s = s.clone();
-                    me.change(move |c| {
-                        c.prefs.unblock(&s);
-                    });
-                }
-            });
-            row.ctl.append(&b);
-            ui.own.append(&row.root);
-        }
-        ui.own_note.set_visible(c.prefs.blocked.is_empty());
-        ui.own.set_visible(!c.prefs.blocked.is_empty());
     }
 
     /// The machine's groups, each on here or not (`c`), with Edit.
@@ -415,6 +390,7 @@ impl Panel for BrowserPanel {
         }
         CTX.with_borrow_mut(|c| *c = Some(ctx.clone()));
         let c = load();
+        self.upgrade();
         let page = kit::Page::new("Browser", false);
 
         let main = Group::new(
@@ -422,14 +398,13 @@ impl Panel for BrowserPanel {
             "The browser on this machine. A wadspace’s has its own, in its Builder’s add-ons.",
         );
         let w = self.me.clone();
-        let address = Toggle::new(c.address_bar, move |on| {
+        let address = Toggle::new(c.prefs.address_bar, move |on| {
             if let Some(me) = w.upgrade() {
-                me.change(|c| c.address_bar = on);
+                me.change(|c| c.prefs.address_bar = on);
             }
         })
         .named("browser-address-bar");
-        let row =
-            Row::new(Some("globe"), Tone::Plain, "Address Bar", "Off: its tabs alone (Focus), no address to type");
+        let row = Row::new(Some("globe"), Tone::Plain, "Address Bar", "Off: its tabs alone, no address to type");
         row.ctl.append(&address.root);
         main.add(&row.root);
         let w = self.me.clone();
@@ -469,35 +444,6 @@ impl Panel for BrowserPanel {
         groups.root.append(&new);
         page.add(&groups.root);
 
-        let blocked = Group::new("Your Own Sites", "Blocked too, with their subdomains.");
-        blocked.list.set_visible(false);
-        let own = gtk::Box::builder().orientation(gtk::Orientation::Vertical).css_classes(["kit-list"]).build();
-        blocked.root.append(&own);
-        let own_note = parts::note("None yet: type one below.", "set-note");
-        blocked.root.append(&own_note);
-        let add = gtk::Box::builder().spacing(8).css_classes(["br-add"]).build();
-        let field = TextField::new("", "A website to block: example.com").named("browser-block-site");
-        field.root.set_hexpand(true);
-        add.append(&field.root);
-        let block = kit::button("Block", Variant::Primary, Some("ban"), true);
-        block.set_widget_name("browser-block");
-        block.set_valign(gtk::Align::Start);
-        add.append(&block);
-        blocked.root.append(&add);
-        let w = self.me.clone();
-        block.connect_clicked(move |_| {
-            if let Some(me) = w.upgrade() {
-                me.block_typed();
-            }
-        });
-        let w = self.me.clone();
-        field.text.connect_activate(move |_| {
-            if let Some(me) = w.upgrade() {
-                me.block_typed();
-            }
-        });
-        page.add(&blocked.root);
-
         let web =
             Group::new("Web Apps", "Made from pages in WadBrowser (right-click a page: Create app from this page).");
         web.list.set_visible(false);
@@ -507,19 +453,8 @@ impl Panel for BrowserPanel {
         web.root.append(&apps_note);
         page.add(&web.root);
 
-        *self.ui.borrow_mut() = Some(Ui {
-            address,
-            blocker,
-            groups: group_list,
-            groups_note,
-            edit,
-            own,
-            own_note,
-            field,
-            apps,
-            apps_note,
-            note,
-        });
+        *self.ui.borrow_mut() =
+            Some(Ui { address, blocker, groups: group_list, groups_note, edit, apps, apps_note, note });
         self.paint(&c);
         self.paint_apps();
         page.root.upcast()
@@ -635,16 +570,19 @@ mod tests {
     #[test]
     fn the_conf_reads_back() {
         let c = Conf {
-            address_bar: false,
             prefs: BrowserPrefs {
+                address_bar: false,
                 ad_blocker: false,
                 groups: vec!["social-media".into()],
-                blocked: vec!["x.com".into()],
+                ..Default::default()
             },
+            old_sites: vec![],
         };
         assert_eq!(Conf::parse(&c.text()), c);
         assert_eq!(Conf::parse(""), Conf::default());
-        assert!(Conf::default().address_bar && Conf::default().prefs.ad_blocker);
+        assert!(Conf::default().prefs.address_bar && Conf::default().prefs.ad_blocker);
+        // An older file's own sites: read, to be made a group.
+        assert_eq!(Conf::parse("block = x.com\n").old_sites, vec!["x.com"]);
     }
 
     #[test]

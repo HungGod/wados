@@ -566,10 +566,11 @@ fn its_extra_folder() {
     // A blocker group on: its sites are written in with its own, by name.
     let mut travel = ws(&lib, "travel").clone();
     travel.browser.groups = vec![wad_model::browser::SOCIAL_MEDIA.into()];
-    travel.browser.blocked = vec!["example.com".into()];
+    travel.browser.address_bar = false;
     let c = extras::wadbrowser_conf(&travel, groups).unwrap();
     let block = c.lines().find(|l| l.starts_with("block = ")).unwrap();
-    assert!(block.contains("reddit.com") && block.ends_with(" example.com"), "{block}");
+    assert!(block.contains("reddit.com") && block.ends_with(" bsky.app"), "{block}");
+    assert!(c.contains("\ndefault = focus\n"), "the address bar off");
     assert!(c.contains("\ngroups = \n"), "the groups already counted in: {c}");
 
     let files = extras::files(ws(&lib, "desk-lab"), &lib.keys, &lib.block_groups, &Mounts::new());

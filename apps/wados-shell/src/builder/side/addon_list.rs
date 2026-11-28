@@ -231,26 +231,16 @@ pub fn steam_menu(g: &SteamGame) -> Vec<Choice> {
     out
 }
 
-/// WadBrowser's Focus in `x`, as its chip.
-pub fn focus(x: &Wadspace) -> Option<String> {
-    ext_in(x, AppId::Wadbrowser, |e| e.id == "focus")
-}
-
-/// Focus on, or off.
-pub fn focus_toggle(x: &Wadspace) -> Op {
-    match focus(x) {
-        Some(chip) => Op::Remove { ws: x.id.clone(), chip },
-        None => Op::NewVariant {
-            ws: x.id.clone(),
-            app: AppId::Wadbrowser,
-            new: NewVariant::Addon("wadbrowser:focus".into()),
-        },
-    }
-}
-
-/// WadBrowser's address bar in `x`: on unless it has Focus.
+/// WadBrowser's address bar in `x` (an older design's Focus add-on, not
+/// yet upgraded, is it off).
 pub fn address_bar(x: &Wadspace) -> bool {
-    focus(x).is_none()
+    x.browser.address_bar && ext_in(x, AppId::Wadbrowser, |e| e.id == "focus").is_none()
+}
+
+/// The address bar on, or off.
+pub fn address_toggle(x: &Wadspace) -> Op {
+    let on = !address_bar(x);
+    browser_op(x, |p| p.address_bar = on)
 }
 
 /// Its browser's settings, with `f` done to them: the op that sets them.
@@ -265,26 +255,17 @@ pub fn blocker_toggle(x: &Wadspace) -> Op {
     browser_op(x, |p| p.ad_blocker = !p.ad_blocker)
 }
 
-/// `site` blocked, or no longer.
-pub fn block_toggle(x: &Wadspace, site: &str) -> Op {
-    browser_op(x, |p| {
-        if !p.unblock(site) {
-            p.block(site);
-        }
-    })
+/// `text` (a site) added to the blocker group `id`: its op, or why it can't be.
+pub fn group_site_add(lib: &Library, id: &str, text: &str) -> Result<Op, String> {
+    let mut g = lib.block_groups.iter().find(|g| g.id == id).cloned().ok_or("That group is gone")?;
+    g.add(text)?;
+    Ok(Op::SaveBlockGroup { group: g })
 }
 
-/// A site typed to block: its op, or why it can't be.
-pub fn block_typed(x: &Wadspace, text: &str) -> Result<Op, String> {
-    let Some(site) = wad_model::browser::site(text) else {
-        return Err("That isn’t a website: type one like example.com".into());
-    };
-    if x.browser.blocked.contains(&site) {
-        return Err(format!("{site} is blocked already"));
-    }
-    Ok(browser_op(x, |p| {
-        p.block(&site);
-    }))
+/// `site` taken out of the blocker group `id` (none if it isn't in it).
+pub fn group_site_remove(lib: &Library, id: &str, site: &str) -> Option<Op> {
+    let mut g = lib.block_groups.iter().find(|g| g.id == id).cloned()?;
+    g.remove(site).then_some(Op::SaveBlockGroup { group: g })
 }
 
 /// The machine's blocker groups, each with whether it's on in `x`.
@@ -575,13 +556,6 @@ mod tests {
         apply(&mut lib, yt, &ctx).unwrap();
         let x = lib.wadspace("vanua-academy").unwrap();
         assert!(item(group(&groups(&lib, x), GroupId::Web), "youtube").lit.is_some());
-        // Focus, on and off.
-        assert_eq!(focus(x), None);
-        let on = focus_toggle(x);
-        apply(&mut lib, on, &ctx).unwrap();
-        let x = lib.wadspace("vanua-academy").unwrap();
-        assert_eq!(focus(x).as_deref(), Some("ext:wadbrowser:focus"));
-        assert!(matches!(focus_toggle(x), Op::Remove { .. }));
     }
 
     #[test]
@@ -748,18 +722,16 @@ mod tests {
     fn the_browsers_settings_change_by_op() {
         let mut x = wad_model::ops::blank("w", "W", "m", 0, 0);
         assert!(address_bar(&x));
+        let Op::SetBrowser { prefs, .. } = address_toggle(&x) else { panic!("an op") };
+        assert!(!prefs.address_bar);
+        x.browser = prefs;
+        assert!(!address_bar(&x));
         let Op::SetBrowser { prefs, .. } = blocker_toggle(&x) else { panic!("an op") };
         assert!(!prefs.ad_blocker);
-        let Op::SetBrowser { prefs, .. } = block_toggle(&x, "tiktok.com") else { panic!("an op") };
-        assert_eq!(prefs.blocked, vec!["tiktok.com"]);
-        x.browser = prefs;
-        let Op::SetBrowser { prefs, .. } = block_toggle(&x, "tiktok.com") else { panic!("an op") };
-        assert!(prefs.blocked.is_empty(), "a second tap unblocks it");
-        assert!(block_typed(&x, "not a site").is_err());
-        assert_eq!(block_typed(&x, "tiktok.com"), Err("tiktok.com is blocked already".into()));
-        let Ok(Op::SetBrowser { prefs, .. }) = block_typed(&x, "https://www.Example.org/x") else { panic!("an op") };
-        assert_eq!(prefs.blocked, vec!["tiktok.com", "example.org"]);
-        x.browser = prefs;
+        // An older design's Focus add-on is the address bar off.
+        let mut old = wad_model::ops::blank("o", "O", "m", 0, 0);
+        old.exts.push(wad_model::Ext::new(AppId::Wadbrowser, "focus"));
+        assert!(!address_bar(&old));
         // Groups: the machine's, a tap each.
         let lib = sample();
         let pills = group_pills(&lib, &x);
@@ -767,7 +739,22 @@ mod tests {
         assert!(!pills[0].1);
         let Op::SetBrowser { prefs, .. } = group_toggle(&x, wad_model::browser::SOCIAL_MEDIA) else { panic!("an op") };
         assert_eq!(prefs.groups, vec![wad_model::browser::SOCIAL_MEDIA]);
-        assert_eq!(prefs.blocked, vec!["tiktok.com", "example.org"], "its own stay");
+    }
+
+    #[test]
+    fn a_groups_sites_are_added_and_taken_out() {
+        let lib = sample();
+        let id = wad_model::browser::SOCIAL_MEDIA;
+        let Ok(Op::SaveBlockGroup { group }) = group_site_add(&lib, id, "https://www.Mastodon.social/@x") else {
+            panic!("an op")
+        };
+        assert_eq!(group.sites.last().map(String::as_str), Some("mastodon.social"));
+        assert_eq!(group_site_add(&lib, id, "x.com"), Err("x.com is in it already".into()));
+        assert!(group_site_add(&lib, id, "nope").is_err());
+        assert!(group_site_add(&lib, "gone", "a.com").is_err());
+        let Some(Op::SaveBlockGroup { group }) = group_site_remove(&lib, id, "x.com") else { panic!("an op") };
+        assert!(!group.sites.contains(&"x.com".to_string()));
+        assert_eq!(group_site_remove(&lib, id, "not-in-it.com"), None);
     }
 
     #[test]

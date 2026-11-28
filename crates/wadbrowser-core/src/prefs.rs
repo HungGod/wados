@@ -91,8 +91,8 @@ impl Preferences {
     /// wadbrowser.conf's settings (the wadspace's design, or Settings ▸
     /// Browser's), which the browser has no page for: they're never this file's.
     /// It searches with DuckDuckGo, always: there's no choosing another.
-    pub fn take_conf(&mut self, c: &crate::conf::BrowserPrefs) {
-        self.block_ads_trackers = c.ad_blocker;
+    pub fn take_conf(&mut self, c: &crate::conf::Conf) {
+        self.block_ads_trackers = c.prefs.ad_blocker;
         self.search_engine = SearchEngine::DuckDuckGo;
         self.blocked_sites = c.blocked.clone();
     }
@@ -149,7 +149,11 @@ mod tests {
     #[test]
     fn the_confs_settings_are_taken_and_never_kept() {
         let mut p = Preferences { search_engine: SearchEngine::Wikipedia, ..Preferences::default() };
-        let c = crate::conf::BrowserPrefs { ad_blocker: false, blocked: vec!["x.com".into()], ..Default::default() };
+        let c = crate::conf::Conf {
+            prefs: crate::conf::BrowserPrefs { ad_blocker: false, ..Default::default() },
+            blocked: vec!["x.com".into()],
+            ..Default::default()
+        };
         p.take_conf(&c);
         assert!(!p.block_ads_trackers);
         assert!(p.search_url("a").starts_with("https://duckduckgo.com/"), "DuckDuckGo, always");

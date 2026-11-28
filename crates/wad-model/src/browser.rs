@@ -129,19 +129,23 @@ pub fn group_id(name: &str, taken: &[String]) -> String {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BrowserPrefs {
+    /// Tabs and an address bar (off: its tabs alone, no address to type).
+    pub address_bar: bool,
     /// The ad and tracker blocker. (It searches with DuckDuckGo: that's
     /// not a setting; a `search` an older file has is skipped.)
     pub ad_blocker: bool,
     /// The blocker groups on (their ids): their sites don't open.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<String>,
-    /// Its own sites that don't open (each with its subdomains), as [`site`] keeps them.
-    pub blocked: Vec<String>,
+    /// Sites an older design blocked one by one: read, then made a group of
+    /// its own by [`upgrade`]; never written.
+    #[serde(rename = "blocked", skip_serializing)]
+    pub old_sites: Vec<String>,
 }
 
 impl Default for BrowserPrefs {
     fn default() -> Self {
-        BrowserPrefs { ad_blocker: true, groups: vec![], blocked: vec![] }
+        BrowserPrefs { address_bar: true, ad_blocker: true, groups: vec![], old_sites: vec![] }
     }
 }
 
@@ -150,27 +154,8 @@ impl BrowserPrefs {
         *self == BrowserPrefs::default()
     }
 
-    /// `text` blocked too (made a [`site`] first): whether it was added.
-    pub fn block(&mut self, text: &str) -> bool {
-        match site(text) {
-            Some(s) if !self.blocked.contains(&s) => {
-                self.blocked.push(s);
-                true
-            }
-            _ => false,
-        }
-    }
-
-    /// `site` no longer blocked: whether it was.
-    pub fn unblock(&mut self, site: &str) -> bool {
-        let before = self.blocked.len();
-        self.blocked.retain(|s| s != site);
-        self.blocked.len() != before
-    }
-
-    /// Every blocked site as a [`site`], once each, in order; each group once.
+    /// Each group once.
     pub fn tidied(mut self) -> Self {
-        self.blocked = tidy(std::mem::take(&mut self.blocked));
         let mut groups: Vec<String> = vec![];
         for g in std::mem::take(&mut self.groups) {
             let g = g.trim().to_string();
@@ -193,18 +178,73 @@ impl BrowserPrefs {
         }
     }
 
-    /// Every site that doesn't open: its groups' (those of `groups` it has
-    /// on), then its own; once each.
+    /// Every site that doesn't open: the sites of its groups (those of
+    /// `groups` it has on), once each.
     pub fn sites(&self, groups: &[BlockGroup]) -> Vec<String> {
         let mut out: Vec<String> = vec![];
-        let from_groups = groups.iter().filter(|g| self.groups.contains(&g.id)).flat_map(|g| g.sites.iter());
-        for s in from_groups.chain(self.blocked.iter()) {
+        for s in groups.iter().filter(|g| self.groups.contains(&g.id)).flat_map(|g| g.sites.iter()) {
             if !out.contains(s) {
                 out.push(s.clone());
             }
         }
         out
     }
+}
+
+impl BlockGroup {
+    /// `text` (made a [`site`] first) in the group too: why not, if it can't be.
+    pub fn add(&mut self, text: &str) -> Result<(), String> {
+        let Some(s) = site(text) else {
+            return Err("That isn’t a website: type one like example.com".into());
+        };
+        if self.sites.contains(&s) {
+            return Err(format!("{s} is in it already"));
+        }
+        self.sites.push(s);
+        Ok(())
+    }
+
+    /// `site` out of the group: whether it was in it.
+    pub fn remove(&mut self, site: &str) -> bool {
+        let before = self.sites.len();
+        self.sites.retain(|s| s != site);
+        self.sites.len() != before
+    }
+}
+
+/// An older design's browser settings, as they are now: WadBrowser's Focus
+/// add-on (no address bar) made [`BrowserPrefs::address_bar`] off, and sites
+/// a wadspace blocked one by one made a group of its own, on in it. The
+/// wadspaces changed (their ids); `lib.block_groups` may have changed too.
+pub fn upgrade(lib: &mut crate::edit::Library) -> Vec<String> {
+    let mut changed = vec![];
+    for i in 0..lib.wadspaces.len() {
+        let mut touched = false;
+        let w = &mut lib.wadspaces[i];
+        let focus = |e: &crate::types::Ext| e.app == crate::AppId::Wadbrowser && e.id == "focus" && e.url.is_none();
+        if w.exts.iter().any(focus) {
+            w.exts.retain(|e| !focus(e));
+            w.secrets.by_slot.shift_remove("ext:focus");
+            w.browser.address_bar = false;
+            touched = true;
+        }
+        if !w.browser.old_sites.is_empty() {
+            let sites = tidy(std::mem::take(&mut w.browser.old_sites));
+            if !sites.is_empty() {
+                let name = format!("{}’s sites", w.name);
+                let taken: Vec<String> = lib.block_groups.iter().map(|g| g.id.clone()).collect();
+                let id = group_id(&name, &taken);
+                let w = &mut lib.wadspaces[i];
+                w.browser.groups.push(id.clone());
+                lib.block_groups.push(BlockGroup { id, name, sites });
+            }
+            touched = true;
+        }
+        if touched {
+            changed.push(lib.wadspaces[i].id.clone());
+        }
+    }
+    changed
 }
 
 /// `sites` as [`site`] keeps them, once each, in order.
@@ -283,6 +323,8 @@ pub struct ConfText {
     pub address_bar: Option<bool>,
     pub ad_blocker: Option<bool>,
     pub groups: Option<Vec<String>>,
+    /// `block`: the sites that don't open (a wadspace's: its groups'
+    /// already; an older machine file's: sites of its own).
     pub blocked: Option<Vec<String>>,
 }
 
@@ -309,11 +351,8 @@ impl ConfText {
                         Some(value.split([' ', ',', '\t']).filter(|s| !s.is_empty()).map(String::from).collect());
                 }
                 "block" => {
-                    let mut p = BrowserPrefs { blocked: vec![], ..Default::default() };
-                    for s in value.split([' ', ',', '\t']).filter(|s| !s.is_empty()) {
-                        p.block(s);
-                    }
-                    c.blocked = Some(p.blocked);
+                    c.blocked =
+                        Some(tidy(value.split([' ', ',', '\t']).filter(|s| !s.is_empty()).map(String::from).collect()));
                 }
                 _ => {}
             }
@@ -321,10 +360,10 @@ impl ConfText {
         c
     }
 
-    /// These keys over `prefs` and `address_bar`.
-    pub fn over(&self, prefs: &mut BrowserPrefs, address_bar: &mut bool) {
+    /// These keys over `prefs` (`block` isn't a setting: see [`ConfText::blocked`]).
+    pub fn over(&self, prefs: &mut BrowserPrefs) {
         if let Some(a) = self.address_bar {
-            *address_bar = a;
+            prefs.address_bar = a;
         }
         if let Some(b) = self.ad_blocker {
             prefs.ad_blocker = b;
@@ -332,14 +371,13 @@ impl ConfText {
         if let Some(g) = &self.groups {
             prefs.groups = g.clone();
         }
-        if let Some(b) = &self.blocked {
-            prefs.blocked = b.clone();
-        }
     }
 }
 
-/// A `wadbrowser.conf` for `prefs`, with `address_bar` (else focus), headed by `about`.
-pub fn conf(about: &str, address_bar: bool, prefs: &BrowserPrefs) -> String {
+/// A `wadbrowser.conf` for `prefs`, headed by `about`: `sites` are what
+/// `block` says (a wadspace's: its groups' sites; the machine's: none, its
+/// groups being read from [`MACHINE_GROUPS`]).
+pub fn conf(about: &str, prefs: &BrowserPrefs, sites: &[String]) -> String {
     let mut out = String::new();
     for l in about.lines() {
         out.push_str(if l.is_empty() { "#" } else { "# " });
@@ -347,13 +385,13 @@ pub fn conf(about: &str, address_bar: bool, prefs: &BrowserPrefs) -> String {
         out.push('\n');
     }
     out.push_str("#\n# Tabs and an address bar (full), or tabs alone (focus).\n");
-    out.push_str(&format!("default = {}\n", if address_bar { "full" } else { "focus" }));
+    out.push_str(&format!("default = {}\n", if prefs.address_bar { "full" } else { "focus" }));
     out.push_str("# The ad and tracker blocker.\n");
     out.push_str(&format!("blocker = {}\n", if prefs.ad_blocker { "on" } else { "off" }));
     out.push_str("# Blocker groups on (their sites don't open): the machine's, by id.\n");
     out.push_str(&format!("groups = {}\n", prefs.groups.join(" ")));
-    out.push_str("# Sites of its own that don't open (and their subdomains).\n");
-    out.push_str(&format!("block = {}\n", prefs.blocked.join(" ")));
+    out.push_str("# Sites that don't open (and their subdomains).\n");
+    out.push_str(&format!("block = {}\n", sites.join(" ")));
     out
 }
 
@@ -381,51 +419,48 @@ mod tests {
     }
 
     #[test]
-    fn block_and_unblock_keep_one_of_each() {
-        let mut p = BrowserPrefs::default();
-        assert!(p.block("https://www.x.com/home"));
-        assert!(!p.block("x.com"));
-        assert!(!p.block("nonsense"));
-        assert_eq!(p.blocked, vec!["x.com"]);
-        assert!(p.unblock("x.com"));
-        assert!(!p.unblock("x.com"));
+    fn a_groups_sites_are_added_and_removed_one_of_each() {
+        let mut g = BlockGroup { id: "news".into(), name: "News".into(), sites: vec![] };
+        assert_eq!(g.add("https://www.BBC.co.uk/news"), Ok(()));
+        assert_eq!(g.add("bbc.co.uk"), Err("bbc.co.uk is in it already".into()));
+        assert!(g.add("nonsense").is_err());
+        assert_eq!(g.sites, vec!["bbc.co.uk"]);
+        assert!(g.remove("bbc.co.uk"));
+        assert!(!g.remove("bbc.co.uk"));
     }
 
     #[test]
     fn a_conf_reads_back_what_was_written() {
         let prefs = BrowserPrefs {
+            address_bar: false,
             ad_blocker: false,
             groups: vec![SOCIAL_MEDIA.into(), "mine".into()],
-            blocked: vec!["x.com".into(), "reddit.com".into()],
+            ..Default::default()
         };
-        let text = conf("WadBrowser's settings\n\nfor tests", false, &prefs);
+        let text = conf("WadBrowser's settings\n\nfor tests", &prefs, &["x.com".into(), "reddit.com".into()]);
         assert!(text.starts_with("# WadBrowser's settings\n#\n# for tests\n"));
         let mut back = BrowserPrefs::default();
-        let mut bar = true;
-        ConfText::parse(&text).over(&mut back, &mut bar);
+        let read = ConfText::parse(&text);
+        read.over(&mut back);
         assert_eq!(back, prefs);
-        assert!(!bar);
+        assert_eq!(read.blocked, Some(vec!["x.com".into(), "reddit.com".into()]));
     }
 
     #[test]
     fn a_later_file_changes_only_what_it_names() {
         let mut p = BrowserPrefs::default();
-        let mut bar = true;
-        ConfText::parse("blocker = off\nblock = x.com, tiktok.com\n").over(&mut p, &mut bar);
-        ConfText::parse("default = focus # mine\nsearch = wikipedia\nnonsense\n").over(&mut p, &mut bar);
-        assert!(!p.ad_blocker && !bar, "an older file's search is skipped");
-        assert_eq!(p.blocked, vec!["x.com", "tiktok.com"]);
-        // An empty `block =` unblocks everything.
-        ConfText::parse("block =\n").over(&mut p, &mut bar);
-        assert!(p.blocked.is_empty());
+        ConfText::parse("blocker = off\nblock = x.com, tiktok.com\n").over(&mut p);
+        ConfText::parse("default = focus # mine\nsearch = wikipedia\nnonsense\n").over(&mut p);
+        assert!(!p.ad_blocker && !p.address_bar, "an older file's search is skipped");
+        assert_eq!(ConfText::parse("block = https://www.X.com/ x.com\n").blocked, Some(vec!["x.com".into()]));
     }
 
     #[test]
-    fn prefs_keep_only_what_isnt_their_default() {
-        assert!(BrowserPrefs::default().is_default());
-        let p: BrowserPrefs = serde_json::from_str(r#"{"blocked":["https://www.X.com/", "x.com", "nope"]}"#).unwrap();
-        assert!(p.ad_blocker);
-        assert_eq!(p.tidied().blocked, vec!["x.com"]);
+    fn an_older_designs_sites_are_read_never_written() {
+        assert!(BrowserPrefs::default().is_default() && BrowserPrefs::default().address_bar);
+        let p: BrowserPrefs = serde_json::from_str(r#"{"blocked":["x.com"]}"#).unwrap();
+        assert_eq!(p.old_sites, vec!["x.com"]);
+        assert!(!serde_json::to_string(&p).unwrap().contains("x.com"));
     }
 
     #[test]
@@ -433,16 +468,14 @@ mod tests {
         let groups = default_groups();
         assert_eq!(groups[0].id, SOCIAL_MEDIA);
         assert!(groups[0].sites.iter().any(|s| s == "reddit.com"));
-        let mut p = BrowserPrefs { blocked: vec!["example.com".into(), "x.com".into()], ..Default::default() };
-        assert_eq!(p.sites(&groups), vec!["example.com", "x.com"]);
+        let mut p = BrowserPrefs::default();
+        assert!(p.sites(&groups).is_empty());
         assert!(p.toggle_group(SOCIAL_MEDIA));
-        let all = p.sites(&groups);
-        assert_eq!(all.len(), SUGGESTED_BLOCKS.len() + 1, "x.com once: {all:?}");
-        assert!(all.contains(&"example.com".to_string()));
+        assert_eq!(p.sites(&groups).len(), SUGGESTED_BLOCKS.len());
         assert!(!p.toggle_group(SOCIAL_MEDIA));
         // A group that's gone counts for nothing.
         p.groups = vec!["gone".into()];
-        assert_eq!(p.sites(&groups), vec!["example.com", "x.com"]);
+        assert!(p.sites(&groups).is_empty());
     }
 
     #[test]
@@ -471,5 +504,22 @@ mod tests {
         let groups: BlockGroups = serde_json::from_str("[]").unwrap();
         assert!(groups.is_empty(), "removed ones stay removed");
         assert_eq!(BlockGroups::default().len(), 1);
+    }
+
+    #[test]
+    fn an_older_design_is_upgraded() {
+        let mut lib = crate::edit::Library::default();
+        let mut w = crate::ops::blank("iq", "IntelligenceQuest", "m", 0, 0);
+        w.exts.push(crate::types::Ext::new(crate::AppId::Wadbrowser, "focus").named("Focus"));
+        w.browser.old_sites = vec!["https://www.News.com".into(), "news.com".into()];
+        lib.wadspaces.push(w);
+        lib.wadspaces.push(crate::ops::blank("plain", "Plain", "m", 0, 0));
+        assert_eq!(upgrade(&mut lib), vec!["iq"]);
+        let w = &lib.wadspaces[0];
+        assert!(!w.browser.address_bar && w.exts.is_empty(), "Focus is the address bar off");
+        let g = lib.block_groups.iter().find(|g| g.name == "IntelligenceQuest’s sites").expect("its sites' group");
+        assert_eq!(g.sites, vec!["news.com"]);
+        assert_eq!(w.browser.groups, vec![g.id.clone()]);
+        assert!(upgrade(&mut lib).is_empty(), "once");
     }
 }

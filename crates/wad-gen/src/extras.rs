@@ -214,21 +214,21 @@ pub fn games_json<'a>(ws: &Wadspace, discs: impl IntoIterator<Item = &'a DiscIma
     (!out.is_empty()).then(|| serde_json::Value::Array(out).to_string())
 }
 
-/// wadbrowser.conf, with WadBrowser: its address bar (none with the Focus
-/// add-on), its blocker, search engine and blocked sites (the Builder's
-/// add-ons: `Wadspace::browser`). Its blocker groups' sites (those of
-/// `groups` it has on) are written in with its own: the browser in a
+/// wadbrowser.conf, with WadBrowser: its address bar, its blocker and
+/// its blocker groups (the Builder's add-ons: `Wadspace::browser`), their
+/// sites (those of `groups` it has on) written in: the browser in a
 /// wadspace needs nothing else, and wadd writes it again when they change.
+/// An older design's Focus add-on, not yet upgraded, is the address bar off.
 pub fn wadbrowser_conf(ws: &Wadspace, groups: &[BlockGroup]) -> Option<String> {
     if !ws.has_app(AppId::Wadbrowser) {
         return None;
     }
     let focus = ws.ext(AppId::Wadbrowser, "focus").is_some_and(|e| e.url.is_none());
-    let prefs = BrowserPrefs { groups: vec![], blocked: ws.browser.sites(groups), ..ws.browser.clone() };
+    let prefs = BrowserPrefs { address_bar: ws.browser.address_bar && !focus, groups: vec![], ..ws.browser.clone() };
     Some(wad_model::browser::conf(
         "WadBrowser's settings for this wadspace, from its design (the\nBuilder's add-ons). The browser has none of its own.",
-        !focus,
         &prefs,
+        &ws.browser.sites(groups),
     ))
 }
 

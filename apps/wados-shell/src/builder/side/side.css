@@ -65,16 +65,21 @@ button.side-pill:disabled label { color: var(--fg); }
 .side-img { border-radius: 4px; }
 
 /* Suggestions: dashed, in the add-ons' colour, why beside them. */
-.side-suggested button.side-pill {
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--c-ext) 55%, transparent);
-}
 .side-why { font-size: 11px; color: var(--faint); }
 
 .side-none { font-size: 12px; color: var(--faint); }
 .side-err { font-size: 12px; color: var(--danger); }
 
 /* The command line's own commands, under its tools. */
+/* A blocker group: its pill, and its pencil (its sites, under the groups). */
+button.side-pill.side-pencil { padding-left: 8px; padding-right: 8px; }
+.side-group-edit {
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--c-ext) 40%, transparent);
+  background: rgb(255 255 255 / 0.02);
+}
+
 .side-commands {
   padding-top: 10px;
   border-top: 1px solid var(--line);

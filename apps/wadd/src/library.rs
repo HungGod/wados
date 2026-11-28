@@ -62,6 +62,18 @@ impl Docs {
             store.save_rest(&lib)?;
             tracing::info!("a new library, with WadOS in it");
         }
+        // An older design's browser settings: Focus is the address bar off,
+        // and sites blocked one by one a blocker group of their own.
+        let groups_before = lib.block_groups.clone();
+        for id in wad_model::browser::upgrade(&mut lib) {
+            if let Some(w) = lib.wadspace(&id) {
+                store.save_wadspace(w)?;
+                tracing::info!("{}: its browser's settings as they are now (address bar, blocker groups)", w.name);
+            }
+        }
+        if lib.block_groups != groups_before {
+            store.save_rest(&lib)?;
+        }
         // WadOS's rustup line, as an old one had it (it never built).
         for w in lib.wadspaces.iter_mut() {
             if wad_model::starter::fix_commands(w) {

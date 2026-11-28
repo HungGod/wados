@@ -29,13 +29,16 @@ pub const FILE: &str = "wadbrowser.conf";
 pub struct Conf {
     /// What the browser's windows open as: Full (an address bar) or Focus.
     pub default_mode: Mode,
-    /// Its blocker and blocked sites.
+    /// Its address bar, blocker and blocker groups.
     pub prefs: BrowserPrefs,
+    /// The sites that don't open: `block`'s (a wadspace's file has its
+    /// groups' in it), and the sites of the groups on, from the groups file.
+    pub blocked: Vec<String>,
 }
 
 impl Default for Conf {
     fn default() -> Conf {
-        Conf { default_mode: Mode::Full, prefs: BrowserPrefs::default() }
+        Conf { default_mode: Mode::Full, prefs: BrowserPrefs::default(), blocked: vec![] }
     }
 }
 
@@ -61,16 +64,23 @@ impl Conf {
         }
         if !c.prefs.groups.is_empty() {
             let defs = std::fs::read_to_string(groups).map(|t| parse_groups(&t)).unwrap_or_default();
-            c.prefs.blocked = c.prefs.sites(&defs);
+            for s in c.prefs.sites(&defs) {
+                if !c.blocked.contains(&s) {
+                    c.blocked.push(s);
+                }
+            }
         }
         c
     }
 
     /// One file's settings over these. Lines it can't read are skipped.
     pub fn apply(&mut self, text: &str) {
-        let mut bar = self.default_mode == Mode::Full;
-        ConfText::parse(text).over(&mut self.prefs, &mut bar);
-        self.default_mode = if bar { Mode::Full } else { Mode::Focus };
+        let t = ConfText::parse(text);
+        t.over(&mut self.prefs);
+        if let Some(b) = t.blocked {
+            self.blocked = b;
+        }
+        self.default_mode = if self.prefs.address_bar { Mode::Full } else { Mode::Focus };
     }
 }
 
@@ -90,7 +100,7 @@ mod tests {
         std::fs::write(&user, "default = full   # mine\nbogus\nhome = x\n").unwrap();
         let both = Conf::load(&[system.clone(), user.clone(), dir.join("missing.conf")], &none);
         assert_eq!(both.default_mode, Mode::Full);
-        assert_eq!(both.prefs.blocked, vec!["x.com"]);
+        assert_eq!(both.blocked, vec!["x.com"]);
         // A user file without the key leaves the wadspace's.
         std::fs::write(&user, "# nothing\n").unwrap();
         assert_eq!(Conf::load(&[system.clone(), user.clone()], &none).default_mode, Mode::Focus);
@@ -99,7 +109,7 @@ mod tests {
         std::fs::write(&groups, "# Social media\nsocial-media = reddit.com tiktok.com\nnews = bbc.co.uk\n").unwrap();
         std::fs::write(&user, "groups = social-media gone\n").unwrap();
         let c = Conf::load(&[system, user], &groups);
-        assert_eq!(c.prefs.blocked, vec!["reddit.com", "tiktok.com", "x.com"]);
+        assert_eq!(c.blocked, vec!["x.com", "reddit.com", "tiktok.com"]);
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -124,9 +134,9 @@ mod tests {
 
     #[test]
     fn wad_models_file_reads() {
-        let prefs = BrowserPrefs { ad_blocker: false, blocked: vec!["tiktok.com".into()], ..Default::default() };
+        let prefs = BrowserPrefs { address_bar: false, ad_blocker: false, ..Default::default() };
         let mut c = Conf::default();
-        c.apply(&wad_model::browser::conf("A wadspace's", false, &prefs));
-        assert_eq!(c, Conf { default_mode: Mode::Focus, prefs });
+        c.apply(&wad_model::browser::conf("A wadspace's", &prefs, &["tiktok.com".into()]));
+        assert_eq!(c, Conf { default_mode: Mode::Focus, prefs, blocked: vec!["tiktok.com".into()] });
     }
 }

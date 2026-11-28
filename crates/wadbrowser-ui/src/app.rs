@@ -116,7 +116,7 @@ fn start(instance: Option<&str>, ephemeral: bool) -> Result<Rc<AppState>> {
     let mut prefs = Preferences::load(&paths)?;
     prefs.validate()?;
     let conf = read_conf(&paths);
-    prefs.take_conf(&conf.prefs);
+    prefs.take_conf(&conf);
 
     let store = Arc::new(Store::open(&paths)?);
     let privacy = PrivacyEngine::new(prefs.block_ads_trackers);
@@ -199,7 +199,7 @@ fn apply_conf(state: &AppState, conf: Conf) {
     info!(?conf, "wadbrowser.conf changed");
     let before = state.conf.replace(conf.clone());
     let blocked_before = state.prefs.borrow().blocked_sites.clone();
-    state.prefs.borrow_mut().take_conf(&conf.prefs);
+    state.prefs.borrow_mut().take_conf(&conf);
     state.privacy.set_enabled(conf.prefs.ad_blocker);
     wadbrowser_webkit::shield::settings_changed(&blocked_before);
     if before.default_mode != conf.default_mode {
