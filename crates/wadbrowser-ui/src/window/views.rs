@@ -324,10 +324,7 @@ pub(super) fn render(ctx: &Rc<WindowCtx>, uri: &str) -> String {
     let q = |k: &str| scheme::query_value(uri, k).unwrap_or_default();
     let private = ctx.private;
     match name {
-        "newtab" | "home" => {
-            // The catalog's web apps and the machine's (or the wadspace's): wire.rs's.
-            internal::newtab_page(&prefs, &super::wire::newtab_tiles())
-        }
+        "newtab" | "home" => internal::newtab_page(&prefs),
         "privacy" | "shield" => internal::privacy_page(&privacy(ctx)),
         "history" => {
             let entries = if private { vec![] } else { ctx.state.store.list_history(200).unwrap_or_default() };

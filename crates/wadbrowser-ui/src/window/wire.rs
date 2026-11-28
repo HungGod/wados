@@ -16,7 +16,7 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::glib;
 use serde::Deserialize;
-use wadbrowser_core::internal::{self, Tile};
+use wadbrowser_core::internal;
 use wadbrowser_core::modes::{AppSpec, Mode, WindowSpec};
 use wadbrowser_core::signin::Provider;
 use wadbrowser_core::{APP_ID, NEW_TAB_URI, site};
@@ -386,40 +386,17 @@ pub(super) fn ask_permission(parent: Option<&adw::ApplicationWindow>, ask: Ask) 
 
 // ------------------------------------------------------------ web apps and keys
 
-/// The catalog's web apps, as tiles (their icons the pages' own copies).
-fn catalog() -> Vec<Tile> {
-    wad_model::catalog::WEB_APPS
-        .iter()
-        .map(|s| Tile {
-            id: s.id.into(),
-            name: s.name.into(),
-            url: s.url.into(),
-            icon: wad_model::catalog::site_icon(s.id, Some(s.url)).map(|p| internal::res_url(&p)),
-            mine: false,
-        })
-        .collect()
-}
-
-/// The new tab's tiles: the catalog's, then the machine's (or the
-/// wadspace's) web apps; one you made of a catalog site shows once.
-pub(super) fn newtab_tiles() -> Vec<Tile> {
-    let apps = APPS.with_borrow(|a| a.clone());
-    let theirs: Vec<String> = apps.iter().filter(|a| !a.mine).map(|a| a.id.clone()).collect();
-    let tiles = apps.into_iter().map(|a| Tile { id: a.id, name: a.name, url: a.url, icon: a.icon, mine: a.mine });
-    let mut all = internal::merge_tiles(catalog(), tiles.collect());
-    for t in &mut all {
-        if theirs.contains(&t.id) {
-            t.mine = false;
-        }
-    }
-    all
-}
-
 /// The web app (yours, the wadspace's, the catalog's) a URL's site is.
 fn app_for(url: &str) -> Option<App> {
     let host = site::bare_host(&site::host_of(url));
     let mut all = APPS.with_borrow(|a| a.clone());
-    all.extend(catalog().into_iter().map(|t| App { id: t.id, name: t.name, url: t.url, icon: t.icon, mine: false }));
+    all.extend(wad_model::catalog::WEB_APPS.iter().map(|s| App {
+        id: s.id.into(),
+        name: s.name.into(),
+        url: s.url.into(),
+        icon: wad_model::catalog::site_icon(s.id, Some(s.url)).map(|p| internal::res_url(&p)),
+        mine: false,
+    }));
     all.into_iter().find(|a| site::bare_host(&site::host_of(&a.url)) == host)
 }
 

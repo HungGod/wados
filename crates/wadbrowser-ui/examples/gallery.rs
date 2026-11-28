@@ -20,7 +20,7 @@ use std::time::Duration;
 use adw::prelude::*;
 use chrono::Utc;
 use gtk::{gdk, gio, glib};
-use wadbrowser_core::internal::{self, PageAction, Privacy, SiteCount, Tile};
+use wadbrowser_core::internal::{self, PageAction, Privacy, SiteCount};
 use wadbrowser_core::{HistoryEntry, PermissionKind, Preferences};
 use wadbrowser_ui::data::WebKey;
 use wadbrowser_ui::dialogs::create_app::{CreateAppActions, CreateAppInfo, create_app};
@@ -32,10 +32,8 @@ use wadbrowser_ui::shield::{Shield, ShieldActions, ShieldInfo};
 use webkit6::prelude::*;
 
 const NAMES: &[(&str, &str)] = &[
-    ("newtab", "wadbrowser://newtab: the catalog's web apps and one of yours"),
-    ("newtab-menu", "wadbrowser://newtab: a tile of yours, right-clicked"),
+    ("newtab", "wadbrowser://newtab: the logo and an empty search box"),
     ("newtab-search", "wadbrowser://newtab: a search typed and sent (prints what it asks)"),
-    ("newtab-plain", "wadbrowser://newtab with no apps of your own, searching with Startpage"),
     ("privacy", "wadbrowser://privacy after a few sites"),
     ("privacy-private", "wadbrowser://privacy in a private window, with a site allowed"),
     ("privacy-clicks", "wadbrowser://privacy: Block again clicked (prints what it asks)"),
@@ -107,31 +105,6 @@ fn web_keys() -> Vec<WebKey> {
     ]
 }
 
-fn my_apps() -> Vec<Tile> {
-    vec![Tile {
-        id: "calendar".into(),
-        name: "Calendar".into(),
-        url: "https://calendar.google.com".into(),
-        icon: wad_model::catalog::site_icon("calendar", Some("https://calendar.google.com"))
-            .map(|p| internal::res_url(&p)),
-        mine: true,
-    }]
-}
-
-fn tiles(mine: bool) -> Vec<Tile> {
-    let suggested = wad_model::catalog::WEB_APPS
-        .iter()
-        .map(|s| Tile {
-            id: s.id.into(),
-            name: s.name.into(),
-            url: s.url.into(),
-            icon: wad_model::catalog::site_icon(s.id, Some(s.url)).map(|p| internal::res_url(&p)),
-            mine: false,
-        })
-        .collect();
-    internal::merge_tiles(suggested, if mine { my_apps() } else { vec![] })
-}
-
 fn visit(title: &str, url: &str, secs: i64) -> HistoryEntry {
     HistoryEntry {
         id: 0,
@@ -151,13 +124,7 @@ fn page(name: &str) -> Option<(&'static str, String)> {
         SiteCount { site: "docs.rs".into(), url: "https://docs.rs".into(), pages: 1, blocked: 0 },
     ];
     Some(match name {
-        "newtab" | "newtab-menu" | "newtab-search" => {
-            ("wadbrowser://newtab", internal::newtab_page(&prefs, &tiles(true)))
-        }
-        "newtab-plain" => {
-            let prefs = Preferences { search_engine: wadbrowser_core::SearchEngine::Startpage, ..prefs };
-            ("wadbrowser://newtab", internal::newtab_page(&prefs, &tiles(false)))
-        }
+        "newtab" | "newtab-search" => ("wadbrowser://newtab", internal::newtab_page(&prefs)),
         "privacy" => (
             "wadbrowser://privacy",
             internal::privacy_page(&Privacy {
@@ -389,18 +356,11 @@ fn widget(c: &Chrome, name: &str) {
 /// What a page's run does once it's loaded (as a person would), if anything.
 fn script(name: &str) -> Option<&'static str> {
     Some(match name {
-        // Right-click the tile of yours.
-        "newtab-menu" => {
-            "const t = document.querySelector('.tile.mine'); const r = t.getBoundingClientRect();
-             t.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2}));"
-        }
         "newtab-search" => {
             "const f = document.querySelector('form.search'); f.querySelector('input').value = 'rust gtk4';
              f.requestSubmit();"
         }
-        "privacy-clicks" => {
-            "document.querySelector('[data-do=blockers]').click();"
-        }
+        "privacy-clicks" => "document.querySelector('[data-do=blockers]').click();",
         _ => return None,
     })
 }

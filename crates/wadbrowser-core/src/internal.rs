@@ -42,14 +42,17 @@ pub fn res_url(path: &str) -> String {
     format!("{RES}{}", path.trim_start_matches('/'))
 }
 
-/// WadBrowser's logo, among the shared files.
+/// WadBrowser's logo, among the shared files: its icon, and the icon with
+/// its name (the new tab's, drawn as WadSpaces' logo is).
 const LOGO: &str = "brand/wadbrowser-icon.svg";
+const WORDMARK: &str = "brand/wadbrowser-logo.svg";
 
 /// The pages' shared files: (path under `wadbrowser://res/`, bytes, MIME type).
 static RESOURCES: &[(&str, &[u8], &str)] = &[
     ("pages.css", include_bytes!("../res/pages.css"), "text/css"),
     ("pages.js", include_bytes!("../res/pages.js"), "text/javascript"),
     (LOGO, include_bytes!("../../../assets/brand/wadbrowser-icon-dark.svg"), "image/svg+xml"),
+    (WORDMARK, include_bytes!("../../../assets/brand/wadbrowser-logo-dark.svg"), "image/svg+xml"),
     ("fonts/Inter-Variable.ttf", include_bytes!("../../../assets/fonts/Inter-Variable.ttf"), "font/ttf"),
     ("fonts/SpaceGrotesk-Variable.ttf", include_bytes!("../../../assets/fonts/SpaceGrotesk-Variable.ttf"), "font/ttf"),
     ("icons/web/claude.svg", include_bytes!("../../../assets/icons/web/claude.svg"), "image/svg+xml"),
@@ -104,30 +107,6 @@ impl PageAction {
 
 // ------------------------------------------------------------ the new tab
 
-/// A web app on the new tab page: one of the catalog's, or one of yours
-/// (made from a page).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tile {
-    /// Its id (the catalog's `github`, or yours): picks its initial's colour, and what Remove removes.
-    pub id: String,
-    pub name: String,
-    pub url: String,
-    /// Its site's icon: a `wadbrowser://res/icons/web/…` address ([`res_url`]),
-    /// a `data:image/…` URI or a file. None: its initial.
-    pub icon: Option<String>,
-    /// Made from a page: right-click for Open in its own window and Remove.
-    pub mine: bool,
-}
-
-/// The new tab's tiles: the catalog's (`suggested`), then yours; a
-/// suggested one you made your own (same site) shows once, as yours.
-pub fn merge_tiles(suggested: Vec<Tile>, mine: Vec<Tile>) -> Vec<Tile> {
-    let hosts: Vec<String> = mine.iter().map(|t| bare_host(&t.url)).collect();
-    let mut tiles: Vec<Tile> = suggested.into_iter().filter(|t| !hosts.contains(&bare_host(&t.url))).collect();
-    tiles.extend(mine.into_iter().map(|t| Tile { mine: true, ..t }));
-    tiles
-}
-
 /// The search engine's name ("DuckDuckGo").
 pub fn engine_name(engine: &SearchEngine) -> &str {
     match engine {
@@ -145,51 +124,18 @@ fn search_template(prefs: &Preferences) -> String {
     prefs.search_url("cactusquery").replace("cactusquery", "%s")
 }
 
-/// `wadbrowser://newtab`: WadBrowser's logo, a search box (the preferred engine,
-/// or an address), and the web apps.
-pub fn newtab_page(prefs: &Preferences, tiles: &[Tile]) -> String {
-    let mut grid = String::new();
-    for t in tiles {
-        let title = if t.mine { "Made from a page · right-click for more".to_string() } else { t.name.clone() };
-        grid.push_str(&format!(
-            r#"<a class="tile{mine}" href="{href}" draggable="false" title="{title}" data-id="{id}" data-name="{data_name}">{icon}<span>{name}</span></a>"#,
-            mine = if t.mine { " mine" } else { "" },
-            href = esc_attr(&safe_href(&t.url)),
-            title = esc_attr(&title),
-            id = esc_attr(&t.id),
-            data_name = esc_attr(&t.name),
-            name = esc_html(&t.name),
-            icon = web_icon(&t.id, &t.name, t.icon.as_deref(), 48),
-        ));
-    }
-    let menu_icons = if tiles.iter().any(|t| t.mine) {
-        let icons = serde_json::json!({
-            "globe": icon("globe", 15),
-            "app-window": icon("app-window", 15),
-            "trash": icon("trash", 15),
-        });
-        // In a JSON script block: only "</" could end it early.
-        format!(
-            r#"<script type="application/json" id="menu-icons">{}</script>"#,
-            icons.to_string().replace("</", "<\\/")
-        )
-    } else {
-        String::new()
-    };
-    let placeholder = format!("Search {} or type an address", engine_name(&prefs.search_engine));
+/// `wadbrowser://newtab`: WadBrowser's logo, and under it an empty search
+/// box (the preferred engine, or an address), nothing else.
+pub fn newtab_page(prefs: &Preferences) -> String {
     page(
         "New tab",
         &format!(
             r#"<main class="newtab">
-<div class="brand"><img class="mark" src="{mark}" alt=""><span>WadBrowser</span></div>
-<form class="search" role="search" data-template="{template}">{search}<input name="q" placeholder="{placeholder}" aria-label="{placeholder}" spellcheck="false" autocomplete="off" autofocus data-newtab-search></form>
-<div class="grid">{grid}</div>
-<p class="hint">Right-click any page to make it an app of its own.</p>
-</main>{menu_icons}"#,
-            mark = res_url(LOGO),
-            search = icon("search", 18),
+<img class="wordmark" src="{mark}" alt="WadBrowser">
+<form class="search" role="search" data-template="{template}"><input name="q" aria-label="Search or type an address" spellcheck="false" autocomplete="off" autofocus data-newtab-search></form>
+</main>"#,
+            mark = res_url(WORDMARK),
             template = esc_attr(&search_template(prefs)),
-            placeholder = esc_attr(&placeholder),
         ),
     )
 }
@@ -533,30 +479,6 @@ fn page(title: &str, body: &str) -> String {
     )
 }
 
-/// A web app's icon (ui/AppIcon): its site's on a white card, else its
-/// initial in one of the tints on a violet card.
-fn web_icon(id: &str, name: &str, src: Option<&str>, size: u32) -> String {
-    if let Some(src) = src.and_then(safe_img) {
-        return format!(
-            r#"<span class="site-icon" style="--s:{size}px"><img src="{src}" alt="" draggable="false" referrerpolicy="no-referrer"></span>"#,
-            src = esc_attr(src),
-        );
-    }
-    const TINTS: [&str; 6] = ["#c6ff1f", "#7fd3ff", "#ff3d81", "#ffb36b", "#b58cff", "#5cf2c4"];
-    let h = id.encode_utf16().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c as u32));
-    let shown = if name.trim().is_empty() { id } else { name };
-    let shown = match shown.get(..7) {
-        Some(g) if g.eq_ignore_ascii_case("google ") => shown[7..].trim_start(),
-        _ => shown,
-    };
-    let letter: String = shown.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
-    format!(
-        r#"<span class="web-icon" style="--s:{size}px; --tint:{tint}"><span>{letter}</span></span>"#,
-        tint = TINTS[(h % 6) as usize],
-        letter = esc_html(&letter),
-    )
-}
-
 /// The lucide icons the pages draw (assets/lucide, as wad-gtk's).
 static ICONS: &[(&str, &str)] = &[
     ("app-window", include_str!("../../../assets/lucide/app-window.svg")),
@@ -639,26 +561,11 @@ fn host_of(url: &str) -> String {
     }
 }
 
-/// A URL's host without `www.` and its port, to tell sites apart.
-fn bare_host(url: &str) -> String {
-    let h = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
-    h.strip_prefix("www.").map(str::to_string).unwrap_or(h)
-}
-
 /// `url` if a link may go there (the web, files, the browser's own pages); else nowhere.
 fn safe_href(url: &str) -> String {
     let lower = url.trim().to_ascii_lowercase();
     let ok = ["http://", "https://", "wadbrowser://", "file://", "about:"].iter().any(|s| lower.starts_with(s));
     if ok { url.trim().to_string() } else { "#".into() }
-}
-
-/// `src` if an image may come from it.
-fn safe_img(src: &str) -> Option<&str> {
-    let lower = src.trim().to_ascii_lowercase();
-    ["wadbrowser://res/", "data:image/", "file://", "https://", "http://"]
-        .iter()
-        .any(|s| lower.starts_with(s))
-        .then_some(src.trim())
 }
 
 fn esc_html(s: &str) -> String {
@@ -688,10 +595,6 @@ mod tests {
     /// Markup, and a way out of a double-quoted attribute (every attribute here is one).
     const EVIL: &str = r#"<script>alert('x')</script>" onmouseover="x"#;
 
-    fn tile(id: &str, name: &str, url: &str, icon: Option<&str>) -> Tile {
-        Tile { id: id.into(), name: name.into(), url: url.into(), icon: icon.map(str::to_string), mine: false }
-    }
-
     fn entry(title: &str, url: &str, ago: Duration) -> HistoryEntry {
         HistoryEntry { id: 1, title: title.into(), url: url.into(), visit_count: 1, last_visit: Utc::now() - ago }
     }
@@ -713,10 +616,7 @@ mod tests {
     fn every_page_renders_with_the_shared_files() {
         let prefs = Preferences::default();
         let pages = [
-            newtab_page(
-                &prefs,
-                &[tile("github", "GitHub", "https://github.com", Some("wadbrowser://res/icons/web/github.svg"))],
-            ),
+            newtab_page(&prefs),
             privacy_page(&Privacy::default()),
             history_page(&[], false, Utc::now()),
             bookmarks_html(&[]),
@@ -735,65 +635,30 @@ mod tests {
     #[test]
     fn the_new_tab_searches_with_the_preferred_engine() {
         let mut prefs = Preferences::default();
-        let html = newtab_page(&prefs, &[]);
-        assert!(html.contains(r#"placeholder="Search DuckDuckGo or type an address""#));
-        assert!(html.contains(r#"data-template="https://duckduckgo.com/?q=%s""#));
+        assert!(newtab_page(&prefs).contains(r#"data-template="https://duckduckgo.com/?q=%s""#));
         prefs.search_engine = SearchEngine::Startpage;
-        let html = newtab_page(&prefs, &[]);
-        assert!(html.contains("Search Startpage or type an address"));
-        assert!(html.contains(r#"data-template="https://www.startpage.com/sp/search?query=%s""#));
+        assert!(newtab_page(&prefs).contains(r#"data-template="https://www.startpage.com/sp/search?query=%s""#));
         prefs.search_engine = SearchEngine::Custom {
             name: "Kagi".into(),
             url_template: "https://kagi.com/search?q={searchTerms}".into(),
         };
-        assert!(newtab_page(&prefs, &[]).contains(r#"data-template="https://kagi.com/search?q=%s""#));
+        assert!(newtab_page(&prefs).contains(r#"data-template="https://kagi.com/search?q=%s""#));
     }
 
     #[test]
-    fn the_new_tab_draws_its_tiles() {
-        let tiles = merge_tiles(
-            vec![
-                tile("github", "GitHub", "https://github.com", Some("wadbrowser://res/icons/web/github.svg")),
-                tile(
-                    "calendar",
-                    "Calendar",
-                    "https://calendar.google.com",
-                    Some("wadbrowser://res/icons/web/calendar.png"),
-                ),
-            ],
-            vec![tile("cal", "My calendar", "https://calendar.google.com/r/week", None)],
-        );
-        let html = newtab_page(&Preferences::default(), &tiles);
-        assert!(html.contains(r#"<img src="wadbrowser://res/icons/web/github.svg""#));
-        assert!(!html.contains("icons/web/calendar.png"), "the catalog's Calendar shows once, as yours");
-        assert!(html.contains(r#"class="tile mine""#));
-        assert!(html.contains(r#"<span class="web-icon" style="--s:48px; --tint:"#));
-        assert!(html.contains(">M</span>"));
-        assert!(html.contains(r#"id="menu-icons""#));
-        assert!(html.contains("Right-click any page to make it an app of its own."));
-        // The initial skips "Google ".
-        assert!(web_icon("drive", "Google Drive", None, 48).contains(">D</span>"));
-    }
-
-    #[test]
-    fn merging_tiles_keeps_yours_last_and_drops_the_catalogs_twin() {
-        let t = merge_tiles(
-            vec![
-                tile("github", "GitHub", "https://github.com", None),
-                tile("yt", "YouTube", "https://youtube.com", None),
-            ],
-            vec![tile("mine", "Tube", "https://www.youtube.com/feed", None)],
-        );
-        let ids: Vec<(&str, bool)> = t.iter().map(|t| (t.id.as_str(), t.mine)).collect();
-        assert_eq!(ids, [("github", false), ("mine", true)]);
+    fn the_new_tab_is_the_logo_and_an_empty_search_box() {
+        let html = newtab_page(&Preferences::default());
+        assert!(html.contains(r#"<img class="wordmark" src="wadbrowser://res/brand/wadbrowser-logo.svg""#));
+        assert!(!html.contains("placeholder"), "the box says nothing");
+        assert!(!html.contains("DuckDuckGo") && !html.contains("<svg"), "no engine's name, no icon");
+        assert!(!html.contains("tile") && !html.contains("menu-icons"), "no web apps");
+        assert!(resource("brand/wadbrowser-logo.svg").is_some());
     }
 
     #[test]
     fn pages_escape_what_they_are_given() {
         let prefs = Preferences::default();
-        let mut evil_tile = tile(EVIL, EVIL, "javascript:alert(1)", Some("javascript:alert(1)"));
-        evil_tile.mine = true;
-        clean(&newtab_page(&prefs, &[evil_tile.clone()]));
+        clean(&newtab_page(&prefs));
 
         let p = Privacy {
             sites: vec![SiteCount { site: EVIL.into(), url: "javascript:alert(1)".into(), pages: 1, blocked: 2 }],
