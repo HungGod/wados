@@ -97,18 +97,18 @@ button.side-pill:disabled label { color: var(--fg); }
 .side-blocks button.side-blocks-edit { padding: 0 8px; color: var(--muted); }
 .side-blocks button.side-blocks-edit.in { color: var(--fg); background: rgb(255 255 255 / 0.08); }
 .side-blocks button:disabled { opacity: 0.6; }
-/* A group's popup: Remove group, a red trash can at its top right. */
-button.side-trash {
-  min-width: 30px;
+/* A group's popup: Remove, in red, opposite Done. */
+button.side-remove {
   min-height: 30px;
-  padding: 0;
+  padding: 0 14px;
   border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
   border-radius: 99px;
   background: color-mix(in srgb, var(--danger) 14%, transparent);
   box-shadow: none;
   color: var(--danger);
+  font-weight: 600;
 }
-button.side-trash:hover { background: color-mix(in srgb, var(--danger) 26%, transparent); }
+button.side-remove:hover { background: color-mix(in srgb, var(--danger) 26%, transparent); }
 
 .side-commands {
   padding-top: 10px;
