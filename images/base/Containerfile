@@ -148,25 +148,25 @@ RUN \
   dnf clean all && \
   rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*
 
-# Video in WadBrowser (WebKit plays it through GStreamer): Fedora's codecs
-# leave out H.264 and HEVC, and decode AV1 (YouTube's) only with libaom, too
-# slow to keep up. So: OpenH264 and dav1d from Fedora, then RPM Fusion's
-# ffmpeg (in place of ffmpeg-free: gst-libav's H.264, HEVC, AAC…) and its
-# GStreamer plugins. RPM Fusion for the install only, as host/Containerfile.nvidia
-# has it: the image's updates are a rebuild. Checked: the decoders are there.
+# Video in WadBrowser (WebKit plays it through GStreamer), from Fedora's own
+# packages only: the image is published, so nothing patent-encumbered goes
+# in it (no RPM Fusion ffmpeg, no H.264 or HEVC) and nothing whose licence
+# covers only its own maker's copies (Cisco's OpenH264, from its repo, which
+# Fedora's libavcodec-free pulls in: Fedora's noopenh264 stub in its place).
+# Sites serve those browsers VP9 or AV1 (YouTube does) with Opus. dav1d decodes AV1
+# fast enough to keep up (libaom, the other, doesn't). Checked: the free
+# decoders are there, and neither repo's packages are.
 RUN \
   echo "**** video codecs ****" && \
-  dnf -y --setopt=install_weak_deps=False install \
-    gstreamer1-plugin-dav1d \
-    gstreamer1-plugin-openh264 \
-    "https://mirrors.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" && \
-  dnf -y --setopt=install_weak_deps=False swap ffmpeg-free ffmpeg --allowerasing && \
-  dnf -y --setopt=install_weak_deps=False install \
-    gstreamer1-plugins-bad-freeworld \
-    gstreamer1-plugins-ugly && \
-  dnf -y remove rpmfusion-free-release && \
-  for e in avdec_h264 avdec_h265 openh264dec dav1ddec vp9dec avdec_aac opusdec; do \
+  dnf -y --setopt=install_weak_deps=False --disablerepo=fedora-cisco-openh264 install \
+    gstreamer1-plugin-dav1d && \
+  if rpm -q openh264 > /dev/null; then \
+    dnf -y --disablerepo=fedora-cisco-openh264 swap openh264 noopenh264; fi && \
+  for e in dav1ddec vp8dec vp9dec avdec_vp9 opusdec vorbisdec avdec_aac; do \
     gst-inspect-1.0 "$e" > /dev/null || { echo "no $e"; exit 1; }; done && \
+  for p in openh264 gstreamer1-plugin-openh264 ffmpeg; do \
+    ! rpm -q "$p" > /dev/null || { echo "has $p"; exit 1; }; done && \
+  ! rpm -qa --qf '%{VENDOR} %{NAME}\n' | grep -i rpmfusion && \
   rm -rf /root/.cache/gstreamer-1.0 && \
   dnf clean all && \
   rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*
