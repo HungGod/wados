@@ -61,6 +61,22 @@ pub(super) struct TabDrag {
     pub take: Take,
 }
 
+/// What a tab's drag carries (`wadbrowser-tab:…`): a type only our tab bars take.
+const TAB_MIME: &str = "application/x-wadbrowser-tab";
+
+thread_local! {
+    /// The drag under way was dropped on one of our tab bars.
+    static LANDED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A tab drag's payload, read from its drop.
+async fn read_payload(d: &gtk::gdk::Drop) -> Option<String> {
+    use gtk::gio::prelude::*;
+    let (stream, _) = d.read_future(&[TAB_MIME], glib::Priority::DEFAULT).await.ok()?;
+    let bytes = stream.read_bytes_future(256, glib::Priority::DEFAULT).await.ok()?;
+    String::from_utf8(bytes.to_vec()).ok()
+}
+
 /// The tab bar (`.tabbar`): the tabs, then +, then room to drag the window
 /// by (a double click there maximizes it, or puts it back), then the
 /// window's buttons. Only that room is a window handle: a handle round the
@@ -118,12 +134,28 @@ impl TabStrip {
         let pages = tab_view.pages();
         let strip = Rc::new(TabStrip { root, pages: pages.clone(), list, tabs: RefCell::default(), drag, controls });
         // A tab dropped on the bar: there, from this window or another.
-        let drop = gtk::DropTarget::new(glib::Type::STRING, gtk::gdk::DragAction::MOVE);
+        // Only WadBrowser's own tab drags (TAB_MIME) are taken: text dropped
+        // here is the page's, and a tab's drag is nothing to another app.
+        let drop =
+            gtk::DropTargetAsync::new(Some(gtk::gdk::ContentFormats::new(&[TAB_MIME])), gtk::gdk::DragAction::MOVE);
+        drop.connect_drag_enter(|_, _, _, _| gtk::gdk::DragAction::MOVE);
+        drop.connect_drag_motion(|_, _, _, _| gtk::gdk::DragAction::MOVE);
         let s = Rc::downgrade(&strip);
-        drop.connect_drop(move |_, value, x, _| {
-            let (Some(s), Ok(payload)) = (s.upgrade(), value.get::<String>()) else { return false };
-            let at = s.place_at(x);
-            (s.drag.take)(&payload, at)
+        drop.connect_drop(move |_, d, x, _| {
+            // Landed on a window of ours: not torn off, whether it's taken or not.
+            LANDED.set(true);
+            let (s, d) = (s.clone(), d.clone());
+            glib::spawn_future_local(async move {
+                let moved = match read_payload(&d).await {
+                    Some(payload) => s.upgrade().is_some_and(|s| {
+                        let at = s.place_at(x);
+                        (s.drag.take)(&payload, at)
+                    }),
+                    None => false,
+                };
+                d.finish(if moved { gtk::gdk::DragAction::MOVE } else { gtk::gdk::DragAction::empty() });
+            });
+            true
         });
         strip.root.add_controller(drop);
         let (s, tv) = (Rc::downgrade(&strip), tab_view.downgrade());
@@ -254,25 +286,29 @@ impl TabStrip {
         n as u32
     }
 
-    /// A tab's drag: it carries the tab's window and place, shows the tab,
-    /// and dropped where no window takes it, the tab gets a window of its own.
+    /// A tab's drag: it carries the tab's window and place (as TAB_MIME,
+    /// which only a tab bar of ours takes), shows the tab, and dropped
+    /// anywhere but one of our tab bars (Esc aside), the tab gets a window of
+    /// its own. Wayland doesn't say why a drag ended without a drop (GTK
+    /// calls it an error), so that isn't asked.
     fn draggable(&self, root: &gtk::Box, page: &TabPage) {
         let source = gtk::DragSource::builder().actions(gtk::gdk::DragAction::MOVE).build();
         let (payload, p) = (self.drag.payload.clone(), page.downgrade());
         source.connect_prepare(move |_, _, _| {
             let page = p.upgrade()?;
             let s = payload(&page)?;
-            Some(gtk::gdk::ContentProvider::for_value(&s.to_value()))
+            Some(gtk::gdk::ContentProvider::for_bytes(TAB_MIME, &glib::Bytes::from_owned(s.into_bytes())))
         });
         let r = root.downgrade();
         source.connect_drag_begin(move |src, _| {
+            LANDED.set(false);
             if let Some(r) = r.upgrade() {
                 src.set_icon(Some(&gtk::WidgetPaintable::new(Some(&r))), 12, 12);
             }
         });
         let (tear_off, p) = (self.drag.tear_off.clone(), page.downgrade());
         source.connect_drag_cancel(move |_, _, reason| {
-            if reason != gtk::gdk::DragCancelReason::NoTarget {
+            if reason == gtk::gdk::DragCancelReason::UserCancelled || LANDED.get() {
                 return false;
             }
             let Some(page) = p.upgrade() else { return false };

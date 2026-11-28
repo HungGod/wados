@@ -684,20 +684,25 @@ fn movable(ctx: &WindowCtx) -> bool {
     spec.app.is_none() && spec.signin.is_none()
 }
 
-/// `page` dropped outside every window: a new window with it (of this
-/// one's kind and privacy). A window's only tab stays.
+/// `page` dropped outside every window: a new window (of this one's kind
+/// and privacy) that loads its page afresh, and the tab closes here. A
+/// fresh page, not the tab's view moved across: nothing of it is shared
+/// between windows. A window's only tab stays.
 fn tear_off(ctx: &Rc<WindowCtx>, page: &TabPage) {
     if !movable(ctx) || ctx.tab_view.n_pages() < 2 {
         return;
     }
+    let uri = page
+        .child()
+        .downcast::<WebView>()
+        .ok()
+        .and_then(|v| v.uri())
+        .map(String::from)
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| NEW_TAB_URI.into());
     let spec = new_browser_spec(ctx, ctx.private);
-    let w = build_window_as(&ctx.app, ctx.state.clone(), spec, vec![NEW_TAB_URI.into()], 0);
-    let Some(to) = all_windows().into_iter().find(|c| c.window == w) else { return };
-    // In its place: the new window's first tab, made as it was, goes.
-    let first = to.tab_view.nth_page(0);
-    ctx.tab_view.transfer_page(page, &to.tab_view, 0);
-    to.tab_view.close_page(&first);
-    to.tab_view.set_selected_page(page);
+    let w = build_window_as(&ctx.app, ctx.state.clone(), spec, vec![uri], 0);
+    ctx.tab_view.close_page(page);
     w.present();
     info!("a tab into a window of its own");
 }
