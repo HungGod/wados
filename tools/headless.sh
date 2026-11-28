@@ -17,7 +17,7 @@ hl_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # HL_NAME: a session of its own (several at once, each its own folder).
 hl_rt=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/wados-headless${HL_NAME:+-$HL_NAME}
 # The patched labwc (tools/build-labwc.sh) when it's built, else the system's
-# (which can't tell wadspaces' windows apart: docs/decisions/0001-labwc.md).
+# (which can't tell wadspaces' windows apart).
 hl_labwc=labwc
 [ -x "$hl_root/.build/labwc/labwc" ] && hl_labwc=$hl_root/.build/labwc/labwc
 

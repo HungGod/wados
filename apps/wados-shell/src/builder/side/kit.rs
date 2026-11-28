@@ -45,7 +45,7 @@ pub fn by_ctl<R>(f: impl FnOnce() -> R) -> R {
     r
 }
 
-fn from_ctl() -> bool {
+pub(crate) fn from_ctl() -> bool {
     BY_CTL.with(Cell::get)
 }
 

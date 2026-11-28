@@ -1,8 +1,10 @@
 //! The browser's own `wadbrowser://` pages, as the v2 design draws them (the
-//! spike's `src/apps/browser/pages/`): the new tab, Privacy, Settings,
-//! History and About, and the pages that say why there's no page (a load
-//! that failed, a social site blocked, a `wadbrowser://` page that doesn't
-//! exist).
+//! spike's `src/apps/browser/pages/`): the new tab, Privacy, History and
+//! About, and the pages that say why there's no page (a load that failed, a
+//! blocked site, a `wadbrowser://` page that doesn't exist). There's no
+//! settings page: the browser's settings are wadbrowser.conf's (conf.rs), a
+//! wadspace's from the Builder's add-ons and the machine's from Settings ▸
+//! Browser.
 //!
 //! Each page is a function of the plain data it shows, and links the files
 //! the pages share, served at `wadbrowser://res/<file>` ([`resource`]): the
@@ -40,14 +42,17 @@ pub fn res_url(path: &str) -> String {
     format!("{RES}{}", path.trim_start_matches('/'))
 }
 
-/// WadBrowser's logo, among the shared files.
+/// WadBrowser's logo, among the shared files: its icon, and the icon with
+/// its name (the new tab's, drawn as WadSpaces' logo is).
 const LOGO: &str = "brand/wadbrowser-icon.svg";
+const WORDMARK: &str = "brand/wadbrowser-logo.svg";
 
 /// The pages' shared files: (path under `wadbrowser://res/`, bytes, MIME type).
 static RESOURCES: &[(&str, &[u8], &str)] = &[
     ("pages.css", include_bytes!("../res/pages.css"), "text/css"),
     ("pages.js", include_bytes!("../res/pages.js"), "text/javascript"),
     (LOGO, include_bytes!("../../../assets/brand/wadbrowser-icon-dark.svg"), "image/svg+xml"),
+    (WORDMARK, include_bytes!("../../../assets/brand/wadbrowser-logo-dark.svg"), "image/svg+xml"),
     ("fonts/Inter-Variable.ttf", include_bytes!("../../../assets/fonts/Inter-Variable.ttf"), "font/ttf"),
     ("fonts/SpaceGrotesk-Variable.ttf", include_bytes!("../../../assets/fonts/SpaceGrotesk-Variable.ttf"), "font/ttf"),
     ("icons/web/claude.svg", include_bytes!("../../../assets/icons/web/claude.svg"), "image/svg+xml"),
@@ -72,7 +77,7 @@ pub fn resource(path: &str) -> Option<(&'static [u8], &'static str)> {
 // ------------------------------------------------------------ what a page asks of the browser
 
 /// What a `wadbrowser://` page asks the browser to do. Its script posts JSON to
-/// the "wadbrowser" script message handler (`{"do": "block-social", "on": true}`);
+/// the "wadbrowser" script message handler (`{"do": "blockers", "site": "x.com", "on": true}`);
 /// read it with [`PageAction::from_page`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(tag = "do", rename_all = "kebab-case")]
@@ -80,20 +85,8 @@ pub enum PageAction {
     /// The new tab's search box: what was typed (an address or words), to
     /// open as the address bar would.
     Go { to: String },
-    /// "Block all social media", on or off.
-    BlockSocial { on: bool },
-    /// The blockers on or off for a site: Privacy's "Block again" (on), the
-    /// blocked page's "Turn the blocker off for this site" (off).
+    /// The ad blocker on or off for a site: Privacy's "Block again" (on).
     Blockers { site: String, on: bool },
-    /// Settings' search engine: an id of [`crate::search::BUILTIN_ENGINES`]
-    /// (see [`crate::search::engine_from_id`]).
-    SearchEngine { id: String },
-    /// "New profile…".
-    NewProfile,
-    /// A web app of yours, in a window of its own.
-    OpenApp { id: String },
-    /// A web app of yours, removed.
-    RemoveApp { id: String },
 }
 
 impl PageAction {
@@ -114,30 +107,6 @@ impl PageAction {
 
 // ------------------------------------------------------------ the new tab
 
-/// A web app on the new tab page: one of the catalog's, or one of yours
-/// (made from a page).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Tile {
-    /// Its id (the catalog's `github`, or yours): picks its initial's colour, and what Remove removes.
-    pub id: String,
-    pub name: String,
-    pub url: String,
-    /// Its site's icon: a `wadbrowser://res/icons/web/…` address ([`res_url`]),
-    /// a `data:image/…` URI or a file. None: its initial.
-    pub icon: Option<String>,
-    /// Made from a page: right-click for Open in its own window and Remove.
-    pub mine: bool,
-}
-
-/// The new tab's tiles: the catalog's (`suggested`), then yours; a
-/// suggested one you made your own (same site) shows once, as yours.
-pub fn merge_tiles(suggested: Vec<Tile>, mine: Vec<Tile>) -> Vec<Tile> {
-    let hosts: Vec<String> = mine.iter().map(|t| bare_host(&t.url)).collect();
-    let mut tiles: Vec<Tile> = suggested.into_iter().filter(|t| !hosts.contains(&bare_host(&t.url))).collect();
-    tiles.extend(mine.into_iter().map(|t| Tile { mine: true, ..t }));
-    tiles
-}
-
 /// The search engine's name ("DuckDuckGo").
 pub fn engine_name(engine: &SearchEngine) -> &str {
     match engine {
@@ -155,51 +124,18 @@ fn search_template(prefs: &Preferences) -> String {
     prefs.search_url("cactusquery").replace("cactusquery", "%s")
 }
 
-/// `wadbrowser://newtab`: WadBrowser's logo, a search box (the preferred engine,
-/// or an address), and the web apps.
-pub fn newtab_page(prefs: &Preferences, tiles: &[Tile]) -> String {
-    let mut grid = String::new();
-    for t in tiles {
-        let title = if t.mine { "Made from a page · right-click for more".to_string() } else { t.name.clone() };
-        grid.push_str(&format!(
-            r#"<a class="tile{mine}" href="{href}" draggable="false" title="{title}" data-id="{id}" data-name="{data_name}">{icon}<span>{name}</span></a>"#,
-            mine = if t.mine { " mine" } else { "" },
-            href = esc_attr(&safe_href(&t.url)),
-            title = esc_attr(&title),
-            id = esc_attr(&t.id),
-            data_name = esc_attr(&t.name),
-            name = esc_html(&t.name),
-            icon = web_icon(&t.id, &t.name, t.icon.as_deref(), 48),
-        ));
-    }
-    let menu_icons = if tiles.iter().any(|t| t.mine) {
-        let icons = serde_json::json!({
-            "globe": icon("globe", 15),
-            "app-window": icon("app-window", 15),
-            "trash": icon("trash", 15),
-        });
-        // In a JSON script block: only "</" could end it early.
-        format!(
-            r#"<script type="application/json" id="menu-icons">{}</script>"#,
-            icons.to_string().replace("</", "<\\/")
-        )
-    } else {
-        String::new()
-    };
-    let placeholder = format!("Search {} or type an address", engine_name(&prefs.search_engine));
+/// `wadbrowser://newtab`: WadBrowser's logo, and under it an empty search
+/// box (the preferred engine, or an address), nothing else.
+pub fn newtab_page(prefs: &Preferences) -> String {
     page(
         "New tab",
         &format!(
             r#"<main class="newtab">
-<div class="brand"><img class="mark" src="{mark}" alt=""><span>WadBrowser</span></div>
-<form class="search" role="search" data-template="{template}">{search}<input name="q" placeholder="{placeholder}" aria-label="{placeholder}" spellcheck="false" autocomplete="off" autofocus data-newtab-search></form>
-<div class="grid">{grid}</div>
-<p class="hint">Right-click any page to make it an app of its own.</p>
-</main>{menu_icons}"#,
-            mark = res_url(LOGO),
-            search = icon("search", 18),
+<img class="wordmark" src="{mark}" alt="WadBrowser">
+<form class="search" role="search" data-template="{template}"><input name="q" aria-label="Search or type an address" spellcheck="false" autocomplete="off" autofocus data-newtab-search></form>
+</main>"#,
+            mark = res_url(WORDMARK),
             template = esc_attr(&search_template(prefs)),
-            placeholder = esc_attr(&placeholder),
         ),
     )
 }
@@ -226,9 +162,12 @@ pub struct Privacy {
     pub blocked_here: u64,
     /// A private window (it keeps no list of sites).
     pub private: bool,
-    pub block_social: bool,
     /// `block_ads_trackers`.
     pub block_ads: bool,
+    /// The sites that don't open.
+    pub blocked_sites: Vec<String>,
+    /// Where they're changed ("the Builder's add-ons", "Settings ▸ Browser").
+    pub set_in: String,
     /// This window, by site, most blocked first.
     pub sites: Vec<SiteCount>,
     /// The sites with the blockers off.
@@ -236,8 +175,9 @@ pub struct Privacy {
 }
 
 /// `wadbrowser://privacy`: what the blockers have stopped (on this machine, and
-/// in this window by site), the social media blocker, and the sites they're
-/// off for.
+/// in this window by site), whether they're on and which sites don't open
+/// (said, not set: they're [`Privacy::set_in`]'s), and the sites the ad
+/// blocker's off for.
 pub fn privacy_page(p: &Privacy) -> String {
     let sites = if !p.sites.is_empty() {
         let mut rows = String::new();
@@ -273,10 +213,15 @@ pub fn privacy_page(p: &Privacy) -> String {
         }
         format!(r#"<ul class="plain allowed" data-empty="{NO_ALLOWED}">{li}</ul>"#)
     };
-    let ads_note = if p.block_ads {
-        "Brave’s adblock engine, with EasyList and EasyPrivacy’s filters. Always on."
+    let set_in = esc_html(&p.set_in);
+    let ads_note = format!(
+        "{}. Brave’s adblock engine, with EasyList and EasyPrivacy’s filters: set in {set_in}.",
+        if p.block_ads { "On" } else { "Off" }
+    );
+    let blocked_note = if p.blocked_sites.is_empty() {
+        format!("None. Set in {set_in}.")
     } else {
-        "Brave’s adblock engine, with EasyList and EasyPrivacy’s filters. Off in prefs.toml."
+        format!("{}: set in {set_in}.", esc_html(&p.blocked_sites.join(", ")))
     };
     page(
         "Privacy",
@@ -289,8 +234,8 @@ pub fn privacy_page(p: &Privacy) -> String {
 <div class="stat"><b>{n_allowed}</b><span>sites with the blockers off</span></div>
 </div>
 <section>
-<div class="row">{ban}<div class="grow"><span>Block all social media</span><small>X, Facebook, Instagram, TikTok, Reddit, Threads, LinkedIn, Snapchat and Bluesky, in every window and web app.</small></div>{social}</div>
-<div class="row">{shield}<div class="grow"><span>Block ads and trackers</span><small>{ads_note}</small></div>{ads}</div>
+<div class="row">{shield}<div class="grow"><span>Ad and tracker blocker</span><small>{ads_note}</small></div></div>
+<div class="row">{ban}<div class="grow"><span>Blocked sites</span><small>{blocked_note}</small></div></div>
 </section>
 <h2>This window, by site</h2>
 {sites}
@@ -304,114 +249,6 @@ pub fn privacy_page(p: &Privacy) -> String {
             n_allowed = p.allowed.len(),
             ban = icon("shield-ban", 18),
             shield = icon("shield", 18),
-            social = toggle("block-social", p.block_social, false, "Block all social media"),
-            ads = toggle("", p.block_ads, true, "Block ads and trackers"),
-        ),
-    )
-}
-
-// ------------------------------------------------------------ settings
-
-/// A profile, as Settings lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProfileRow {
-    pub id: String,
-    pub name: String,
-    /// Its colour, `#rrggbb`.
-    pub color: String,
-}
-
-/// What `wadbrowser://settings` shows besides the preferences.
-#[derive(Debug, Clone, Default)]
-pub struct Settings {
-    pub block_social: bool,
-    pub profiles: Vec<ProfileRow>,
-    /// Your web apps (made from pages).
-    pub apps: Vec<Tile>,
-    /// WebKitGTK's version, for About.
-    pub webkit_version: String,
-}
-
-/// `wadbrowser://settings`: privacy, search, profiles, your web apps, and what
-/// this browser is built from. Of Cactus's preferences, only what the v2
-/// design shows: blocking ads and trackers, and the search engine.
-pub fn settings_page(prefs: &Preferences, s: &Settings) -> String {
-    let chosen = crate::search::id_for_engine(&prefs.search_engine);
-    let mut options = String::new();
-    for e in crate::search::BUILTIN_ENGINES {
-        options.push_str(&format!(
-            r#"<option value="{id}"{sel}>{name}</option>"#,
-            id = e.id,
-            sel = if e.id == chosen { " selected" } else { "" },
-            name = esc_html(e.name),
-        ));
-    }
-    if chosen == "custom" {
-        options.push_str(&format!(
-            r#"<option value="custom" selected disabled>{}</option>"#,
-            esc_html(engine_name(&prefs.search_engine))
-        ));
-    }
-
-    let mut profiles = String::new();
-    for p in &s.profiles {
-        profiles.push_str(&format!(
-            r#"<div class="row"><span class="swatch" style="background:{color}"></span><div class="grow"><span>{name}</span><small class="line">Its own sign-ins, cookies and history.</small></div></div>"#,
-            color = safe_color(&p.color),
-            name = esc_html(&p.name),
-        ));
-    }
-    profiles.push_str(&format!(
-        r#"<div class="row"><button class="btn quiet sm" data-do="new-profile">{}<span>New profile…</span></button></div>"#,
-        icon("user-round-plus", 14)
-    ));
-
-    let mut apps = String::new();
-    for a in &s.apps {
-        let id = esc_attr(&serde_json::json!({ "id": a.id }).to_string());
-        apps.push_str(&format!(
-            r#"<div class="row" data-row>{icon}<div class="grow"><span>{name}</span><small class="line">{url}</small></div><button class="btn ghost sm" data-do="open-app" data-args="{id}">Open</button><button class="btn danger sm" data-do="remove-app" data-args="{id}" data-gone>Remove</button></div>"#,
-            icon = web_icon(&a.id, &a.name, a.icon.as_deref(), 28),
-            name = esc_html(&a.name),
-            url = esc_html(&a.url),
-        ));
-    }
-    const NO_APPS: &str = "None yet. Right-click a page and choose “Create app from this page…”.";
-    if apps.is_empty() {
-        apps = format!(r#"<div class="row"><small>{NO_APPS}</small></div>"#);
-    }
-
-    page(
-        "Settings",
-        &format!(
-            r#"<main class="wadbrowser-page">
-<h1>{h1icon} Settings</h1>
-<h2>Privacy</h2>
-<section>
-<div class="row"><div class="grow"><span>Block all social media</span><small class="line">A plugin of WadSpaces’ own: social sites show a blocked page instead.</small></div>{social}</div>
-<div class="row"><div class="grow"><span>Block ads and trackers</span><small class="line">{ads_note} <a href="wadbrowser://privacy" class="inline">See what it’s blocked</a></small></div>{ads}</div>
-</section>
-<h2>Search</h2>
-<section>
-<div class="row"><div class="grow"><span>Search engine</span><small class="line">What the address bar and new tabs search with.</small></div><select class="choice" data-do="search-engine" aria-label="Search engine">{options}</select></div>
-</section>
-<h2>Profiles</h2>
-<section>{profiles}</section>
-<h2>Web apps</h2>
-<section data-empty="{NO_APPS}">{apps}</section>
-<h2>About</h2>
-<section>
-<div class="row"><div class="grow"><span>{name} {version} (WadOS’ fork of Cactus {cactus})</span><small class="line">WebKitGTK {webkit} · GTK 4 · libadwaita · adblock-rust · <a href="wadbrowser://about" class="inline">More</a></small></div></div>
-</section>
-</main>"#,
-            h1icon = icon("settings", 24),
-            social = toggle("block-social", s.block_social, false, "Block all social media"),
-            ads_note = if prefs.block_ads_trackers { "Always on." } else { "Off in prefs.toml." },
-            ads = toggle("", prefs.block_ads_trackers, true, "Block ads and trackers"),
-            name = crate::APP_NAME,
-            version = crate::APP_VERSION,
-            cactus = CACTUS_VERSION,
-            webkit = esc_html(&s.webkit_version),
         ),
     )
 }
@@ -579,28 +416,28 @@ pub fn social_name(site: &str) -> &str {
     }
 }
 
-/// What a social site shows while "Block all social media" is on: Go back
-/// (when there's a page to go back to), and the blockers off for `site`.
-/// Load it at a `wadbrowser://` address (`wadbrowser://blocked?site=x.com`), so its
-/// button may ask ([`PageAction::from_page`]).
+/// What a blocked site shows (one of wadbrowser.conf's `block`, the
+/// Builder's add-ons' or Settings ▸ Browser's): Go back, when there's a page
+/// to go back to. There's no way through from here: the list is its owner's.
 pub fn blocked_html(site: &str) -> String {
     let name = social_name(site);
+    let named = if name == site {
+        format!("<b>{}</b>", esc_html(site))
+    } else {
+        format!("<b>{}</b> ({})", esc_html(name), esc_html(site))
+    };
     page(
         &format!("{name}: blocked"),
         &format!(
             r#"<main class="notice blocked">
 <span class="badge">{badge}</span>
-<h1>Blocked: social media</h1>
-<p>{name} ({site}) is social media, and <b>Block all social media</b> is on in this browser.</p>
-<div class="acts"><button class="btn ghost" data-back hidden>{back}<span>Go back</span></button><button class="btn secondary" data-do="blockers" data-args="{args}">{off}<span>Turn the blocker off for this site</span></button></div>
+<h1>This site is blocked</h1>
+<p>{named} is on this browser’s list of blocked sites.</p>
+<div class="acts"><button class="btn ghost" data-back hidden>{back}<span>Go back</span></button></div>
 </main>
 <script>if (history.length > 1) document.querySelector('[data-back]').hidden = false;</script>"#,
             badge = icon("shield-ban", 34),
-            name = esc_html(name),
-            site = esc_html(site),
-            args = esc_attr(&serde_json::json!({ "site": site, "on": false }).to_string()),
             back = icon("arrow-left", 16),
-            off = icon("shield-off", 16),
         ),
     )
 }
@@ -639,41 +476,6 @@ fn page(title: &str, body: &str) -> String {
         title = esc_html(title),
         css = res_url("pages.css"),
         js = res_url("pages.js"),
-    )
-}
-
-/// A switch (ui/Toggle): `action` is posted with its new state (`on`).
-fn toggle(action: &str, on: bool, disabled: bool, label: &str) -> String {
-    format!(
-        r#"<button class="toggle{on_class}" role="switch" aria-checked="{on}" aria-label="{label}"{dis}{act}><span class="knob"></span></button>"#,
-        on_class = if on { " on" } else { "" },
-        label = esc_attr(label),
-        dis = if disabled { " disabled" } else { "" },
-        act = if action.is_empty() { String::new() } else { format!(r#" data-do="{}""#, esc_attr(action)) },
-    )
-}
-
-/// A web app's icon (ui/AppIcon): its site's on a white card, else its
-/// initial in one of the tints on a violet card.
-fn web_icon(id: &str, name: &str, src: Option<&str>, size: u32) -> String {
-    if let Some(src) = src.and_then(safe_img) {
-        return format!(
-            r#"<span class="site-icon" style="--s:{size}px"><img src="{src}" alt="" draggable="false" referrerpolicy="no-referrer"></span>"#,
-            src = esc_attr(src),
-        );
-    }
-    const TINTS: [&str; 6] = ["#c6ff1f", "#7fd3ff", "#ff3d81", "#ffb36b", "#b58cff", "#5cf2c4"];
-    let h = id.encode_utf16().fold(0u32, |h, c| h.wrapping_mul(31).wrapping_add(c as u32));
-    let shown = if name.trim().is_empty() { id } else { name };
-    let shown = match shown.get(..7) {
-        Some(g) if g.eq_ignore_ascii_case("google ") => shown[7..].trim_start(),
-        _ => shown,
-    };
-    let letter: String = shown.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_else(|| "?".into());
-    format!(
-        r#"<span class="web-icon" style="--s:{size}px; --tint:{tint}"><span>{letter}</span></span>"#,
-        tint = TINTS[(h % 6) as usize],
-        letter = esc_html(&letter),
     )
 }
 
@@ -759,32 +561,11 @@ fn host_of(url: &str) -> String {
     }
 }
 
-/// A URL's host without `www.` and its port, to tell sites apart.
-fn bare_host(url: &str) -> String {
-    let h = url::Url::parse(url).ok().and_then(|u| u.host_str().map(str::to_lowercase)).unwrap_or_default();
-    h.strip_prefix("www.").map(str::to_string).unwrap_or(h)
-}
-
 /// `url` if a link may go there (the web, files, the browser's own pages); else nowhere.
 fn safe_href(url: &str) -> String {
     let lower = url.trim().to_ascii_lowercase();
     let ok = ["http://", "https://", "wadbrowser://", "file://", "about:"].iter().any(|s| lower.starts_with(s));
     if ok { url.trim().to_string() } else { "#".into() }
-}
-
-/// `src` if an image may come from it.
-fn safe_img(src: &str) -> Option<&str> {
-    let lower = src.trim().to_ascii_lowercase();
-    ["wadbrowser://res/", "data:image/", "file://", "https://", "http://"]
-        .iter()
-        .any(|s| lower.starts_with(s))
-        .then_some(src.trim())
-}
-
-/// A colour for a style attribute: `#rgb` or `#rrggbb`, else the accent.
-fn safe_color(c: &str) -> &str {
-    let hex = c.strip_prefix('#').unwrap_or("");
-    if matches!(hex.len(), 3 | 6) && hex.bytes().all(|b| b.is_ascii_hexdigit()) { c } else { "#c6ff1f" }
 }
 
 fn esc_html(s: &str) -> String {
@@ -814,10 +595,6 @@ mod tests {
     /// Markup, and a way out of a double-quoted attribute (every attribute here is one).
     const EVIL: &str = r#"<script>alert('x')</script>" onmouseover="x"#;
 
-    fn tile(id: &str, name: &str, url: &str, icon: Option<&str>) -> Tile {
-        Tile { id: id.into(), name: name.into(), url: url.into(), icon: icon.map(str::to_string), mine: false }
-    }
-
     fn entry(title: &str, url: &str, ago: Duration) -> HistoryEntry {
         HistoryEntry { id: 1, title: title.into(), url: url.into(), visit_count: 1, last_visit: Utc::now() - ago }
     }
@@ -839,12 +616,8 @@ mod tests {
     fn every_page_renders_with_the_shared_files() {
         let prefs = Preferences::default();
         let pages = [
-            newtab_page(
-                &prefs,
-                &[tile("github", "GitHub", "https://github.com", Some("wadbrowser://res/icons/web/github.svg"))],
-            ),
+            newtab_page(&prefs),
             privacy_page(&Privacy::default()),
-            settings_page(&prefs, &Settings::default()),
             history_page(&[], false, Utc::now()),
             bookmarks_html(&[]),
             downloads_html(&[]),
@@ -862,65 +635,30 @@ mod tests {
     #[test]
     fn the_new_tab_searches_with_the_preferred_engine() {
         let mut prefs = Preferences::default();
-        let html = newtab_page(&prefs, &[]);
-        assert!(html.contains(r#"placeholder="Search DuckDuckGo or type an address""#));
-        assert!(html.contains(r#"data-template="https://duckduckgo.com/?q=%s""#));
+        assert!(newtab_page(&prefs).contains(r#"data-template="https://duckduckgo.com/?q=%s""#));
         prefs.search_engine = SearchEngine::Startpage;
-        let html = newtab_page(&prefs, &[]);
-        assert!(html.contains("Search Startpage or type an address"));
-        assert!(html.contains(r#"data-template="https://www.startpage.com/sp/search?query=%s""#));
+        assert!(newtab_page(&prefs).contains(r#"data-template="https://www.startpage.com/sp/search?query=%s""#));
         prefs.search_engine = SearchEngine::Custom {
             name: "Kagi".into(),
             url_template: "https://kagi.com/search?q={searchTerms}".into(),
         };
-        assert!(newtab_page(&prefs, &[]).contains(r#"data-template="https://kagi.com/search?q=%s""#));
+        assert!(newtab_page(&prefs).contains(r#"data-template="https://kagi.com/search?q=%s""#));
     }
 
     #[test]
-    fn the_new_tab_draws_its_tiles() {
-        let tiles = merge_tiles(
-            vec![
-                tile("github", "GitHub", "https://github.com", Some("wadbrowser://res/icons/web/github.svg")),
-                tile(
-                    "calendar",
-                    "Calendar",
-                    "https://calendar.google.com",
-                    Some("wadbrowser://res/icons/web/calendar.png"),
-                ),
-            ],
-            vec![tile("cal", "My calendar", "https://calendar.google.com/r/week", None)],
-        );
-        let html = newtab_page(&Preferences::default(), &tiles);
-        assert!(html.contains(r#"<img src="wadbrowser://res/icons/web/github.svg""#));
-        assert!(!html.contains("icons/web/calendar.png"), "the catalog's Calendar shows once, as yours");
-        assert!(html.contains(r#"class="tile mine""#));
-        assert!(html.contains(r#"<span class="web-icon" style="--s:48px; --tint:"#));
-        assert!(html.contains(">M</span>"));
-        assert!(html.contains(r#"id="menu-icons""#));
-        assert!(html.contains("Right-click any page to make it an app of its own."));
-        // The initial skips "Google ".
-        assert!(web_icon("drive", "Google Drive", None, 48).contains(">D</span>"));
-    }
-
-    #[test]
-    fn merging_tiles_keeps_yours_last_and_drops_the_catalogs_twin() {
-        let t = merge_tiles(
-            vec![
-                tile("github", "GitHub", "https://github.com", None),
-                tile("yt", "YouTube", "https://youtube.com", None),
-            ],
-            vec![tile("mine", "Tube", "https://www.youtube.com/feed", None)],
-        );
-        let ids: Vec<(&str, bool)> = t.iter().map(|t| (t.id.as_str(), t.mine)).collect();
-        assert_eq!(ids, [("github", false), ("mine", true)]);
+    fn the_new_tab_is_the_logo_and_an_empty_search_box() {
+        let html = newtab_page(&Preferences::default());
+        assert!(html.contains(r#"<img class="wordmark" src="wadbrowser://res/brand/wadbrowser-logo.svg""#));
+        assert!(!html.contains("placeholder"), "the box says nothing");
+        assert!(!html.contains("DuckDuckGo") && !html.contains("<svg"), "no engine's name, no icon");
+        assert!(!html.contains("tile") && !html.contains("menu-icons"), "no web apps");
+        assert!(resource("brand/wadbrowser-logo.svg").is_some());
     }
 
     #[test]
     fn pages_escape_what_they_are_given() {
         let prefs = Preferences::default();
-        let mut evil_tile = tile(EVIL, EVIL, "javascript:alert(1)", Some("javascript:alert(1)"));
-        evil_tile.mine = true;
-        clean(&newtab_page(&prefs, &[evil_tile.clone()]));
+        clean(&newtab_page(&prefs));
 
         let p = Privacy {
             sites: vec![SiteCount { site: EVIL.into(), url: "javascript:alert(1)".into(), pages: 1, blocked: 2 }],
@@ -929,15 +667,7 @@ mod tests {
         };
         clean(&privacy_page(&p));
 
-        let s = Settings {
-            profiles: vec![ProfileRow { id: "p".into(), name: EVIL.into(), color: "red;background:url(x)".into() }],
-            apps: vec![evil_tile],
-            webkit_version: EVIL.into(),
-            ..Settings::default()
-        };
-        let html = settings_page(&prefs, &s);
-        clean(&html);
-        assert!(html.contains("background:#c6ff1f"), "a colour that isn't one falls back to the accent");
+        clean(&privacy_page(&Privacy { blocked_sites: vec![EVIL.into()], set_in: EVIL.into(), ..Privacy::default() }));
 
         clean(&history_page(&[entry(EVIL, "javascript:alert(1)", Duration::minutes(1))], false, Utc::now()));
         clean(&error_html(EVIL, EVIL, "javascript:alert(1)"));
@@ -959,8 +689,9 @@ mod tests {
         let p = Privacy {
             blocked: 1291,
             blocked_here: 7,
-            block_social: true,
             block_ads: true,
+            blocked_sites: vec!["tiktok.com".into(), "x.com".into()],
+            set_in: "Settings ▸ Browser".into(),
             sites: vec![SiteCount { site: "x.com".into(), url: "https://x.com".into(), pages: 1, blocked: 7 }],
             allowed: vec!["old.reddit.com".into()],
             ..Privacy::default()
@@ -970,7 +701,9 @@ mod tests {
         assert!(html.contains("<b>7</b><span>in this window</span>"));
         assert!(html.contains("<b>1</b><span>sites with the blockers off</span>"));
         assert!(html.contains(r#"<td><a href="https://x.com">x.com</a></td><td>1</td><td>7</td>"#));
-        assert!(html.contains(r#"class="toggle on" role="switch" aria-checked="true" aria-label="Block all social media" data-do="block-social""#));
+        assert!(html.contains("On. Brave’s adblock engine"));
+        assert!(html.contains("tiktok.com, x.com: set in Settings ▸ Browser."));
+        assert!(!html.contains(r#"class="toggle"#), "it says what's set, it doesn't set it");
         assert!(html.contains(r#"data-args="{&quot;site&quot;:&quot;old.reddit.com&quot;,&quot;on&quot;:true}""#));
 
         let private = privacy_page(&Privacy { private: true, ..Privacy::default() });
@@ -980,22 +713,11 @@ mod tests {
     }
 
     #[test]
-    fn settings_shows_the_engine_profiles_and_apps() {
-        let prefs = Preferences { search_engine: SearchEngine::Wikipedia, ..Preferences::default() };
-        let s = Settings {
-            profiles: vec![ProfileRow { id: "default".into(), name: "Personal".into(), color: "#c6ff1f".into() }],
-            apps: vec![tile("cal", "Calendar", "https://calendar.google.com", None)],
-            webkit_version: "2.54.2".into(),
-            ..Settings::default()
-        };
-        let html = settings_page(&prefs, &s);
-        assert!(html.contains(r#"<option value="wikipedia" selected>Wikipedia</option>"#));
-        assert!(html.contains(r#"<option value="duckduckgo">DuckDuckGo</option>"#));
-        assert!(html.contains(r#"<span class="swatch" style="background:#c6ff1f"></span>"#));
-        assert!(html.contains(r#"data-do="remove-app" data-args="{&quot;id&quot;:&quot;cal&quot;}""#));
-        assert!(html.contains("WebKitGTK 2.54.2"));
-        assert!(!html.contains("Restore session"), "only what the v2 design shows");
-        assert!(settings_page(&prefs, &Settings::default()).contains("None yet. Right-click a page"));
+    fn a_blocked_site_has_no_way_through() {
+        let html = blocked_html("tiktok.com");
+        assert!(html.contains("<b>TikTok</b> (tiktok.com) is on this browser’s list of blocked sites."));
+        assert!(!html.contains("data-do"), "only Go back");
+        assert!(blocked_html("example.com").contains("<b>example.com</b> is on"));
     }
 
     #[test]
@@ -1046,18 +768,6 @@ mod tests {
     }
 
     #[test]
-    fn the_blocked_page_names_the_site_and_offers_to_unblock_it() {
-        let html = blocked_html("x.com");
-        assert!(html.contains("X (x.com) is social media"));
-        assert!(
-            html.contains(
-                r#"data-do="blockers" data-args="{&quot;site&quot;:&quot;x.com&quot;,&quot;on&quot;:false}""#
-            )
-        );
-        assert!(blocked_html("bsky.app").contains("Bluesky (bsky.app)"));
-    }
-
-    #[test]
     fn error_pages_offer_another_go() {
         let html = error_html("This page didn’t load", "Could not resolve host", "https://nowhere.invalid/a?b=1&c=2");
         assert!(html.contains(r#"<a class="btn secondary" href="https://nowhere.invalid/a?b=1&amp;c=2">"#));
@@ -1090,29 +800,22 @@ mod tests {
     #[test]
     fn pages_ask_with_actions_only_their_own() {
         assert_eq!(
-            PageAction::from_page("wadbrowser://privacy", r#"{"do":"block-social","on":true}"#),
-            Some(PageAction::BlockSocial { on: true })
+            PageAction::from_page("wadbrowser://privacy", r#"{"do":"blockers","site":"x.com","on":true}"#),
+            Some(PageAction::Blockers { site: "x.com".into(), on: true })
         );
         assert_eq!(
             PageAction::parse(r#"{"do":"blockers","site":"x.com","on":false}"#),
             Some(PageAction::Blockers { site: "x.com".into(), on: false })
         );
         assert_eq!(PageAction::parse(r#"{"do":"go","to":"rust gtk"}"#), Some(PageAction::Go { to: "rust gtk".into() }));
-        assert_eq!(
-            PageAction::parse(r#"{"do":"search-engine","id":"startpage"}"#),
-            Some(PageAction::SearchEngine { id: "startpage".into() })
-        );
-        assert_eq!(PageAction::parse(r#"{"do":"new-profile"}"#), Some(PageAction::NewProfile));
-        assert_eq!(
-            PageAction::parse(r#"{"do":"open-app","id":"cal"}"#),
-            Some(PageAction::OpenApp { id: "cal".into() })
-        );
-        assert_eq!(
-            PageAction::parse(r#"{"do":"remove-app","id":"cal"}"#),
-            Some(PageAction::RemoveApp { id: "cal".into() })
-        );
+        // Settings are wadbrowser.conf's: a page can't change them.
+        assert_eq!(PageAction::parse(r#"{"do":"search-engine","id":"startpage"}"#), None);
+        assert_eq!(PageAction::parse(r#"{"do":"block-social","on":true}"#), None);
         assert_eq!(PageAction::parse(r#"{"do":"format-disk"}"#), None);
         assert_eq!(PageAction::parse("not json"), None);
-        assert_eq!(PageAction::from_page("https://evil.example", r#"{"do":"block-social","on":false}"#), None);
+        assert_eq!(
+            PageAction::from_page("https://evil.example", r#"{"do":"blockers","site":"x.com","on":false}"#),
+            None
+        );
     }
 }

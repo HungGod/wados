@@ -283,15 +283,12 @@ pub struct DeskIcon {
     /// The thing it opens (none: a project, a glyph).
     pub thing: Option<AppVariant>,
     pub glyph: Option<&'static str>,
-    /// An app's add-ons: "focus" on the browser, how many on VS Code or the command line.
+    /// An app's add-ons: how many on VS Code or the command line.
     pub badge: Option<String>,
 }
 
-/// An app's icon's badge: Focus on the browser, how many add-ons VS Code or the command line has.
+/// An app's icon's badge: how many add-ons VS Code or the command line has.
 pub fn badge_of(x: &Wadspace, app: AppId) -> Option<String> {
-    if app == AppId::Wadbrowser {
-        return x.exts.iter().any(|e| e.app == AppId::Wadbrowser && e.id == "focus").then(|| "focus".to_string());
-    }
     if !matches!(app, AppId::Vscode | AppId::Terminal) {
         return None;
     }
@@ -510,7 +507,7 @@ mod tests {
         assert_eq!((p.name.as_str(), p.glyph), ("VanuaAcademy", Some("folder")));
         assert_eq!(icons.iter().find(|i| i.id == "web:gmail").unwrap().name, "Gmail");
         let iq = ws(&lib, "intelligencequest");
-        assert_eq!(badge_of(&iq, AppId::Wadbrowser).as_deref(), Some("focus"));
+        assert_eq!(badge_of(&iq, AppId::Wadbrowser), None, "no Focus badge: the address bar is a setting");
         assert_eq!(badge_of(&iq, AppId::Tiled), None);
         // The spike's 300 px stack (a 266 px preview): 4 across, 2 down; 11 icons are 7 and "4 more".
         assert_eq!(fit(11, 266), (7, 4));

@@ -8,6 +8,7 @@ use crate::panel::Make;
 pub mod accounts;
 pub mod background;
 pub mod bluetooth;
+pub mod browser;
 pub mod displays;
 pub mod keyboard;
 pub mod lock;
@@ -33,6 +34,7 @@ pub const REGISTRY: &[(&str, Make)] = &[
     ("power", power::make),
     ("background", background::make),
     ("lock", lock::make),
+    ("browser", browser::make),
     ("accounts", accounts::make),
     ("storage", storage::make),
     ("mouse", mouse::make),

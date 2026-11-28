@@ -2,7 +2,7 @@
 //! run's display): **screen** is full screen on the primary display (the
 //! launcher and desktop are under it), **window** an ordinary window,
 //! **background** minimized (it keeps running). wadd starts the container;
-//! the shell places its window (docs/decisions/0002). Open on 2 and To 2 say
+//! the shell places its window. Open on 2 and To 2 say
 //! another display ([`Placer::set_output`]). A window is a
 //! wadspace's when its app id is `io.wadspaces.<id>` (0001's labwc patch).
 //!

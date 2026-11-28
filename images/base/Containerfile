@@ -148,6 +148,29 @@ RUN \
   dnf clean all && \
   rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*
 
+# Video in WadBrowser (WebKit plays it through GStreamer), from Fedora's own
+# packages only: the image is published, so nothing patent-encumbered goes
+# in it (no RPM Fusion ffmpeg, no H.264 or HEVC) and nothing whose licence
+# covers only its own maker's copies (Cisco's OpenH264, from its repo, which
+# Fedora's libavcodec-free pulls in: Fedora's noopenh264 stub in its place).
+# Sites serve those browsers VP9 or AV1 (YouTube does) with Opus. dav1d decodes AV1
+# fast enough to keep up (libaom, the other, doesn't). Checked: the free
+# decoders are there, and neither repo's packages are.
+RUN \
+  echo "**** video codecs ****" && \
+  dnf -y --setopt=install_weak_deps=False --disablerepo=fedora-cisco-openh264 install \
+    gstreamer1-plugin-dav1d && \
+  if rpm -q openh264 > /dev/null; then \
+    dnf -y --disablerepo=fedora-cisco-openh264 swap openh264 noopenh264; fi && \
+  for e in dav1ddec vp8dec vp9dec avdec_vp9 opusdec vorbisdec avdec_aac; do \
+    gst-inspect-1.0 "$e" > /dev/null || { echo "no $e"; exit 1; }; done && \
+  for p in openh264 gstreamer1-plugin-openh264 ffmpeg; do \
+    ! rpm -q "$p" > /dev/null || { echo "has $p"; exit 1; }; done && \
+  ! rpm -qa --qf '%{VENDOR} %{NAME}\n' | grep -i rpmfusion && \
+  rm -rf /root/.cache/gstreamer-1.0 && \
+  dnf clean all && \
+  rm -rf /var/cache/libdnf5 /var/log/dnf5.log* /var/tmp/* /tmp/*
+
 # WadOS's own programs, built for Fedora 44 in images/builder: the browser
 # (apps/wadbrowser, a Cactus fork: every web app's window too), the
 # clipboard bridge (crates/wad-clip), the desktop's moves between the screen

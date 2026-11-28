@@ -1,5 +1,5 @@
 //! A wadspace's clipboard on the screen: the compositor serves its socket
-//! no clipboard control (docs/decisions/0001-labwc.md), so the bridge
+//! no clipboard control, so the bridge
 //! between its labwc's clipboard and the machine's (`wadspaces-clipboard`,
 //! crates/wad-clip) runs here, on the machine, with a connection to each
 //! that wadd makes it: to the compositor, and to the labwc inside the

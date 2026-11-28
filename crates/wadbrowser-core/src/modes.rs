@@ -144,7 +144,7 @@ pub struct Open<'a> {
 pub struct Context<'a> {
     /// The open windows, the most recently active first.
     pub open: Vec<Open<'a>>,
-    /// What `--default` opens (wadbrowser.conf).
+    /// Full or Focus for the browser's own windows (wadbrowser.conf).
     pub default_mode: Mode,
     /// This is the browser's first request (it's just started).
     pub first: bool,
@@ -209,13 +209,8 @@ pub fn plan(req: &Request, cx: &Context) -> Plan {
         return Plan::New { spec: WindowSpec::web_app(app, req.private, req.profile.clone()), urls };
     }
 
-    let mode = if req.default {
-        cx.default_mode
-    } else if req.no_urlbar {
-        Mode::Focus
-    } else {
-        Mode::Full
-    };
+    // wadbrowser.conf's Full or Focus, unless this launch says Focus.
+    let mode = if req.no_urlbar { Mode::Focus } else { cx.default_mode };
     let spec = WindowSpec::browser(mode, req.private, if req.private { None } else { req.profile.clone() });
     if !urls.is_empty()
         && !req.new_window

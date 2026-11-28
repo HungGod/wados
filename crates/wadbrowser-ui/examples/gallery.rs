@@ -7,7 +7,7 @@
 //! cargo run -p wadbrowser-ui --example gallery -- list
 //! ```
 //!
-//! A mock header bar (the shield, the profile chip, ⋮) holds the widgets;
+//! A mock header bar (the shield, ⋮) holds the widgets;
 //! pages show in a WebView with the `cactus` scheme served as the browser
 //! will: `wadbrowser://res/<file>` from `internal::resource`, the page itself
 //! from its function. What a page asks (its "wadbrowser" message handler) is
@@ -20,51 +20,40 @@ use std::time::Duration;
 use adw::prelude::*;
 use chrono::Utc;
 use gtk::{gdk, gio, glib};
-use wadbrowser_core::internal::{self, PageAction, Privacy, ProfileRow, Settings, SiteCount, Tile};
+use wadbrowser_core::internal::{self, PageAction, Privacy, SiteCount};
 use wadbrowser_core::{HistoryEntry, PermissionKind, Preferences};
-use wadbrowser_ui::chip::{ChipInfo, ProfileChip};
-use wadbrowser_ui::data::{Mode, Profile, WebKey};
+use wadbrowser_ui::data::WebKey;
 use wadbrowser_ui::dialogs::create_app::{CreateAppActions, CreateAppInfo, create_app};
-use wadbrowser_ui::dialogs::new_profile::{NewProfileActions, new_profile};
 use wadbrowser_ui::dialogs::permission::{PermissionInfo, permission};
 use wadbrowser_ui::dialogs::signins::{add_signin, edit_signins};
 use wadbrowser_ui::menu_popover::{MenuPopover, Place};
-use wadbrowser_ui::menus::{
-    MainActions, MainMenu, PageActions, PageMenu, ProfileActions, ProfileMenu, main_menu, page_menu, profile_menu,
-};
+use wadbrowser_ui::menus::{MainActions, PageActions, PageMenu, main_menu, page_menu};
 use wadbrowser_ui::shield::{Shield, ShieldActions, ShieldInfo};
 use webkit6::prelude::*;
 
 const NAMES: &[(&str, &str)] = &[
-    ("newtab", "wadbrowser://newtab: the catalog's web apps and one of yours"),
-    ("newtab-menu", "wadbrowser://newtab: a tile of yours, right-clicked"),
+    ("newtab", "wadbrowser://newtab: the logo and an empty search box"),
     ("newtab-search", "wadbrowser://newtab: a search typed and sent (prints what it asks)"),
-    ("newtab-plain", "wadbrowser://newtab with no apps of your own, searching with Startpage"),
     ("privacy", "wadbrowser://privacy after a few sites"),
     ("privacy-private", "wadbrowser://privacy in a private window, with a site allowed"),
-    ("privacy-clicks", "wadbrowser://privacy: its toggle and Block again clicked (prints what they ask)"),
-    ("settings", "wadbrowser://settings"),
+    ("privacy-clicks", "wadbrowser://privacy: Block again clicked (prints what it asks)"),
     ("history", "wadbrowser://history"),
     ("history-private", "wadbrowser://history in a private window"),
     ("about", "wadbrowser://about"),
     ("error", "a page that didn't load"),
-    ("blocked", "a social site, blocked"),
+    ("blocked", "a blocked site"),
     ("missing", "a wadbrowser:// page that doesn't exist"),
     ("bookmarks", "wadbrowser://bookmarks (Cactus's, unlinked)"),
     ("page-menu", "right-clicking a web page"),
     ("page-menu-signins", "right-clicking a web page: Saved sign-ins"),
     ("page-menu-cactus", "right-clicking one of the browser's own pages"),
-    ("main-menu", "the ⋮ menu, its Mode submenu open"),
-    ("profile-menu", "the profile chip's menu"),
-    ("profile-menu-private", "the profile chip's menu in a private window"),
-    ("chips", "profile chips: Personal, Work, Private"),
+    ("main-menu", "the ⋮ menu"),
     ("shield", "the shield on a web page"),
     ("shield-off", "the shield with the blockers off for the site"),
     ("shield-cactus", "the shield on one of the browser's own pages"),
     ("create-app", "Create app from this page"),
     ("create-app-done", "Create app: it's an app"),
     ("create-app-error", "Create app: not an address on the web"),
-    ("new-profile", "New profile"),
     ("add-signin", "A new sign-in for this site"),
     ("edit-signins", "Saved sign-ins"),
     ("permission", "a site asking for the camera and microphone"),
@@ -102,13 +91,6 @@ const GALLERY_CSS: &str = "
 ";
 
 /// The spike's populated world.
-fn profiles() -> Vec<Profile> {
-    vec![
-        Profile { id: "default".into(), name: "Personal".into(), color: "#c6ff1f".into() },
-        Profile { id: "work".into(), name: "Work".into(), color: "#7fd3ff".into() },
-    ]
-}
-
 fn web_keys() -> Vec<WebKey> {
     let key = |id: &str, name: &str, sites: &[&str]| WebKey {
         id: id.into(),
@@ -121,31 +103,6 @@ fn web_keys() -> Vec<WebKey> {
         key("hunggod", "hunggod", &["github.com"]),
         key("vanua", "Google (VanuaAcademy)", &["firebase.google.com", "cloud.google.com", "squarespace.com"]),
     ]
-}
-
-fn my_apps() -> Vec<Tile> {
-    vec![Tile {
-        id: "calendar".into(),
-        name: "Calendar".into(),
-        url: "https://calendar.google.com".into(),
-        icon: wad_model::catalog::site_icon("calendar", Some("https://calendar.google.com"))
-            .map(|p| internal::res_url(&p)),
-        mine: true,
-    }]
-}
-
-fn tiles(mine: bool) -> Vec<Tile> {
-    let suggested = wad_model::catalog::WEB_APPS
-        .iter()
-        .map(|s| Tile {
-            id: s.id.into(),
-            name: s.name.into(),
-            url: s.url.into(),
-            icon: wad_model::catalog::site_icon(s.id, Some(s.url)).map(|p| internal::res_url(&p)),
-            mine: false,
-        })
-        .collect();
-    internal::merge_tiles(suggested, if mine { my_apps() } else { vec![] })
 }
 
 fn visit(title: &str, url: &str, secs: i64) -> HistoryEntry {
@@ -167,13 +124,7 @@ fn page(name: &str) -> Option<(&'static str, String)> {
         SiteCount { site: "docs.rs".into(), url: "https://docs.rs".into(), pages: 1, blocked: 0 },
     ];
     Some(match name {
-        "newtab" | "newtab-menu" | "newtab-search" => {
-            ("wadbrowser://newtab", internal::newtab_page(&prefs, &tiles(true)))
-        }
-        "newtab-plain" => {
-            let prefs = Preferences { search_engine: wadbrowser_core::SearchEngine::Startpage, ..prefs };
-            ("wadbrowser://newtab", internal::newtab_page(&prefs, &tiles(false)))
-        }
+        "newtab" | "newtab-search" => ("wadbrowser://newtab", internal::newtab_page(&prefs)),
         "privacy" => (
             "wadbrowser://privacy",
             internal::privacy_page(&Privacy {
@@ -189,26 +140,12 @@ fn page(name: &str) -> Option<(&'static str, String)> {
             internal::privacy_page(&Privacy {
                 blocked: 1291,
                 private: true,
-                block_social: true,
                 block_ads: true,
+                blocked_sites: vec!["tiktok.com".into(), "x.com".into()],
+                set_in: "Settings ▸ Browser".into(),
                 allowed: vec!["old.reddit.com".into()],
                 ..Privacy::default()
             }),
-        ),
-        "settings" => (
-            "wadbrowser://settings",
-            internal::settings_page(
-                &prefs,
-                &Settings {
-                    block_social: false,
-                    profiles: profiles()
-                        .into_iter()
-                        .map(|p| ProfileRow { id: p.id, name: p.name, color: p.color })
-                        .collect(),
-                    apps: my_apps(),
-                    webkit_version: webkit_version(),
-                },
-            ),
         ),
         "history" => (
             "wadbrowser://history",
@@ -263,13 +200,12 @@ struct Chrome {
     window: adw::ApplicationWindow,
     content: gtk::Overlay,
     shield: Rc<Shield>,
-    chip: ProfileChip,
     menu: gtk::Button,
 }
 
 /// The window: a mock header bar (back, forward, reload, the address, the
-/// shield, the chip, ⋮) over the content.
-fn chrome(app: &adw::Application, private: bool) -> Chrome {
+/// shield, ⋮) over the content.
+fn chrome(app: &adw::Application) -> Chrome {
     let window = adw::ApplicationWindow::builder().application(app).default_width(1280).default_height(800).build();
     window.add_css_class("gallery");
     let col = gtk::Box::builder().orientation(gtk::Orientation::Vertical).build();
@@ -295,13 +231,10 @@ fn chrome(app: &adw::Application, private: bool) -> Chrome {
     header.append(&url);
     let shield = Shield::new(ShieldActions {
         set_blockers: Rc::new(|on| println!("set_blockers {on}")),
-        set_social: Rc::new(|on| println!("set_social {on}")),
         open_dashboard: Rc::new(|| println!("open_dashboard")),
     });
-    shield.update(&ShieldInfo { site: Some("github.com".into()), here: 0, total: 1284, allowed: false, social: false });
+    shield.update(&ShieldInfo { site: Some("github.com".into()), here: 0, total: 1284, allowed: false, enabled: true });
     header.append(shield.button());
-    let chip = ProfileChip::new(&ChipInfo { name: "Personal".into(), color: "#c6ff1f".into(), private }, |_| {});
-    header.append(chip.button());
     let menu = gtk::Button::builder()
         .child(&wad_gtk::Icon::new("ellipsis-vertical", 16))
         .css_classes(["wb-hb"])
@@ -314,12 +247,11 @@ fn chrome(app: &adw::Application, private: bool) -> Chrome {
     content.set_child(Some(&gtk::Box::builder().css_classes(["gallery"]).build()));
     col.append(&content);
     window.set_content(Some(&col));
-    Chrome { window, content, shield, chip, menu }
+    Chrome { window, content, shield, menu }
 }
 
 fn show(app: &adw::Application, name: &str, fullscreen: bool) {
-    let private = name.ends_with("-private") && !name.starts_with("privacy") && !name.starts_with("history");
-    let c = chrome(app, private);
+    let c = chrome(app);
     if fullscreen {
         c.window.fullscreen();
     }
@@ -354,33 +286,7 @@ fn widget(c: &Chrome, name: &str) {
             page_menu_at("wadbrowser://privacy");
         }
         "main-menu" => {
-            let a = MainActions { set_mode: Rc::new(|m| println!("set_mode {m:?}")), ..MainActions::default() };
-            let m = MenuPopover::show(
-                &c.menu,
-                Place::Below,
-                main_menu(&MainMenu { mode: Mode::Full, block_social: false, mode_off: None }, &a),
-                false,
-            );
-            glib::timeout_add_local_once(Duration::from_millis(200), move || {
-                m.open("menu-mode");
-            });
-        }
-        "profile-menu" | "profile-menu-private" => {
-            let m = ProfileMenu { profiles: profiles(), current: "default".into(), private: name.ends_with("private") };
-            MenuPopover::show(c.chip.button(), Place::Below, profile_menu(&m, &ProfileActions::default()), false);
-        }
-        "chips" => {
-            let row = gtk::Box::builder().spacing(12).halign(gtk::Align::Center).valign(gtk::Align::Center).build();
-            for (name, color, private) in [
-                ("Personal", "#c6ff1f", false),
-                ("Work", "#7fd3ff", false),
-                ("School", "#ffb36b", false),
-                ("", "", true),
-            ] {
-                let chip = ProfileChip::new(&ChipInfo { name: name.into(), color: color.into(), private }, |_| {});
-                row.append(chip.button());
-            }
-            c.content.add_overlay(&row);
+            MenuPopover::show(&c.menu, Place::Below, main_menu(&MainActions::default()), false);
         }
         "shield" | "shield-off" | "shield-cactus" => {
             let info = match name {
@@ -389,11 +295,11 @@ fn widget(c: &Chrome, name: &str) {
                     here: 0,
                     total: 1291,
                     allowed: true,
-                    social: true,
+                    enabled: true,
                 },
-                "shield-cactus" => ShieldInfo { site: None, here: 0, total: 1291, allowed: false, social: false },
+                "shield-cactus" => ShieldInfo { site: None, here: 0, total: 1291, allowed: false, enabled: true },
                 _ => {
-                    ShieldInfo { site: Some("github.com".into()), here: 0, total: 1284, allowed: false, social: false }
+                    ShieldInfo { site: Some("github.com".into()), here: 0, total: 1284, allowed: false, enabled: true }
                 }
             };
             c.shield.update(&info);
@@ -408,8 +314,6 @@ fn widget(c: &Chrome, name: &str) {
                 } else {
                     "https://github.com".into()
                 },
-                profiles: profiles(),
-                profile: "default".into(),
             };
             let d = create_app(
                 &c.window,
@@ -425,13 +329,6 @@ fn widget(c: &Chrome, name: &str) {
             if name != "create-app" {
                 d.submit();
             }
-        }
-        "new-profile" => {
-            new_profile(
-                &c.window,
-                &["#c6ff1f".into(), "#7fd3ff".into()],
-                NewProfileActions { create: Rc::new(|n, col| println!("new profile {n} {col}")) },
-            );
         }
         "add-signin" => {
             add_signin(&c.window, "github.com", Rc::new(|n| println!("save {n}")));
@@ -459,19 +356,11 @@ fn widget(c: &Chrome, name: &str) {
 /// What a page's run does once it's loaded (as a person would), if anything.
 fn script(name: &str) -> Option<&'static str> {
     Some(match name {
-        // Right-click the tile of yours.
-        "newtab-menu" => {
-            "const t = document.querySelector('.tile.mine'); const r = t.getBoundingClientRect();
-             t.dispatchEvent(new MouseEvent('contextmenu', {bubbles: true, cancelable: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2}));"
-        }
         "newtab-search" => {
             "const f = document.querySelector('form.search'); f.querySelector('input').value = 'rust gtk4';
              f.requestSubmit();"
         }
-        "privacy-clicks" => {
-            "document.querySelector('[data-do=block-social]').click();
-             document.querySelector('[data-do=blockers]').click();"
-        }
+        "privacy-clicks" => "document.querySelector('[data-do=blockers]').click();",
         _ => return None,
     })
 }

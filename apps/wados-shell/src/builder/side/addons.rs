@@ -1,8 +1,9 @@
 //! The sidebar's Add-ons tab (the spike's `SideAddons.svelte`; its lists
-//! are [`addon_list`]'s, `addons.ts`): only the add-ons of the apps in it.
-//! **Suggested** first (for its apps, not in it yet: what goes with what it
-//! has first; a click adds one), then by app: web apps for WadBrowser
-//! (Focus, the usual sites, your own, **Add a site**), VS Code's
+//! are [`addon_list`]'s, `addons.ts`): only the add-ons of the apps in it,
+//! by app: web apps for WadBrowser (the usual sites, your own, **Add a
+//! site**) and its settings (the address bar, the ad blocker, and what it
+//! blocks: the machine's blocker groups a tap each, each one's sites
+//! changed in a popup (its pencil), and **New group**), VS Code's
 //! extensions, the command line (its tools, then its own **commands**,
 //! RUN or COPY typed exactly, each named RUN_1…, a step of its build),
 //! Steam's games and Dolphin's (listed, off till phase 10).
@@ -18,13 +19,13 @@ use std::rc::{Rc, Weak};
 
 use gtk::prelude::*;
 use wad_gtk::keyed::Keyed;
+use wad_model::browser::BlockGroup;
 use wad_model::catalog::{app_name, url_host};
 use wad_model::commands::parse_command;
 use wad_model::edit::{NewVariant, Op};
-use wad_model::suggest::Suggestion;
 use wad_model::{AppId, BuildCommand, CommandKind, Wadspace};
 
-use super::addon_list::{self, Group, GroupId, Item, focus, focus_toggle, toggle};
+use super::addon_list::{self, Group, GroupId, Item, toggle};
 use super::ctl::{self, Row};
 use super::keys::Act;
 use super::kit::{self, Field};
@@ -39,8 +40,28 @@ struct Part {
     head: gtk::Label,
     card: gtk::Box,
     pills: Wrap,
-    /// WadBrowser's Focus, at the end of its "for" line.
-    focus: Option<gtk::Button>,
+}
+
+/// WadBrowser's settings in it, under its web apps (wadbrowser.conf's, by
+/// wad-gen: the browser has no settings of its own).
+struct BrowserPart {
+    root: gtk::Box,
+    /// On unless it has the Focus add-on.
+    address: gtk::Button,
+    blocker: gtk::Button,
+    /// The machine's blocker groups: lit when on in it; each with its pencil.
+    groups: Wrap,
+    group_new: gtk::Button,
+    /// The group open (its pencil), in a popup by it: its sites (a tap takes
+    /// one out), one typed goes in, and Remove group.
+    popover: gtk::Popover,
+    editor_title: gtk::Label,
+    sites: Wrap,
+    remove: gtk::Button,
+    done: gtk::Button,
+    entry: gtk::Entry,
+    add: gtk::Button,
+    err: gtk::Label,
 }
 
 /// The command line's own commands, typed exactly.
@@ -59,17 +80,17 @@ pub struct Panel {
     builder: Weak<Builder>,
     me: Weak<Panel>,
     root: gtk::Box,
-    sug_head: gtk::Label,
-    sug_card: gtk::Box,
-    sug: Wrap,
     parts: Vec<(GroupId, Part)>,
     site_add: gtk::Button,
     disc_upload: gtk::Button,
     no_discs: gtk::Label,
     cmds: Commands,
+    browser: BrowserPart,
     none: gtk::Label,
     /// The wadspace shown, and whether it can be changed here.
     now: RefCell<Option<Wadspace>>,
+    /// The blocker group whose sites are in the popup (its pencil).
+    open_group: RefCell<Option<String>>,
     editable: Cell<bool>,
     /// Its groups' items, by group and key (what a click or a drag reads).
     items: RefCell<HashMap<(GroupId, String), Item>>,
@@ -80,17 +101,6 @@ impl Panel {
         kit::install_css();
         let me = Rc::new_cyclic(|me: &Weak<Panel>| {
             let root = gtk::Box::builder().orientation(gtk::Orientation::Vertical).css_classes(["side-addons"]).build();
-
-            // Suggested.
-            let sug_head = kit::heading("Suggested");
-            sug_head.add_css_class("first");
-            let sug_card = card(&["side-suggested"]);
-            sug_card.set_widget_name("addons:suggested");
-            sug_card.append(&for_line("For the apps in it, not in it yet", None));
-            let sug = Wrap::new(6, 6);
-            sug_card.append(&sug);
-            root.append(&sug_head);
-            root.append(&sug_card);
 
             // A part per app with add-ons.
             let site_add = pill_button("plus", "Add a site", "A site of your own: its name and address");
@@ -112,6 +122,7 @@ impl Panel {
             });
             let no_discs = note("Its games are discs: upload one and it shows here.");
             let cmds = commands(me);
+            let browser = browser_part(me);
             let mut parts = vec![];
             for g in GROUPS {
                 let (title, app) = match g {
@@ -124,18 +135,7 @@ impl Panel {
                 let head = kit::heading(title);
                 let card = card(&[]);
                 card.set_widget_name(&format!("addons:{}", g.id()));
-                let focus = (g == GroupId::Web).then(|| {
-                    let f = pill_button("eye", "Focus", "Focus: its web apps alone, no address bar");
-                    f.add_css_class("side-focus");
-                    let w = me.clone();
-                    f.connect_clicked(move |_| {
-                        if let Some(p) = w.upgrade() {
-                            p.focus_click();
-                        }
-                    });
-                    f
-                });
-                card.append(&for_line(&format!("for {}", app_name(app)), Some((app, focus.as_ref()))));
+                card.append(&for_line(&format!("for {}", app_name(app)), Some((app, None))));
                 // Steam's sign-in is the wadspace's own: Steam's, as it opens.
                 if g == GroupId::Steam {
                     card.append(&note(
@@ -145,7 +145,10 @@ impl Panel {
                 let pills = Wrap::new(6, 6);
                 card.append(&pills);
                 match g {
-                    GroupId::Web => card.append(&site_add),
+                    GroupId::Web => {
+                        card.append(&site_add);
+                        card.append(&browser.root);
+                    }
                     GroupId::Tools => card.append(&cmds.root),
                     GroupId::Dolphin => {
                         card.append(&no_discs);
@@ -155,7 +158,7 @@ impl Panel {
                 }
                 root.append(&head);
                 root.append(&card);
-                parts.push((g, Part { head, card, pills, focus }));
+                parts.push((g, Part { head, card, pills }));
             }
             let none = note(
                 "No add-ons for its apps. Add VS Code, WadBrowser, the command line, Steam or Dolphin in Apps for theirs.",
@@ -165,16 +168,15 @@ impl Panel {
                 builder: Rc::downgrade(b),
                 me: me.clone(),
                 root,
-                sug_head,
-                sug_card,
-                sug,
                 parts,
                 site_add,
                 disc_upload,
                 no_discs,
                 cmds,
+                browser,
                 none,
                 now: RefCell::default(),
+                open_group: RefCell::default(),
                 editable: Cell::new(false),
                 items: RefCell::default(),
             }
@@ -205,13 +207,6 @@ impl Panel {
             }
         }
         let me = self.me.clone();
-
-        // Suggested.
-        let sug = addon_list::suggested(x, editable);
-        self.sug_head.set_visible(!sug.is_empty());
-        self.sug_card.set_visible(!sug.is_empty());
-        let keyed: Vec<(String, Suggestion)> = sug.into_iter().map(|s| (s.item.clone(), s)).collect();
-        self.sug.set(&keyed, |s| suggest_pill(&me, s), paint_suggestion);
 
         // A part per app in it.
         let groups: Vec<Group> = addon_list::groups(&b.shell.store.library(), x);
@@ -247,15 +242,8 @@ impl Panel {
                     w.add_controller(g);
                 }
             }
-            if let Some(f) = &part.focus {
-                let on = focus(x).is_some();
-                lit(f, on);
-                f.set_sensitive(editable);
-                f.set_tooltip_text(Some(if on {
-                    "Focus: its web apps alone, no address bar (on: click to take it off)"
-                } else {
-                    "Focus: its web apps alone, no address bar"
-                }));
+            if *id == GroupId::Web {
+                self.show_browser(x, editable);
             }
             if *id == GroupId::Dolphin {
                 self.no_discs.set_visible(g.items.is_empty());
@@ -413,17 +401,188 @@ impl Panel {
         });
     }
 
-    fn focus_click(&self) {
-        let x = self.now.borrow().clone();
-        if let Some(x) = x {
-            self.act(Some(focus_toggle(&x)));
+    /// Its browser's settings, as `x` has them.
+    fn show_browser(&self, x: &Wadspace, editable: bool) {
+        let Some(builder) = self.builder.upgrade() else { return };
+        let lib = builder.shell.store.library();
+        let b = &self.browser;
+        let me = self.me.clone();
+        lit(&b.address, addon_list::address_bar(x));
+        lit(&b.blocker, x.browser.ad_blocker);
+        let open = self.open_group.borrow().clone();
+        let groups: Vec<(String, (BlockGroup, bool, bool))> = addon_list::group_pills(&lib, x)
+            .into_iter()
+            .map(|(g, on)| {
+                let shown = open.as_deref() == Some(g.id.as_str());
+                (g.id.clone(), (g, on, shown))
+            })
+            .collect();
+        b.groups.set(
+            &groups,
+            |(g, on, shown)| group_pill(&me, g, *on, *shown),
+            |w, (g, on, shown)| paint_group(w, g, *on, *shown),
+        );
+        // The open group's sites (it's gone, or can't be changed here: the popup's away).
+        let group = open.and_then(|id| lib.block_groups.iter().find(|g| g.id == id).cloned());
+        if (group.is_none() || !editable) && b.popover.is_visible() {
+            b.popover.popdown();
+        }
+        if let Some(g) = &group {
+            b.editor_title.set_label(&g.name);
+            let sites: Vec<(String, (String, String))> =
+                g.sites.iter().map(|s| (s.clone(), (g.id.clone(), s.clone()))).collect();
+            b.sites.set(&sites, |(id, s)| site_pill(&me, id, s), |_, _| {});
+        }
+        for w in [b.address.upcast_ref::<gtk::Widget>(), b.blocker.upcast_ref(), b.group_new.upcast_ref()]
+            .into_iter()
+            .chain(b.groups.keyed().iter().map(|(_, w)| w))
+        {
+            w.set_sensitive(editable);
+        }
+        b.add.set_sensitive(!b.entry.text().trim().is_empty());
+    }
+
+    /// A group's pencil: its sites in a popup by it.
+    fn open_group_editor(&self, anchor: &gtk::Widget, id: &str) {
+        if !self.editable.get() {
+            return;
+        }
+        *self.open_group.borrow_mut() = Some(id.to_string());
+        let b = &self.browser;
+        b.entry.set_text("");
+        b.err.set_visible(false);
+        if b.popover.parent().is_some() {
+            b.popover.unparent();
+        }
+        b.popover.set_parent(anchor);
+        b.popover.set_autohide(!kit::from_ctl());
+        if let Some(x) = self.now.borrow().clone() {
+            self.show_browser(&x, self.editable.get());
+        }
+        b.popover.popup();
+        b.entry.grab_focus();
+    }
+
+    /// The popup put away: no group open, and it's let go of its pencil
+    /// (which may go: its group removed, another wadspace shown).
+    fn group_editor_closed(&self) {
+        self.open_group.borrow_mut().take();
+        let pw = self.browser.popover.downgrade();
+        gtk::glib::idle_add_local_once(move || {
+            if let Some(p) = pw.upgrade()
+                && !p.is_visible()
+                && p.parent().is_some()
+            {
+                p.unparent();
+            }
+        });
+        if let Some(x) = self.now.borrow().clone() {
+            self.show_browser(&x, self.editable.get());
         }
     }
 
-    fn suggest_click(&self, item: &str) {
+    /// The open group removed (from the machine, and every wadspace with it on).
+    fn remove_open_group(&self) {
+        let Some(id) = self.open_group.borrow().clone() else { return };
+        self.browser.popover.popdown();
+        self.act(Some(Op::RemoveBlockGroup { id }));
+    }
+
+    /// A blocker group's pill, right-clicked: edit it, or remove it.
+    fn group_menu(&self, anchor: &gtk::Widget, id: &str, at: (f64, f64)) {
+        let Some(b) = self.builder.upgrade() else { return };
+        if !self.editable.get() {
+            return;
+        }
+        let lib = b.shell.store.library();
+        let Some(g) = lib.block_groups.iter().find(|g| g.id == id).cloned() else { return };
+        let choices = addon_list::group_menu(&lib, &g);
+        let (wb, wa, me) = (self.builder.clone(), anchor.downgrade(), self.me.clone());
+        kit::menu(
+            anchor,
+            Some(at),
+            &format!("browser:group:{id}"),
+            choices,
+            move |p: &crate::builder::side::keys::Pick| {
+                let (Some(b), Some(a)) = (wb.upgrade(), wa.upgrade()) else { return };
+                if p.id.starts_with("group-edit:") {
+                    if let Some(me) = me.upgrade() {
+                        me.ask_group(&a, Some(&g));
+                    }
+                    return;
+                }
+                kit::act(&b, &a, &p.act);
+            },
+        );
+    }
+
+    /// New group (`g` None), or `g` changed: its name and sites, in a small dialog.
+    fn ask_group(&self, anchor: &gtk::Widget, g: Option<&BlockGroup>) {
+        let Some(b) = self.builder.upgrade() else { return };
+        if !self.editable.get() {
+            return;
+        }
+        let shell = b.shell.clone();
+        let id = g.map(|g| g.id.clone()).unwrap_or_default();
+        let (name, sites) = g.map(|g| (g.name.clone(), g.sites.join(" "))).unwrap_or_default();
+        // A new group is on in this wadspace at once (as it is then).
+        let x = if g.is_none() { self.now.borrow().as_ref().map(|x| x.id.clone()) } else { None };
+        kit::ask(
+            anchor,
+            if g.is_some() { "Edit blocker group" } else { "New blocker group" },
+            &[
+                Field { key: "group-name", label: "Name", placeholder: "Distractions", text: name },
+                Field {
+                    key: "group-sites",
+                    label: "Sites it blocks",
+                    placeholder: "news.com, example.com",
+                    text: sites,
+                },
+            ],
+            if g.is_some() { "Save" } else { "Make" },
+            move |v| {
+                let op = addon_list::group_from(&id, &v[0], &v[1])?;
+                let (shell2, x) = (shell.clone(), x.clone());
+                shell.op(op, move |r| {
+                    let now = x.as_deref().and_then(|id| shell2.store.library().wadspace(id).cloned());
+                    if let (Some(new), Some(x)) = (r.created.as_ref(), now) {
+                        shell2.op(addon_list::group_toggle(&x, new), |_| {});
+                    }
+                });
+                Ok(())
+            },
+        );
+    }
+
+    fn browser_click(&self, f: impl FnOnce(&Wadspace) -> Op) {
         let x = self.now.borrow().clone();
         if let Some(x) = x {
-            self.act(addon_list::add_addon(&x, item));
+            self.act(Some(f(&x)));
+        }
+    }
+
+    /// The site typed, put in the open group (or why it can't be, under it).
+    fn block_typed(&self) {
+        let (Some(builder), Some(id)) = (self.builder.upgrade(), self.open_group.borrow().clone()) else { return };
+        let b = &self.browser;
+        match addon_list::group_site_add(&builder.shell.store.library(), &id, &b.entry.text()) {
+            Ok(op) => {
+                b.entry.set_text("");
+                b.err.set_visible(false);
+                self.act(Some(op));
+            }
+            Err(why) => {
+                b.err.set_label(&why);
+                b.err.set_visible(true);
+            }
+        }
+    }
+
+    /// `site` taken out of the group `id`.
+    fn unblock(&self, id: &str, site: &str) {
+        let Some(builder) = self.builder.upgrade() else { return };
+        if self.editable.get() {
+            self.act(addon_list::group_site_remove(&builder.shell.store.library(), id, site));
         }
     }
 
@@ -509,17 +668,9 @@ impl Panel {
 impl ctl::Rows for Panel {
     fn rows(&self) -> Vec<Row> {
         let mut out = vec![];
-        if self.sug_card.is_visible() {
-            for (k, w) in self.sug.keyed() {
-                out.push(Row::new(format!("suggest:{k}"), &w, label_of(&w)));
-            }
-        }
         for (gid, p) in &self.parts {
             if !p.card.is_visible() {
                 continue;
-            }
-            if let Some(f) = &p.focus {
-                out.push(Row::new("focus", f, "Focus").lit(f.has_css_class("in")));
             }
             for (k, w) in p.pills.keyed() {
                 let row = Row::new(format!("addon:{k}"), &w, label_of(&w)).lit(w.has_css_class("in"));
@@ -542,6 +693,46 @@ impl ctl::Rows for Panel {
         let card_of = |g: GroupId| self.parts.iter().find(|(id, _)| *id == g).is_some_and(|(_, p)| p.card.is_visible());
         if card_of(GroupId::Web) && self.site_add.is_visible() {
             out.push(Row::new("site-add", &self.site_add, "Add a site"));
+        }
+        if card_of(GroupId::Web) {
+            let b = &self.browser;
+            let on = |w: &gtk::Button| w.has_css_class("in");
+            out.push(Row::new("browser:address-bar", &b.address, "Address bar").lit(on(&b.address)));
+            out.push(Row::new("browser:ad-blocker", &b.blocker, "Ad blocker").lit(on(&b.blocker)));
+            for (k, w) in b.groups.keyed() {
+                let (Some(pill), Some(pencil)) = (w.first_child(), w.last_child()) else { continue };
+                let (me2, w2, id) = (self.me.clone(), pill.clone(), k.clone());
+                let menu: Rc<dyn Fn()> = Rc::new(move || {
+                    if let Some(p) = me2.upgrade() {
+                        p.group_menu(&w2, &id, (0.0, 0.0));
+                    }
+                });
+                out.push(
+                    Row::new(format!("browser:group:{k}"), &pill, label_of(&pill))
+                        .lit(pill.has_css_class("in"))
+                        .menu(menu),
+                );
+                out.push(
+                    Row::new(format!("browser:group-sites:{k}"), &pencil, "Its sites").lit(pencil.has_css_class("in")),
+                );
+            }
+            if b.group_new.is_sensitive() {
+                out.push(Row::new("browser:group-new", &b.group_new, "New group"));
+            }
+            if b.popover.is_visible() {
+                for (k, w) in b.sites.keyed() {
+                    out.push(Row::new(format!("browser:site:{k}"), &w, k.clone()));
+                }
+                out.push(Row::new("browser:group-remove", &b.remove, "Remove group"));
+                out.push(Row::new("browser:group-save", &b.done, "Save"));
+            }
+            if b.popover.is_visible() {
+                out.push(Row::new("browser:block-input", &b.entry, b.entry.text()));
+                out.push(Row::new("browser:block-add", &b.add, "Add the site to the group"));
+            }
+            if b.err.is_visible() {
+                out.push(Row::new("browser:block-error", &b.err, b.err.label()));
+            }
         }
         if card_of(GroupId::Tools) {
             for (id, l) in self.cmds.lines.borrow().widgets() {
@@ -652,32 +843,6 @@ fn confirm_remove(anchor: &gtk::Widget, name: &str, then: impl Fn() + 'static) {
     });
 }
 
-fn suggest_pill(me: &Weak<Panel>, s: &Suggestion) -> gtk::Widget {
-    let b = gtk::Button::builder().css_classes(["side-pill"]).build();
-    b.set_widget_name(&format!("suggest:{}", s.item));
-    let h = gtk::Box::builder().spacing(6).build();
-    h.append(&wad_gtk::Icon::new("plus", 12));
-    h.append(&wad_gtk::app_icon::app(s.app, 15));
-    h.append(&gtk::Label::builder().label(&s.name).css_classes(["side-name"]).build());
-    if let Some(why) = &s.why {
-        h.append(&gtk::Label::builder().label(why).css_classes(["side-why"]).build());
-    }
-    b.set_child(Some(&h));
-    paint_suggestion(b.upcast_ref(), s);
-    let (w, item) = (me.clone(), s.item.clone());
-    b.connect_clicked(move |_| {
-        if let Some(p) = w.upgrade() {
-            p.suggest_click(&item);
-        }
-    });
-    b.upcast()
-}
-
-fn paint_suggestion(w: &gtk::Widget, s: &Suggestion) {
-    let why = s.why.as_ref().map(|y| format!(": {}", y.to_lowercase())).unwrap_or_default();
-    w.set_tooltip_text(Some(&format!("Add {} to {}{why}", s.name, app_name(s.app))));
-}
-
 fn item_pill(me: &Weak<Panel>, g: GroupId, i: &Item) -> gtk::Widget {
     let b = gtk::Button::builder().css_classes(["side-pill"]).build();
     b.set_widget_name(&format!("addon:{}", i.key));
@@ -736,12 +901,249 @@ fn placeholder(k: CommandKind) -> &'static str {
     }
 }
 
+/// WadBrowser's settings: its address bar and ad blocker (switches), its
+/// search engine (one of them), and the sites it blocks.
+fn browser_part(me: &Weak<Panel>) -> BrowserPart {
+    let root =
+        gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(8).css_classes(["side-commands"]).build();
+    let sub = |t: &str| gtk::Label::builder().label(t).xalign(0.0).wrap(true).css_classes(["side-sub"]).build();
+    root.append(&sub("Its settings"));
+    let switches = Wrap::new(6, 6);
+    let address = pill_button("globe", "Address bar", "Tabs and an address bar (off: its tabs alone)");
+    let blocker = pill_button("shield-check", "Ad blocker", "Blocks ads and trackers (EasyList and EasyPrivacy)");
+    switches.append(&address);
+    switches.append(&blocker);
+    root.append(&switches);
+    let w = me.clone();
+    address.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.browser_click(addon_list::address_toggle);
+        }
+    });
+    let w = me.clone();
+    blocker.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.browser_click(addon_list::blocker_toggle);
+        }
+    });
+
+    root.append(&sub("Blocks"));
+    let groups = Wrap::new(6, 6);
+    root.append(&groups);
+    let group_new = pill_button("plus", "New group", "A blocker group of your own: its name and the sites it blocks");
+    group_new.set_widget_name("browser:group-new");
+    group_new.set_halign(gtk::Align::Start);
+    let w = me.clone();
+    group_new.connect_clicked(move |b| {
+        if let Some(p) = w.upgrade() {
+            p.ask_group(b.upcast_ref(), None);
+        }
+    });
+    root.append(&group_new);
+
+    // The open group's sites, in a popup by its pencil.
+    let editor = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(10).build();
+    editor.set_size_request(320, -1);
+    let editor_title = gtk::Label::builder().xalign(0.0).css_classes(["side-ask-title"]).build();
+    editor.append(&editor_title);
+    editor.append(
+        &gtk::Label::builder()
+            .label("Sites it blocks: tap one to take it out")
+            .xalign(0.0)
+            .css_classes(["side-ask-label"])
+            .build(),
+    );
+    let sites = Wrap::new(6, 6);
+    // As wide as the popup, the sites wrapping under each other (and a long
+    // group's scrolling).
+    sites.set_max_width(320);
+    let fit = gtk::ScrolledWindow::builder()
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .max_content_height(260)
+        .propagate_natural_width(true)
+        .propagate_natural_height(true)
+        .child(&sites)
+        .build();
+    editor.append(&fit);
+    let form = gtk::Box::builder().spacing(6).css_classes(["side-type"]).build();
+    let entry = gtk::Entry::builder()
+        .placeholder_text("Add a site to it: example.com")
+        .hexpand(true)
+        .valign(gtk::Align::Center)
+        .css_classes(["side-entry"])
+        .tooltip_text("A website the group blocks too")
+        .input_purpose(gtk::InputPurpose::Url)
+        .build();
+    entry.set_input_hints(gtk::InputHints::NO_SPELLCHECK);
+    let add = gtk::Button::builder()
+        .css_classes(["side-add"])
+        .valign(gtk::Align::Center)
+        .tooltip_text("Add the site to the group")
+        .sensitive(false)
+        .build();
+    add.set_child(Some(&wad_gtk::Icon::new("plus", 14)));
+    form.append(&entry);
+    form.append(&add);
+    editor.append(&form);
+    let err = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).css_classes(["side-err"]).build();
+    editor.append(&err);
+    // Delete (red: the group goes from the machine) at the left, Save at the right
+    // (each change is kept as it's made: Save puts the popup away).
+    let buttons = gtk::Box::builder().spacing(8).build();
+    let remove = gtk::Button::builder()
+        .label("Delete")
+        .css_classes(["side-remove"])
+        .hexpand(true)
+        .halign(gtk::Align::Start)
+        .tooltip_text("Delete the group: from this machine and every wadspace with it on")
+        .build();
+    let done = gtk::Button::builder().label("Save").css_classes(["side-ask-ok"]).build();
+    buttons.append(&remove);
+    buttons.append(&done);
+    editor.append(&buttons);
+    let popover = gtk::Popover::builder()
+        .has_arrow(false)
+        .position(gtk::PositionType::Bottom)
+        .halign(gtk::Align::Start)
+        .css_classes(["side-ask"])
+        .child(&editor)
+        .build();
+    let w = me.clone();
+    popover.connect_closed(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.group_editor_closed();
+        }
+    });
+    let pw = popover.downgrade();
+    done.connect_clicked(move |_| {
+        if let Some(p) = pw.upgrade() {
+            p.popdown();
+        }
+    });
+    let w = me.clone();
+    remove.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.remove_open_group();
+        }
+    });
+    let w = me.clone();
+    entry.connect_activate(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.block_typed();
+        }
+    });
+    let (a, e) = (add.downgrade(), err.downgrade());
+    entry.connect_changed(move |en| {
+        if let Some(a) = a.upgrade() {
+            a.set_sensitive(!en.text().trim().is_empty());
+        }
+        if let Some(e) = e.upgrade() {
+            e.set_visible(false);
+        }
+    });
+    let w = me.clone();
+    add.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.block_typed();
+        }
+    });
+    BrowserPart {
+        root,
+        address,
+        blocker,
+        groups,
+        group_new,
+        popover,
+        editor_title,
+        sites,
+        remove,
+        done,
+        entry,
+        add,
+        err,
+    }
+}
+
+/// A blocker group's pill, one container: its name (a tap turns it on in
+/// the wadspace, or off; right-clicked, its menu) and its pencil (its sites,
+/// in a popup).
+fn group_pill(me: &Weak<Panel>, g: &BlockGroup, on: bool, shown: bool) -> gtk::Widget {
+    let row = gtk::Box::builder().css_classes(["side-blocks"]).build();
+    let b = gtk::Button::builder().css_classes(["side-blocks-name"]).build();
+    let h = gtk::Box::builder().spacing(6).build();
+    h.append(&wad_gtk::Icon::new("layers", 13));
+    h.append(&gtk::Label::new(Some(&g.name)));
+    b.set_child(Some(&h));
+    b.set_widget_name(&format!("browser:group:{}", g.id));
+    let (w, id) = (me.clone(), g.id.clone());
+    b.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.browser_click(|x| addon_list::group_toggle(x, &id));
+        }
+    });
+    let gesture = gtk::GestureClick::builder().button(gtk::gdk::BUTTON_SECONDARY).build();
+    let (w, b2, id) = (me.clone(), b.downgrade(), g.id.clone());
+    gesture.connect_pressed(move |_, _, x, y| {
+        if let (Some(p), Some(b)) = (w.upgrade(), b2.upgrade()) {
+            p.group_menu(b.upcast_ref(), &id, (x, y));
+        }
+    });
+    b.add_controller(gesture);
+    let pencil = gtk::Button::builder().css_classes(["side-blocks-edit"]).build();
+    pencil.set_child(Some(&wad_gtk::Icon::new("pencil", 12)));
+    pencil.set_widget_name(&format!("browser:group-sites:{}", g.id));
+    let (w, id) = (me.clone(), g.id.clone());
+    pencil.connect_clicked(move |p2| {
+        if let Some(p) = w.upgrade() {
+            p.open_group_editor(p2.upcast_ref(), &id);
+        }
+    });
+    row.append(&b);
+    row.append(&pencil);
+    let w: gtk::Widget = row.upcast();
+    paint_group(&w, g, on, shown);
+    w
+}
+
+/// A group's pill as the group is: its name, lit when on, and what it
+/// blocks; its pencil lit while its popup's up.
+fn paint_group(w: &gtk::Widget, g: &BlockGroup, on: bool, shown: bool) {
+    let (Some(name), Some(pencil)) = (w.first_child(), w.last_child()) else { return };
+    lit(w, on);
+    lit(&name, on);
+    lit(&pencil, shown);
+    if let Some(l) = name_label(&name) {
+        l.set_label(&g.name);
+    }
+    let n = g.sites.len();
+    name.set_tooltip_text(Some(&format!(
+        "{} {n} site{}. Right-click to rename or remove it.",
+        if on { "On: it blocks" } else { "Off: tap to block its" },
+        if n == 1 { "" } else { "s" }
+    )));
+    pencil.set_tooltip_text(Some(&format!("{}’s sites: add or take out", g.name)));
+}
+
+/// A site in the open group: a tap takes it out of the group.
+fn site_pill(me: &Weak<Panel>, id: &str, site: &str) -> gtk::Widget {
+    let b = gtk::Button::builder().css_classes(["side-pill", "in"]).build();
+    let h = gtk::Box::builder().spacing(6).build();
+    h.append(&gtk::Label::new(Some(site)));
+    h.append(&wad_gtk::Icon::new("x", 12));
+    b.set_child(Some(&h));
+    b.set_tooltip_text(Some(&format!("{site} and its subdomains: tap to take it out of the group")));
+    let (w, id, site) = (me.clone(), id.to_string(), site.to_string());
+    b.connect_clicked(move |_| {
+        if let Some(p) = w.upgrade() {
+            p.unblock(&id, &site);
+        }
+    });
+    b.upcast()
+}
+
 fn commands(me: &Weak<Panel>) -> Commands {
     let root =
         gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(8).css_classes(["side-commands"]).build();
-    root.append(
-        &gtk::Label::builder().label("Commands: your own, typed exactly").xalign(0.0).css_classes(["side-sub"]).build(),
-    );
     let list = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(4).build();
     root.append(&list);
     let form = gtk::Box::builder().spacing(6).css_classes(["side-type"]).build();

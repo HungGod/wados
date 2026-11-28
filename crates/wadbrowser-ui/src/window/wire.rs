@@ -1,6 +1,6 @@
-//! What the window's v2 widgets do: the ⋮ menu, the profile chip and its
-//! menu, the page menu (right-click), the shield, and the dialogs they open
-//! (Create app, New profile, Saved sign-ins, a permission), and a GitHub
+//! What the window's v2 widgets do: the ⋮ menu, the page menu
+//! (right-click), the shield, and the dialogs they open (Create app, Saved
+//! sign-ins, a permission), and a GitHub
 //! sign-in's code and its Copy. And what they show that isn't the window's:
 //! the machine's web apps and saved sign-ins (the machine's keys, which the
 //! engine uses too).
@@ -16,9 +16,8 @@ use std::rc::Rc;
 use adw::prelude::*;
 use gtk::glib;
 use serde::Deserialize;
-use wadbrowser_core::internal::{self, PageAction, Tile};
+use wadbrowser_core::internal;
 use wadbrowser_core::modes::{AppSpec, Mode, WindowSpec};
-use wadbrowser_core::profiles::{self, ProfileKind};
 use wadbrowser_core::signin::Provider;
 use wadbrowser_core::{APP_ID, NEW_TAB_URI, site};
 use wadbrowser_webkit::wadd::{self, Failure};
@@ -27,14 +26,12 @@ use webkit6::WebView;
 use webkit6::prelude::*;
 
 use super::{WindowCtx, all_windows, build_window_as, current_webview, devtools, open_page, show_mode, show_toast};
-use crate::chip::ChipInfo;
-use crate::data::{Profile, WebKey};
+use crate::data::WebKey;
 use crate::dialogs::create_app::{CreateAppActions, CreateAppInfo, create_app};
-use crate::dialogs::new_profile::{NewProfileActions, new_profile};
 use crate::dialogs::permission::{PermissionInfo, permission};
 use crate::dialogs::signins::{add_signin, edit_signins};
 use crate::menu_popover::{MenuPopover, Place};
-use crate::menus::{MainActions, MainMenu, PageActions, PageMenu, ProfileActions, ProfileMenu};
+use crate::menus::{MainActions, PageActions, PageMenu};
 use crate::shield::ShieldInfo;
 
 /// Where a wadspace's web apps are (wad-gen's extras).
@@ -70,8 +67,8 @@ fn machine() -> bool {
 const IN_A_WADSPACE_APPS: &str = "Add web apps in the Builder";
 const IN_A_WADSPACE_KEYS: &str = "Saved sign-ins change on the machine";
 
-/// A window's widgets wired: the shield kept up with the engine, the chip,
-/// and the web apps and keys fetched (once).
+/// A window's widgets wired: the shield kept up with the engine, and the
+/// web apps and keys fetched (once).
 pub(super) fn setup(ctx: &Rc<WindowCtx>) {
     let w = Rc::downgrade(ctx);
     shield::connect_changed(move |view| {
@@ -80,7 +77,6 @@ pub(super) fn setup(ctx: &Rc<WindowCtx>) {
             sync_shield(&ctx);
         }
     });
-    sync_chip(ctx);
     sync_shield(ctx);
     let w = Rc::downgrade(ctx);
     ctx.header.code.copy.connect_clicked(move |_| {
@@ -120,7 +116,7 @@ fn copy_code(ctx: &WindowCtx) {
     testlog::line("signin-code-copied", &[&code]);
 }
 
-// ------------------------------------------------------------ the shield and the chip
+// ------------------------------------------------------------ the shield
 
 /// The shield for the page shown.
 pub(super) fn sync_shield(ctx: &WindowCtx) {
@@ -131,7 +127,7 @@ pub(super) fn sync_shield(ctx: &WindowCtx) {
         here: st.page.min(u32::MAX as u64) as u32,
         total: st.total,
         allowed: st.allowed,
-        social: st.block_social,
+        enabled: st.enabled,
     });
 }
 
@@ -141,76 +137,9 @@ pub(super) fn set_blockers(ctx: &WindowCtx, on: bool) {
     shield::set_site_allowed(&uri, !on);
 }
 
-/// The window's profile, as the chip shows it.
-fn chip_info(ctx: &WindowCtx) -> ChipInfo {
-    let id = ctx.session.profile.clone();
-    if ctx.private {
-        return ChipInfo { name: "Private".into(), color: "#ff3d81".into(), private: true };
-    }
-    let (name, color) = match ProfileKind::of(&id) {
-        ProfileKind::SignIn(key) => {
-            let name = wadbrowser_webkit::signins().signins.iter().find(|s| s.id == key).map(|s| s.name.clone());
-            (name.filter(|n| !n.is_empty()).unwrap_or(key), "#ff3d81".to_string())
-        }
-        ProfileKind::Ephemeral(_) => ("This run".into(), "#f5f2fa".to_string()),
-        _ => profiles::list_profiles(&ctx.state.paths)
-            .into_iter()
-            .find(|p| p.id == id)
-            .map(|p| (p.name, p.color))
-            .unwrap_or_else(|| (profiles::DEFAULT_NAME.into(), profiles::DEFAULT_COLOR.into())),
-    };
-    ChipInfo { name, color, private: false }
-}
-
-pub(super) fn sync_chip(ctx: &WindowCtx) {
-    ctx.header.chip.update(&chip_info(ctx));
-}
-
-/// The profiles the chip lists.
-fn profiles(ctx: &WindowCtx) -> Vec<Profile> {
-    profiles::list_profiles(&ctx.state.paths)
-        .into_iter()
-        .map(|p| Profile { id: p.id, name: p.name, color: p.color })
-        .collect()
-}
-
-/// A window of the browser's, as `profile` (None: private), shown.
+/// A window of the browser's, shown.
 fn open_window(ctx: &WindowCtx, spec: WindowSpec) {
     build_window_as(&ctx.app, ctx.state.clone(), spec, vec![NEW_TAB_URI.into()], 0).present();
-}
-
-/// The profile chip's menu, under it.
-pub(super) fn profile_menu(ctx: &Rc<WindowCtx>, chip: &gtk::Button, autohide: bool) {
-    let current = ctx.session.profile.clone();
-    let m = ProfileMenu { profiles: profiles(ctx), current: current.clone(), private: ctx.private };
-    let w = Rc::downgrade(ctx);
-    let private = ctx.private;
-    let a = ProfileActions {
-        open_as: Rc::new({
-            let w = w.clone();
-            move |id: &str| {
-                let Some(ctx) = w.upgrade() else { return };
-                if id == current && !private {
-                    return;
-                }
-                open_window(&ctx, WindowSpec::browser(Mode::Full, false, Some(id.to_string())));
-            }
-        }),
-        new_profile: Rc::new({
-            let w = w.clone();
-            move || {
-                if let Some(ctx) = w.upgrade() {
-                    new_profile_dialog(&ctx);
-                }
-            }
-        }),
-        new_private_window: Rc::new(move || {
-            if let Some(ctx) = w.upgrade() {
-                open_window(&ctx, WindowSpec::browser(Mode::Full, true, None));
-            }
-        }),
-    };
-    MenuPopover::show(chip, Place::Below, crate::menus::profile_menu(&m, &a), autohide);
 }
 
 // ------------------------------------------------------------ the ⋮ menu
@@ -219,12 +148,6 @@ pub(super) fn profile_menu(ctx: &Rc<WindowCtx>, chip: &gtk::Button, autohide: bo
 type OnWindow = Rc<dyn Fn(&Rc<WindowCtx>)>;
 
 pub(super) fn main_menu(ctx: &Rc<WindowCtx>, button: &gtk::Button, autohide: bool) -> Rc<MenuPopover> {
-    let spec = ctx.spec.borrow().clone();
-    let m = MainMenu {
-        mode: spec.mode,
-        block_social: shield::social_blocking(),
-        mode_off: spec.signin.as_ref().map(|_| "A sign-in window stays one".to_string()),
-    };
     let w = Rc::downgrade(ctx);
     let with = |f: OnWindow| {
         let w = w.clone();
@@ -234,34 +157,22 @@ pub(super) fn main_menu(ctx: &Rc<WindowCtx>, button: &gtk::Button, autohide: boo
             }
         }) as crate::menus::Run
     };
-    let profile = spec.profile.clone();
     let a = MainActions {
         new_tab: with(Rc::new(|ctx| super::new_tab(ctx, NEW_TAB_URI))),
-        new_window: with(Rc::new(move |ctx| {
-            open_window(ctx, WindowSpec::browser(Mode::Full, false, profile.clone()));
-        })),
-        new_private_window: with(Rc::new(|ctx| open_window(ctx, WindowSpec::browser(Mode::Full, true, None)))),
-        new_profile: with(Rc::new(new_profile_dialog)),
-        set_mode: Rc::new({
-            let w = w.clone();
-            move |mode| {
-                if let Some(ctx) = w.upgrade() {
-                    set_mode(&ctx, mode);
-                }
-            }
-        }),
-        set_block_social: Rc::new(shield::set_social_blocking),
+        new_window: with(Rc::new(|ctx| open_window(ctx, super::new_browser_spec(ctx, false)))),
+        new_private_window: with(Rc::new(|ctx| open_window(ctx, super::new_browser_spec(ctx, true)))),
         open: Rc::new(move |uri: &str| {
             if let Some(ctx) = w.upgrade() {
                 open_page(&ctx, uri);
             }
         }),
     };
-    MenuPopover::show(button, Place::Below, crate::menus::main_menu(&m, &a), autohide)
+    MenuPopover::show(button, Place::Below, crate::menus::main_menu(&a), autohide)
 }
 
-/// This window as another kind (the spike's `setMode`): App takes the page's
-/// site as its home and its name; leaving App, the window's the browser's.
+/// This window as another kind (the spike's `setMode`; wadbrowser.conf's
+/// Full or Focus changing): App takes the page's site as its home and its
+/// name; leaving App, the window's the browser's.
 pub(super) fn set_mode(ctx: &Rc<WindowCtx>, mode: Mode) {
     {
         let mut spec = ctx.spec.borrow_mut();
@@ -397,12 +308,8 @@ pub(super) fn page_menu(ctx: &Rc<WindowCtx>, view: &WebView, at: (f64, f64), aut
                 );
             }
         }),
-        new_profile: Rc::new(move || {
-            if let Some(ctx) = w.upgrade() {
-                new_profile_dialog(&ctx);
-            }
-        }),
     };
+    let _ = w;
     MenuPopover::show(view, Place::Point(at.0, at.1), crate::menus::page_menu(&m, &a), autohide)
 }
 
@@ -419,8 +326,7 @@ fn create_app_dialog(ctx: &Rc<WindowCtx>, view: &WebView) -> crate::dialogs::cre
     let uri = view.uri().map(String::from).unwrap_or_default();
     let title = view.title().map(String::from).filter(|t| !t.trim().is_empty());
     let host = site::bare_host(&site::host_of(&uri));
-    let current = if ctx.private { profiles::DEFAULT.to_string() } else { ctx.session.profile.clone() };
-    let info = CreateAppInfo { title: title.unwrap_or(host), url: uri, profiles: profiles(ctx), profile: current };
+    let info = CreateAppInfo { title: title.unwrap_or(host), url: uri };
     let made: Rc<RefCell<Option<String>>> = Rc::default();
     let w = Rc::downgrade(ctx);
     let m = made.clone();
@@ -442,41 +348,21 @@ fn create_app_dialog(ctx: &Rc<WindowCtx>, view: &WebView) -> crate::dialogs::cre
         open: Rc::new(move |app| {
             let Some(ctx) = w.upgrade() else { return };
             let id = made.borrow().clone().unwrap_or_else(|| site::bare_host(&site::host_of(&app.url)));
-            open_app(&ctx, &id, &app.name, &app.url, Some(app.profile.clone()));
+            open_app(&ctx, &id, &app.name, &app.url);
         }),
     };
     create_app(&ctx.window, &info, actions)
 }
 
-/// "New profile…": made, then a window of it.
-fn new_profile_dialog(ctx: &Rc<WindowCtx>) {
-    let taken: Vec<String> = profiles(ctx).into_iter().map(|p| p.color).collect();
-    let w = Rc::downgrade(ctx);
-    new_profile(
-        &ctx.window,
-        &taken,
-        NewProfileActions {
-            create: Rc::new(move |name, color| {
-                let Some(ctx) = w.upgrade() else { return };
-                match profiles::create_profile(&ctx.state.paths, name, color) {
-                    Ok(id) => open_window(&ctx, WindowSpec::browser(Mode::Full, false, Some(id))),
-                    Err(e) => show_toast(&ctx, &format!("The profile wasn’t made: {e}")),
-                }
-            }),
-        },
-    );
-}
-
 /// A web app's window (an `--app` one): `id` its id, at `url`.
-fn open_app(ctx: &WindowCtx, id: &str, name: &str, url: &str, profile: Option<String>) {
+fn open_app(ctx: &WindowCtx, id: &str, name: &str, url: &str) {
     let app = AppSpec {
         app_id: format!("{}{id}", wadbrowser_core::cli::WEBAPP_PREFIX),
         name: name.to_string(),
         start: url.to_string(),
         icon: None,
     };
-    let profile = profile.filter(|p| !profiles::is_private(p));
-    build_window_as(&ctx.app, ctx.state.clone(), WindowSpec::web_app(app, false, profile), vec![], 0).present();
+    build_window_as(&ctx.app, ctx.state.clone(), WindowSpec::web_app(app, false, None), vec![], 0).present();
 }
 
 /// A site asking for the camera, a location…: the dialog, answered once.
@@ -498,106 +384,19 @@ pub(super) fn ask_permission(parent: Option<&adw::ApplicationWindow>, ask: Ask) 
     );
 }
 
-// ------------------------------------------------------------ what pages ask (views.rs)
-
-/// What a `wadbrowser://` page asked that's the chrome's: a new profile, a web
-/// app's window, a web app of yours removed. False: not one of these.
-pub(super) fn page_action(ctx: &Rc<WindowCtx>, action: &PageAction) -> bool {
-    match action {
-        PageAction::NewProfile => new_profile_dialog(ctx),
-        PageAction::OpenApp { id } => match app_by_id(id) {
-            Some(a) => open_app(ctx, &a.id, &a.name, &a.url, None),
-            None => show_toast(ctx, "That web app isn’t here any more"),
-        },
-        PageAction::RemoveApp { id } => {
-            if !machine() {
-                show_toast(ctx, IN_A_WADSPACE_APPS);
-                return true;
-            }
-            let (w, id) = (Rc::downgrade(ctx), id.clone());
-            wadd::call(
-                move |d| d.op(wad_model::Op::RemoveWebApp { id }).map(|o| o.toast),
-                move |r| {
-                    if let Some(ctx) = w.upgrade() {
-                        match r {
-                            Ok(Some(t)) => show_toast(&ctx, &t),
-                            Ok(None) => {}
-                            Err(e) => said(&ctx, &e),
-                        }
-                    }
-                    refresh_apps();
-                },
-            );
-        }
-        _ => return false,
-    }
-    true
-}
-
 // ------------------------------------------------------------ web apps and keys
-
-/// The catalog's web apps, as tiles (their icons the pages' own copies).
-fn catalog() -> Vec<Tile> {
-    wad_model::catalog::WEB_APPS
-        .iter()
-        .map(|s| Tile {
-            id: s.id.into(),
-            name: s.name.into(),
-            url: s.url.into(),
-            icon: wad_model::catalog::site_icon(s.id, Some(s.url)).map(|p| internal::res_url(&p)),
-            mine: false,
-        })
-        .collect()
-}
-
-/// The new tab's tiles: the catalog's, then the machine's (or the
-/// wadspace's) web apps; one you made of a catalog site shows once.
-pub(super) fn newtab_tiles() -> Vec<Tile> {
-    let apps = APPS.with_borrow(|a| a.clone());
-    let theirs: Vec<String> = apps.iter().filter(|a| !a.mine).map(|a| a.id.clone()).collect();
-    let tiles = apps.into_iter().map(|a| Tile { id: a.id, name: a.name, url: a.url, icon: a.icon, mine: a.mine });
-    let mut all = internal::merge_tiles(catalog(), tiles.collect());
-    for t in &mut all {
-        if theirs.contains(&t.id) {
-            t.mine = false;
-        }
-    }
-    all
-}
-
-/// Settings' web apps: the machine's of yours, or the wadspace's.
-pub(super) fn settings_apps() -> Vec<Tile> {
-    APPS.with_borrow(|a| {
-        a.iter()
-            .map(|a| Tile {
-                id: a.id.clone(),
-                name: a.name.clone(),
-                url: a.url.clone(),
-                icon: a.icon.clone(),
-                mine: a.mine,
-            })
-            .collect()
-    })
-}
-
-/// A web app by id: yours, the wadspace's, or the catalog's.
-fn app_by_id(id: &str) -> Option<App> {
-    APPS.with_borrow(|a| a.iter().find(|a| a.id == id).cloned()).or_else(|| {
-        catalog().into_iter().find(|t| t.id == id).map(|t| App {
-            id: t.id,
-            name: t.name,
-            url: t.url,
-            icon: t.icon,
-            mine: false,
-        })
-    })
-}
 
 /// The web app (yours, the wadspace's, the catalog's) a URL's site is.
 fn app_for(url: &str) -> Option<App> {
     let host = site::bare_host(&site::host_of(url));
     let mut all = APPS.with_borrow(|a| a.clone());
-    all.extend(catalog().into_iter().map(|t| App { id: t.id, name: t.name, url: t.url, icon: t.icon, mine: false }));
+    all.extend(wad_model::catalog::WEB_APPS.iter().map(|s| App {
+        id: s.id.into(),
+        name: s.name.into(),
+        url: s.url.into(),
+        icon: wad_model::catalog::site_icon(s.id, Some(s.url)).map(|p| internal::res_url(&p)),
+        mine: false,
+    }));
     all.into_iter().find(|a| site::bare_host(&site::host_of(&a.url)) == host)
 }
 
@@ -687,7 +486,7 @@ fn refresh_keys() {
             |d| d.web_keys(),
             |r| match r {
                 Ok(keys) => {
-                    if wadbrowser_webkit::set_machine_keys(profiles::SignIns::from_machine(&keys)) {
+                    if wadbrowser_webkit::set_machine_keys(wadbrowser_core::profiles::SignIns::from_machine(&keys)) {
                         wadbrowser_webkit::rehome();
                     }
                     KEYS.with_borrow_mut(|k| {
@@ -733,22 +532,14 @@ fn reload_pages(prefixes: &[&str]) {
 
 /// Screenshots' hook (`WADBROWSER_SHOT`): once a window's first page has
 /// loaded, what it names opened as if clicked, and kept open (there's no
-/// click to close it on): `main-menu`, `main-menu-mode`, `profile-menu`,
-/// `page-menu`, `page-menu-signins`, `shield`, `create-app`, `new-profile`,
-/// `add-signin`, `edit-signins`.
+/// click to close it on): `main-menu`, `page-menu`, `page-menu-signins`,
+/// `shield`, `create-app`, `add-signin`, `edit-signins`.
 pub(super) fn shot(ctx: &Rc<WindowCtx>) {
     let Ok(what) = std::env::var("WADBROWSER_SHOT") else { return };
     let Some(view) = current_webview(ctx) else { return };
     let host = site::bare_host(&site::host_of(&view.uri().unwrap_or_default()));
     match what.as_str() {
         "main-menu" => drop(main_menu(ctx, &ctx.header.menu, false)),
-        "main-menu-mode" => {
-            let m = main_menu(ctx, &ctx.header.menu, false);
-            glib::timeout_add_local_once(std::time::Duration::from_millis(250), move || {
-                let _ = m.open("menu-mode");
-            });
-        }
-        "profile-menu" => profile_menu(ctx, ctx.header.chip.button(), false),
         "page-menu" => drop(page_menu(ctx, &view, (640.0, 250.0), false)),
         "page-menu-signins" => {
             let m = page_menu(ctx, &view, (640.0, 250.0), false);
@@ -761,7 +552,6 @@ pub(super) fn shot(ctx: &Rc<WindowCtx>) {
             ctx.header.shield.popup();
         }
         "create-app" => drop(create_app_dialog(ctx, &view)),
-        "new-profile" => new_profile_dialog(ctx),
         "add-signin" => drop(add_signin(&ctx.window, &host, Rc::new(|_: &str| {}))),
         "edit-signins" => {
             drop(edit_signins(&ctx.window, &KEYS.with_borrow(|k| k.clone()), &host, Rc::new(|_: &str, _: &str| {})))

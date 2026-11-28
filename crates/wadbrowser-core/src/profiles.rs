@@ -2,12 +2,12 @@
 //! one WebKit network session (wadbrowser-webkit's `profiles`); this is
 //! what a profile is, without WebKit.
 //!
-//! - `default`: the browser's own, kept in `<data>/profiles/default` (its
-//!   cache in `<cache>/profiles/default`). Every window uses it unless it
-//!   says otherwise, so one sign-in covers every web app.
-//! - Named profiles (the New profile dialog), listed in
-//!   `<config>/profiles.toml` as `{id, name, color}`, each kept as
-//!   `default` is under its id.
+//! - `default`: the browser's one profile, kept in
+//!   `<data>/profiles/default` (its cache in `<cache>/profiles/default`).
+//!   Every window uses it unless it's private or a key's, so one sign-in
+//!   covers every web app. There are no named profiles: an id that isn't
+//!   one of the kinds below (a web app made with one once, `--profile work`)
+//!   is `default` ([`canonical`]).
 //! - `signin-<key>`: a key (a saved sign-in) this wadspace mounts. wadd
 //!   lists them in `/run/wadspaces-extra/signins.json` (`WADBROWSER_SIGNINS`
 //!   names another file); a key's profile keeps its data in the key's
@@ -24,7 +24,7 @@
 
 use crate::paths::AppPaths;
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
 pub const DEFAULT: &str = "default";
@@ -45,12 +45,19 @@ pub const DEFAULT_COLOR: &str = "#c6ff1f";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProfileKind {
     Default,
-    /// One made with the New profile dialog.
-    Named(String),
     /// A key's (its id).
     SignIn(String),
     Ephemeral(String),
     Private(String),
+}
+
+/// The profile `id` is: itself, or `default` for any id that isn't a key's,
+/// an ephemeral or a private one (the named profiles there once).
+pub fn canonical(id: &str) -> String {
+    match ProfileKind::of(id) {
+        ProfileKind::Default => DEFAULT.to_string(),
+        _ => id.to_string(),
+    }
 }
 
 impl ProfileKind {
@@ -64,7 +71,7 @@ impl ProfileKind {
         } else if let Some(p) = id.strip_prefix(PRIVATE) {
             Self::Private(p.to_string())
         } else {
-            Self::Named(id.to_string())
+            Self::Default
         }
     }
 }
@@ -121,21 +128,7 @@ pub fn resolve(id: &str, paths: &AppPaths, signins: &[SignIn], ephemeral_run: bo
         },
         _ if ephemeral_run => Storage::Ephemeral,
         ProfileKind::Default => disk(DEFAULT),
-        ProfileKind::Named(name) if valid_id(&name) => disk(&name),
-        ProfileKind::Named(_) => Storage::Ephemeral,
     }
-}
-
-/// A named profile's id: a-z, 0-9 and '-', not one of the others' prefixes.
-pub fn valid_id(id: &str) -> bool {
-    !id.is_empty()
-        && id.len() <= 64
-        && id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
-        && !id.starts_with('-')
-        && !matches!(
-            ProfileKind::of(id),
-            ProfileKind::Default | ProfileKind::SignIn(_) | ProfileKind::Ephemeral(_) | ProfileKind::Private(_)
-        )
 }
 
 // ------------------------------------------------------------ signins.json
@@ -319,81 +312,6 @@ pub fn profile_for(host: &str, current: &str, keys: &[SiteKey]) -> Option<String
 
 // ------------------------------------------------------------ named profiles
 
-/// A profile the profile chip lists.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ProfileInfo {
-    pub id: String,
-    pub name: String,
-    pub color: String,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct ProfilesFile {
-    #[serde(default, rename = "profile")]
-    profiles: Vec<ProfileInfo>,
-}
-
-fn profiles_path(paths: &AppPaths) -> PathBuf {
-    paths.config_dir.join("profiles.toml")
-}
-
-fn read_profiles(paths: &AppPaths) -> Vec<ProfileInfo> {
-    let Ok(text) = std::fs::read_to_string(profiles_path(paths)) else { return vec![] };
-    match toml::from_str::<ProfilesFile>(&text) {
-        Ok(f) => f.profiles.into_iter().filter(|p| valid_id(&p.id)).collect(),
-        Err(e) => {
-            tracing::warn!("profiles.toml: {e}");
-            vec![]
-        }
-    }
-}
-
-/// The machine's profiles, for the profile chip: `default` first, then the
-/// named ones in the order they were made.
-pub fn list_profiles(paths: &AppPaths) -> Vec<ProfileInfo> {
-    let mut all = vec![ProfileInfo { id: DEFAULT.into(), name: DEFAULT_NAME.into(), color: DEFAULT_COLOR.into() }];
-    all.extend(read_profiles(paths));
-    all
-}
-
-/// A new named profile (the New profile dialog): its id.
-pub fn create_profile(paths: &AppPaths, name: &str, color: &str) -> Result<String> {
-    let name = name.trim();
-    let name = if name.is_empty() { "Profile" } else { name };
-    let name: String = name.chars().filter(|c| !c.is_control()).take(80).collect();
-    let mut have = read_profiles(paths);
-    let id = new_profile_id(&have.iter().map(|p| p.id.as_str()).collect::<Vec<_>>(), &name);
-    have.push(ProfileInfo { id: id.clone(), name, color: color.trim().chars().take(64).collect() });
-    let text = toml::to_string_pretty(&ProfilesFile { profiles: have }).context("profiles.toml")?;
-    std::fs::create_dir_all(&paths.config_dir)?;
-    let path = profiles_path(paths);
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
-    std::fs::rename(&tmp, &path)?;
-    Ok(id)
-}
-
-/// An id for a profile named `name`, none of `taken` ("Work" → "work", then "work-2").
-pub fn new_profile_id(taken: &[&str], name: &str) -> String {
-    let mut slug = String::new();
-    for c in name.to_lowercase().chars() {
-        if c.is_ascii_alphanumeric() {
-            slug.push(c);
-        } else if !slug.ends_with('-') && !slug.is_empty() {
-            slug.push('-');
-        }
-    }
-    let mut base: String = slug.trim_matches('-').chars().take(40).collect();
-    if !valid_id(&base) {
-        base = if base.is_empty() { "profile".into() } else { format!("p-{base}") };
-    }
-    let free = |id: &str| id != DEFAULT && !taken.contains(&id);
-    if free(&base) {
-        return base;
-    }
-    (2..).map(|n| format!("{base}-{n}")).find(|id| free(id)).expect("a free id")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,10 +340,8 @@ mod tests {
             resolve("default", &p, &keys, false),
             Storage::Disk { data: "/h/data/profiles/default".into(), cache: "/h/cache/profiles/default".into() }
         );
-        assert_eq!(
-            resolve("school", &p, &keys, false),
-            Storage::Disk { data: "/h/data/profiles/school".into(), cache: "/h/cache/profiles/school".into() }
-        );
+        // A named profile's id (there are none now) is the default one's.
+        assert_eq!(resolve("school", &p, &keys, false), resolve("default", &p, &keys, false));
         // A key's data is its folder; its cache this wadspace's.
         assert_eq!(
             resolve("signin-work", &p, &keys, false),
@@ -435,8 +351,8 @@ mod tests {
             resolve("default", &p, &keys, false).cookies(),
             Some(PathBuf::from("/h/data/profiles/default/cookies.sqlite"))
         );
-        // Nothing kept: private windows, ephemeral profiles, a key that isn't here, a bad id.
-        for id in ["private-1", "ephemeral-gmail", "signin-gone", "../x"] {
+        // Nothing kept: private windows, ephemeral profiles, a key that isn't here.
+        for id in ["private-1", "ephemeral-gmail", "signin-gone"] {
             assert_eq!(resolve(id, &p, &keys, false), Storage::Ephemeral, "{id}");
         }
         // An ephemeral run keeps nothing of its own, but a key is still the key.
@@ -451,8 +367,11 @@ mod tests {
         assert_eq!(ProfileKind::of("signin-k1"), ProfileKind::SignIn("k1".into()));
         assert_eq!(ProfileKind::of("ephemeral-gmail"), ProfileKind::Ephemeral("gmail".into()));
         assert_eq!(ProfileKind::of("private-3"), ProfileKind::Private("3".into()));
-        assert_eq!(ProfileKind::of("work"), ProfileKind::Named("work".into()));
-        assert!(valid_id("work-2") && !valid_id("signin-x") && !valid_id("Work") && !valid_id(""));
+        assert_eq!(ProfileKind::of("work"), ProfileKind::Default);
+        assert_eq!(canonical("work"), "default");
+        assert_eq!(canonical("../x"), "default");
+        assert_eq!(canonical("signin-k1"), "signin-k1");
+        assert_eq!(canonical("private-3"), "private-3");
     }
 
     #[test]
@@ -557,25 +476,5 @@ mod tests {
         assert_eq!(profile_for("localhost", "default", &[]), None);
         let local = [SiteKey { profile: "signin-k".into(), sites: vec!["localhost:8000".into()] }];
         assert_eq!(profile_for("localhost", "default", &local).as_deref(), Some("signin-k"));
-    }
-
-    #[test]
-    fn named_profiles_are_listed_after_default() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = paths(dir.path());
-        assert_eq!(list_profiles(&p).iter().map(|x| x.id.as_str()).collect::<Vec<_>>(), ["default"]);
-        assert_eq!(create_profile(&p, "Work", "#7fd3ff").unwrap(), "work");
-        assert_eq!(create_profile(&p, "Work", "#ffffff").unwrap(), "work-2");
-        assert_eq!(create_profile(&p, "  ", "#000").unwrap(), "profile");
-        assert_eq!(create_profile(&p, "Signin stuff", "#000").unwrap(), "p-signin-stuff");
-        let all = list_profiles(&p);
-        assert_eq!(all[0], ProfileInfo { id: "default".into(), name: "Personal".into(), color: "#c6ff1f".into() });
-        assert_eq!(all[1], ProfileInfo { id: "work".into(), name: "Work".into(), color: "#7fd3ff".into() });
-        assert_eq!(
-            all.iter().map(|x| x.id.as_str()).collect::<Vec<_>>(),
-            ["default", "work", "work-2", "profile", "p-signin-stuff"]
-        );
-        assert_eq!(new_profile_id(&[], "Default"), "p-default");
-        assert_eq!(new_profile_id(&[], "École & Co"), "cole-co");
     }
 }

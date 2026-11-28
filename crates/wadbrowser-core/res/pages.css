@@ -443,26 +443,26 @@ ul.visits .host {
 
 /* ------------------------------------------------------------ the new tab */
 
+/* WadBrowser's logo, and under it the search box: nothing else. */
 .newtab {
   min-height: 100vh;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 64px 24px 40px;
-  gap: 26px;
+  justify-content: center;
+  padding: 24px 24px 18vh;
+  gap: 8px;
   background:
-    radial-gradient(ellipse 520px 260px at 50% 0%, rgb(198 255 31 / 0.07), transparent 70%),
+    radial-gradient(ellipse 520px 260px at 50% 30%, rgb(198 255 31 / 0.07), transparent 70%),
     var(--bg-2);
 }
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font: 600 26px / 1 var(--font-display);
-}
-.mark {
-  width: 44px;
-  height: 44px;
+/* The logo's own picture has room round it (880×560, as WadSpaces'). */
+.wordmark {
+  width: min(360px, 80vw);
+  height: auto;
+  margin: -6% 0 -2%;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 .wadbrowser-page h1 .logo {
   width: 28px;
@@ -472,15 +472,13 @@ ul.visits .host {
 form.search {
   display: flex;
   align-items: center;
-  gap: 10px;
   width: min(560px, 100%);
   height: 48px;
   margin: 0;
-  padding: 0 16px;
+  padding: 0 20px;
   border-radius: var(--r-pill);
   border: 1px solid var(--line-strong);
   background: var(--surface);
-  color: var(--muted);
 }
 form.search:focus-within {
   border-color: var(--accent);
@@ -494,132 +492,6 @@ form.search input {
   background: transparent;
   font-size: 15px;
   color: var(--fg);
-}
-form.search input::placeholder {
-  color: var(--muted);
-}
-.grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, 96px);
-  justify-content: center;
-  gap: 8px;
-  width: min(640px, 100%);
-}
-.tile {
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  padding: 12px 6px 10px;
-  border-radius: var(--r);
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-}
-.tile:hover,
-.tile.menu-open {
-  background: var(--surface-2);
-  color: var(--fg);
-}
-.tile > span:last-child {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.tile.mine::after {
-  content: '';
-  position: absolute;
-  top: 10px;
-  right: 20px;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--accent-2);
-}
-.newtab .hint {
-  color: var(--faint);
-  font-size: 12px;
-}
-
-/* A web app's icon (ui/AppIcon): its site's on a white card, or its initial. */
-.site-icon,
-.web-icon {
-  display: inline-grid;
-  place-items: center;
-  flex: none;
-  width: var(--s);
-  height: var(--s);
-  border-radius: calc(var(--s) * 0.22);
-}
-.site-icon {
-  background: #fbf9ff;
-  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.08);
-}
-.site-icon img {
-  width: 66%;
-  height: 66%;
-  object-fit: contain;
-  display: block;
-}
-.web-icon {
-  background: #1f1533;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.08);
-  color: var(--tint);
-  font: 700 calc(var(--s) * 0.52) / 1 var(--font-display);
-}
-
-/* The menu a tile of your own opens (ui/MenuList). */
-.menu {
-  position: fixed;
-  z-index: 1000;
-  min-width: 220px;
-  max-width: 340px;
-  padding: 6px;
-  border-radius: 14px;
-  border: 1px solid var(--line-strong);
-  background: var(--surface-2);
-  box-shadow: 0 18px 48px -12px var(--shadow);
-  outline: none;
-}
-.menu .item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  min-height: 34px;
-  padding: 6px 10px;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  text-align: left;
-  color: var(--fg);
-}
-.menu .item:hover,
-.menu .item:focus-visible {
-  background: var(--surface-3);
-  outline: none;
-}
-.menu .item .icon {
-  color: var(--muted);
-}
-.menu .item.danger,
-.menu .item.danger .icon {
-  color: var(--danger);
-}
-.menu .sep {
-  height: 1px;
-  margin: 5px 8px;
-  background: var(--line);
-}
-.menu .heading {
-  padding: 8px 10px 4px;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--faint);
 }
 
 /* ------------------------------------------------------------ pages that say why there's no page */

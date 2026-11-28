@@ -61,6 +61,12 @@ pub const GROUPS: &[&[PanelInfo]] = &[
             "lock",
             &["password", "lock", "privacy", "auto lock", "notifications", "security", "picture"],
         ),
+        p(
+            "browser",
+            "Browser",
+            "globe",
+            &["wadbrowser", "web", "ad blocker", "ads", "search engine", "block sites", "social media", "web apps"],
+        ),
     ],
     &[
         p(
@@ -202,6 +208,7 @@ mod tests {
                 "power",
                 "background",
                 "lock",
+                "browser",
                 "accounts",
                 "storage",
                 "mouse",
@@ -233,7 +240,8 @@ mod tests {
     #[test]
     fn search_matches_names_and_keywords() {
         let ids = |q: &str| filter(q).iter().flatten().map(|p| p.id).collect::<Vec<_>>();
-        assert_eq!(ids("").len(), 13);
+        assert_eq!(ids("").len(), 14);
+        assert_eq!(ids("ad blocker"), ["browser"]);
         assert_eq!(ids("blue"), ["bluetooth"]);
         assert_eq!(ids("  WALLpaper "), ["background"]);
         assert_eq!(ids("headphones"), ["bluetooth", "sound"]);

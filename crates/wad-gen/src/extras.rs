@@ -20,6 +20,7 @@
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use wad_model::browser::{BlockGroup, BrowserPrefs};
 use wad_model::{AppId, DiscImage, KeyRef, ProjectKind, Secret, SecretKind, Wadspace, Wallpaper, catalog, look};
 
 use crate::recipes::{self, Recipe};
@@ -45,14 +46,20 @@ pub fn dir(state_dir: &str, id: &str) -> String {
 }
 
 /// Its files as they are now: (name, contents), or none for one that goes
-/// (no WadBrowser, no keys). wadd writes them before it starts.
-pub fn files(ws: &Wadspace, keys: &[Secret], mounts: &Mounts) -> Vec<(&'static str, Option<String>)> {
+/// (no WadBrowser, no keys). wadd writes them before it starts. `groups`:
+/// the machine's blocker groups (the Library's).
+pub fn files(
+    ws: &Wadspace,
+    keys: &[Secret],
+    groups: &[BlockGroup],
+    mounts: &Mounts,
+) -> Vec<(&'static str, Option<String>)> {
     vec![
         (WEBAPPS, Some(webapps_json(ws))),
         (LAYOUT, Some(layout_json(ws))),
         (PROJECTS, Some(projects_json(ws, mounts))),
         (SIGNINS, signins_json(ws, keys)),
-        (WADBROWSER_CONF, wadbrowser_conf(ws)),
+        (WADBROWSER_CONF, wadbrowser_conf(ws, groups)),
     ]
 }
 
@@ -207,20 +214,21 @@ pub fn games_json<'a>(ws: &Wadspace, discs: impl IntoIterator<Item = &'a DiscIma
     (!out.is_empty()).then(|| serde_json::Value::Array(out).to_string())
 }
 
-/// wadbrowser.conf, with WadBrowser: links open in it, full or Focus (its
-/// add-on: no address bar).
-pub fn wadbrowser_conf(ws: &Wadspace) -> Option<String> {
+/// wadbrowser.conf, with WadBrowser: its address bar, its blocker and
+/// its blocker groups (the Builder's add-ons: `Wadspace::browser`), their
+/// sites (those of `groups` it has on) written in: the browser in a
+/// wadspace needs nothing else, and wadd writes it again when they change.
+/// An older design's Focus add-on, not yet upgraded, is the address bar off.
+pub fn wadbrowser_conf(ws: &Wadspace, groups: &[BlockGroup]) -> Option<String> {
     if !ws.has_app(AppId::Wadbrowser) {
         return None;
     }
     let focus = ws.ext(AppId::Wadbrowser, "focus").is_some_and(|e| e.url.is_none());
-    let mode = if focus { "focus" } else { "full" };
-    Some(format!(
-        "# WadBrowser's settings for this wadspace, from its design (a\n\
-         # user's own go in ~/.config/wadbrowser/wadbrowser.conf).\n\
-         #\n\
-         # What links open in: full (tabs and an address bar) or focus (no address bar).\n\
-         default = {mode}\n"
+    let prefs = BrowserPrefs { address_bar: ws.browser.address_bar && !focus, groups: vec![], ..ws.browser.clone() };
+    Some(wad_model::browser::conf(
+        "WadBrowser's settings for this wadspace, from its design (the\nBuilder's add-ons). The browser has none of its own.",
+        &prefs,
+        &ws.browser.sites(groups),
     ))
 }
 

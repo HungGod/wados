@@ -1,11 +1,12 @@
 //! A WadBrowser window, as the v2 design draws it (the spike's
 //! `Browser.svelte`): the tab bar, then the header bar (back, forward,
 //! reload; the address, the page's title or an app's offsite pill; the
-//! shield, the profile chip and ⋮), then the page. Full, Focus and App are
+//! shield and ⋮), then the page. Full, Focus and App are
 //! its kinds (wadbrowser_core::modes); a private window is tinted magenta.
 //!
-//! The drawing is `chrome.rs`'s, the menus, shield, chip and dialogs
-//! `wire.rs`'s, and the engine's side of it `views.rs`'s.
+//! The drawing is `chrome.rs`'s, the menus, shield and dialogs `wire.rs`'s,
+//! and the engine's side of it `views.rs`'s. Its settings (Full or Focus,
+//! the blockers, the search engine) are wadbrowser.conf's ([`AppState::conf`]).
 
 // The engine's side of a window (window/views.rs).
 mod views;
@@ -26,6 +27,7 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{info, warn};
+use wadbrowser_core::conf::Conf;
 use wadbrowser_core::modes::{Mode, WindowSpec};
 use wadbrowser_core::signin::{self, Provider};
 use wadbrowser_core::site;
@@ -38,7 +40,6 @@ use webkit6::{
     FindOptions, LoadEvent, UserContentInjectedFrames, UserContentManager, UserScript, UserScriptInjectionTime, WebView,
 };
 
-use crate::chip::ChipInfo;
 use crate::shield::ShieldActions;
 
 pub struct AppState {
@@ -47,6 +48,8 @@ pub struct AppState {
     pub store: Arc<Store>,
     pub privacy: Rc<PrivacyEngine>,
     pub normal_session: SessionBundle,
+    /// wadbrowser.conf as last read (app.rs keeps it up with the files).
+    pub conf: RefCell<Conf>,
 }
 
 struct WindowCtx {
@@ -113,29 +116,35 @@ pub(crate) fn build_window_as(
     };
 
     let tab_view = TabView::new();
-    let tabs = chrome::TabStrip::new(&tab_view, Rc::new(with(|ctx| new_tab(ctx, NEW_TAB_URI))));
+    let drag = {
+        let (a, b, c) = (me.clone(), me.clone(), me.clone());
+        chrome::TabDrag {
+            payload: Rc::new(move |page| a.borrow().upgrade().and_then(|ctx| tab_payload(&ctx, page))),
+            tear_off: Rc::new(move |page| {
+                if let Some(ctx) = b.borrow().upgrade() {
+                    tear_off(&ctx, page);
+                }
+            }),
+            take: Rc::new(move |payload, at| c.borrow().upgrade().is_some_and(|ctx| take_tab(&ctx, payload, at))),
+        }
+    };
+    let tabs = chrome::TabStrip::new(&tab_view, Rc::new(with(|ctx| new_tab(ctx, NEW_TAB_URI))), drag);
     let chrome = ModeChrome::new(&spec);
     let shield_actions = {
-        let (a, b, c) = (me.clone(), me.clone(), me.clone());
+        let (a, b) = (me.clone(), me.clone());
         ShieldActions {
             set_blockers: Rc::new(move |on| {
                 if let Some(ctx) = a.borrow().upgrade() {
                     wire::set_blockers(&ctx, on);
                 }
             }),
-            set_social: Rc::new(move |on| {
-                if b.borrow().upgrade().is_some() {
-                    wadbrowser_webkit::shield::set_social_blocking(on);
-                }
-            }),
             open_dashboard: Rc::new(move || {
-                if let Some(ctx) = c.borrow().upgrade() {
+                if let Some(ctx) = b.borrow().upgrade() {
                     open_page(&ctx, "wadbrowser://privacy");
                 }
             }),
         }
     };
-    let chip_me = me.clone();
     let downloads_me = me.clone();
     let downloads_actions = crate::downloads::DownloadsActions {
         show_all: Rc::new(move || {
@@ -144,19 +153,8 @@ pub(crate) fn build_window_as(
             }
         }),
     };
-    let header = chrome::Header::new(
-        &chrome.identity,
-        &chrome.page_title,
-        &chrome.offsite,
-        shield_actions,
-        downloads_actions,
-        ChipInfo { name: String::new(), color: String::new(), private },
-        move |b| {
-            if let Some(ctx) = chip_me.borrow().upgrade() {
-                wire::profile_menu(&ctx, b, true);
-            }
-        },
-    );
+    let header =
+        chrome::Header::new(&chrome.identity, &chrome.page_title, &chrome.offsite, shield_actions, downloads_actions);
 
     let find_box = GtkBox::new(Orientation::Horizontal, 8);
     find_box.add_css_class("find-bar");
@@ -320,9 +318,18 @@ pub(crate) fn build_window_as(
     tab_view.connect_page_detached(clone!(
         #[weak]
         ctx,
-        move |_, _, _| {
+        move |view, _, _| {
             ctx.tabs.sync(&ctx.tab_view, ctx.spec.borrow().autohide_tabs());
             sync_controls(&ctx);
+            // Its last tab dragged to another window: this one goes.
+            if view.n_pages() == 0 {
+                let w = ctx.window.downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(w) = w.upgrade() {
+                        w.close();
+                    }
+                });
+            }
         }
     ));
     tab_view.connect_selected_page_notify(clone!(
@@ -563,7 +570,8 @@ fn wire_webview(ctx: &Rc<WindowCtx>, view: &WebView, page: &TabPage) {
         }
     )));
     // Right-click: the page menu, but on a link, a picture, a video, words
-    // picked out or a field, WebKit's own (open in a new tab, copy, paste…).
+    // picked out or a field, WebKit's own (copy, paste…), a link's with
+    // ours to open it in a new tab or a new window (link_items).
     let right = gtk::GestureClick::builder().button(3).build();
     right.set_propagation_phase(gtk::PropagationPhase::Capture);
     right.connect_pressed(clone!(
@@ -577,7 +585,12 @@ fn wire_webview(ctx: &Rc<WindowCtx>, view: &WebView, page: &TabPage) {
         ctx,
         #[upgrade_or]
         false,
-        move |view, _menu, hit| {
+        move |view, menu, hit| {
+            if hit.context_is_link()
+                && let Some(link) = hit.link_uri()
+            {
+                link_items(&ctx, menu, &link);
+            }
             let webkits = hit.context_is_link()
                 || hit.context_is_image()
                 || hit.context_is_media()
@@ -597,12 +610,146 @@ fn wire_webview(ctx: &Rc<WindowCtx>, view: &WebView, page: &TabPage) {
     views::wired(ctx, view, ids);
 }
 
+/// A link's menu: "Open link in new tab" and "Open link in new window"
+/// first, in place of WebKit's "Open Link in New Window" (whose window would
+/// be a popup, and so only a tab).
+fn link_items(ctx: &Rc<WindowCtx>, menu: &webkit6::ContextMenu, link: &str) {
+    for item in menu.items() {
+        if item.stock_action() == webkit6::ContextMenuAction::OpenLinkInNewWindow {
+            menu.remove(&item);
+        }
+    }
+    let item = |name: &str, label: &str, f: fn(&Rc<WindowCtx>, &str)| {
+        let action = gio::SimpleAction::new(name, None);
+        let (w, link) = (Rc::downgrade(ctx), link.to_string());
+        action.connect_activate(move |_, _| {
+            if let Some(ctx) = w.upgrade() {
+                f(&ctx, &link);
+            }
+        });
+        webkit6::ContextMenuItem::from_gaction(&action, label, None)
+    };
+    menu.insert(&item("open-link-in-new-window", "Open Link in New Window", link_in_new_window), 0);
+    menu.insert(&item("open-link-in-new-tab", "Open Link in New Tab", link_in_new_tab), 0);
+}
+
+/// A link in a tab of its own, after this one's tabs, not shown.
+fn link_in_new_tab(ctx: &Rc<WindowCtx>, link: &str) {
+    let _ = create_tab(ctx, link, false);
+}
+
+/// A link in a window of the browser's own (private from a private one).
+fn link_in_new_window(ctx: &Rc<WindowCtx>, link: &str) {
+    let spec = new_browser_spec(ctx, ctx.private);
+    build_window_as(&ctx.app, ctx.state.clone(), spec, vec![link.to_string()], 0).present();
+}
+
+/// A new browser window's kind from this one: Full or Focus as it is (an
+/// app's or a sign-in's: as wadbrowser.conf says).
+fn new_browser_spec(ctx: &WindowCtx, private: bool) -> WindowSpec {
+    let spec = ctx.spec.borrow();
+    let mode = match spec.mode {
+        Mode::Full | Mode::Focus if spec.app.is_none() => spec.mode,
+        _ => ctx.state.conf.borrow().default_mode,
+    };
+    WindowSpec::browser(mode, private, None)
+}
+
+// ------------------------------------------------------------ dragging tabs
+
+/// What a tab's drag carries: this process, its window and its place
+/// (`wadbrowser-tab:<pid>:<window>:<index>`). Only the browser's own windows'
+/// tabs move (not an app's or a sign-in's), and not a window's only tab:
+/// dragged out, it would only be the same window again.
+fn tab_payload(ctx: &WindowCtx, page: &TabPage) -> Option<String> {
+    if !movable(ctx) {
+        return None;
+    }
+    let at = ctx.tab_view.page_position(page);
+    Some(format!("{TAB_DRAG}{}:{}:{at}", std::process::id(), ctx.id))
+}
+
+const TAB_DRAG: &str = "wadbrowser-tab:";
+
+/// Its window and place, from a drag of this process's.
+fn parse_tab_payload(payload: &str) -> Option<(u64, u32)> {
+    let mut it = payload.strip_prefix(TAB_DRAG)?.split(':');
+    let pid: u32 = it.next()?.parse().ok()?;
+    let (window, at) = (it.next()?.parse().ok()?, it.next()?.parse().ok()?);
+    (pid == std::process::id() && it.next().is_none()).then_some((window, at))
+}
+
+fn movable(ctx: &WindowCtx) -> bool {
+    let spec = ctx.spec.borrow();
+    spec.app.is_none() && spec.signin.is_none()
+}
+
+/// `page` dropped outside every window: a new window (of this one's kind
+/// and privacy) that loads its page afresh, and the tab closes here. A
+/// fresh page, not the tab's view moved across: nothing of it is shared
+/// between windows. A window's only tab stays.
+fn tear_off(ctx: &Rc<WindowCtx>, page: &TabPage) {
+    if !movable(ctx) || ctx.tab_view.n_pages() < 2 {
+        return;
+    }
+    let uri = page
+        .child()
+        .downcast::<WebView>()
+        .ok()
+        .and_then(|v| v.uri())
+        .map(String::from)
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| NEW_TAB_URI.into());
+    let spec = new_browser_spec(ctx, ctx.private);
+    let w = build_window_as(&ctx.app, ctx.state.clone(), spec, vec![uri], 0);
+    ctx.tab_view.close_page(page);
+    w.present();
+    info!("a tab into a window of its own");
+}
+
+/// A tab (`payload`) dropped on this window's tab bar, to go at `at`: moved
+/// along the bar, or from another of the browser's windows (as private as
+/// this one). Whether it moved.
+fn take_tab(ctx: &Rc<WindowCtx>, payload: &str, at: u32) -> bool {
+    let Some((from, index)) = parse_tab_payload(payload) else { return false };
+    let (index, at) = (index as i32, at as i32);
+    let Some(src) = find(from) else { return false };
+    if index >= src.tab_view.n_pages() {
+        return false;
+    }
+    let page = src.tab_view.nth_page(index);
+    if src.id == ctx.id {
+        let at = if at > index { at - 1 } else { at };
+        let at = at.min(ctx.tab_view.n_pages() - 1);
+        ctx.tab_view.reorder_page(&page, at);
+        return true;
+    }
+    if !movable(ctx) || !movable(&src) {
+        return false;
+    }
+    if src.private != ctx.private {
+        show_toast(
+            ctx,
+            if src.private {
+                "A private tab stays in a private window"
+            } else {
+                "This window is private: its tabs keep nothing"
+            },
+        );
+        return false;
+    }
+    let at = at.min(ctx.tab_view.n_pages());
+    src.tab_view.transfer_page(&page, &ctx.tab_view, at);
+    ctx.tab_view.set_selected_page(&page);
+    ctx.window.present();
+    true
+}
+
 /// A tab's title before its page has one.
 fn tab_title_for(uri: &str) -> String {
     match uri.strip_prefix("wadbrowser://").map(|p| p.split(['/', '?', '#']).next().unwrap_or("")) {
         Some("newtab") | Some("home") | Some("") => "New tab".into(),
         Some("privacy") => "Privacy".into(),
-        Some("settings") => "Settings".into(),
         Some("history") => "History".into(),
         Some(other) => other.to_string(),
         None => site::bare_host(&site::host_of(uri)),
@@ -704,7 +851,6 @@ fn setup_actions(ctx: &Rc<WindowCtx>) {
     };
     page("history", "wadbrowser://history");
     page("privacy", "wadbrowser://privacy");
-    page("settings", "wadbrowser://settings");
     page("downloads", "wadbrowser://downloads");
     page("about", "wadbrowser://about");
     let zoom = |name: &'static str, f: fn(&WebView)| {
@@ -768,8 +914,8 @@ fn setup_shortcuts(ctx: &Rc<WindowCtx>) {
             }
             // (With Shift held the key is N.)
             if ctrl && key.to_lower() == Key::n {
-                // A window of this one's kind (an app's: a Full one); Shift: private.
-                let spec = ctx.spec.borrow().sibling(shift);
+                // A window of this one's kind (an app's: wadbrowser.conf's); Shift: private.
+                let spec = new_browser_spec(&ctx, shift);
                 let w = build_window_as(&ctx.app, ctx.state.clone(), spec, vec![NEW_TAB_URI.into()], 0);
                 w.present();
                 return glib::Propagation::Stop;
@@ -891,10 +1037,8 @@ fn save_session_from(ctx: &WindowCtx) {
     }
 }
 
+/// The last session's tabs (`--restore` only: the browser starts at its home).
 pub fn restore_urls(state: &AppState) -> Option<(Vec<String>, usize)> {
-    if !state.prefs.borrow().restore_session {
-        return None;
-    }
     let session = Store::load_session(&state.paths).ok().flatten()?;
     let win = session.windows.into_iter().find(|w| !w.private)?;
     if win.tabs.is_empty() {
@@ -912,6 +1056,28 @@ pub fn select_tab_index(window_tabs: &TabView, index: usize) {
         && let Ok(page) = obj.downcast::<TabPage>()
     {
         window_tabs.set_selected_page(&page);
+    }
+}
+
+/// wadbrowser.conf's Full or Focus, in every one of the browser's own
+/// windows (not an app's or a sign-in's): it changed.
+pub(crate) fn set_default_mode(mode: Mode) {
+    for ctx in all_windows() {
+        let own = {
+            let spec = ctx.spec.borrow();
+            spec.app.is_none() && spec.signin.is_none()
+        };
+        if own {
+            wire::set_mode(&ctx, mode);
+        }
+    }
+}
+
+/// Every window's address bar again (the search engine changed).
+pub(crate) fn sync_all() {
+    for ctx in all_windows() {
+        sync_chrome(&ctx);
+        wire::sync_shield(&ctx);
     }
 }
 
@@ -1223,7 +1389,6 @@ mod tests {
     fn a_tab_is_named_before_its_page_says() {
         assert_eq!(tab_title_for("wadbrowser://newtab"), "New tab");
         assert_eq!(tab_title_for("wadbrowser://privacy?x=1"), "Privacy");
-        assert_eq!(tab_title_for("wadbrowser://settings"), "Settings");
         assert_eq!(tab_title_for("https://www.GitHub.com/x"), "github.com");
     }
 
@@ -1234,6 +1399,15 @@ mod tests {
         }
         assert!(!is_newtab("wadbrowser://settings"));
         assert!(!is_newtab("https://example.com/"));
+    }
+
+    #[test]
+    fn a_tab_drag_is_this_processs_own() {
+        let me = std::process::id();
+        assert_eq!(parse_tab_payload(&format!("wadbrowser-tab:{me}:3:7")), Some((3, 7)));
+        assert_eq!(parse_tab_payload(&format!("wadbrowser-tab:{}:3:7", me.wrapping_add(1))), None);
+        assert_eq!(parse_tab_payload(&format!("wadbrowser-tab:{me}:3:7:9")), None);
+        assert_eq!(parse_tab_payload("https://example.com/"), None);
     }
 
     #[test]

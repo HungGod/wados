@@ -1,15 +1,17 @@
 //! The content filters WebKit blocks with: the lists' (EasyList and
-//! EasyPrivacy) and the social blocker's, compiled once by WebKit's
+//! EasyPrivacy) and the site blocker's, compiled once by WebKit's
 //! `UserContentFilterStore` into `<cache>/filters/` under an id that's the
 //! lists' hash (`wadbrowser_privacy::filter_identifier`). A start with the
 //! same lists only loads what was compiled; the lists are read, and on a cache
 //! miss turned into WebKit's rules, off the main thread (WebKit compiles on
 //! its own).
 //!
-//! Each view's UserContentManager has the filters its page's site should: none
-//! where the shield's toggle allowed the site, the social one only with "Block
-//! all social media" on. They're put right as each top-level page starts and
-//! commits, and again when a toggle flips.
+//! Each view's UserContentManager has the filters its page's site should: the
+//! lists' unless the blocker's off (wadbrowser.conf) or the shield's toggle
+//! allowed the site, the site blocker's whenever wadbrowser.conf blocks
+//! sites (the shield can't let one through). They're put right as each
+//! top-level page starts and commits, and again when a setting changes; the
+//! site blocker's is compiled again when its sites do ([`sites_changed`]).
 
 use crate::engine::{Engine, engine};
 use crate::testlog;
@@ -30,7 +32,8 @@ const WAIT: Duration = Duration::from_secs(2);
 pub(crate) struct Filters {
     store: UserContentFilterStore,
     lists: RefCell<Option<UserContentFilter>>,
-    social: RefCell<Option<UserContentFilter>>,
+    /// The site blocker's, and its id (its sites' hash).
+    sites: RefCell<Option<(String, UserContentFilter)>>,
     /// The lists' filter is in, or won't be: loads needn't wait.
     settled: Cell<bool>,
     waiting: RefCell<Vec<Box<dyn FnOnce()>>>,
@@ -40,7 +43,7 @@ pub(crate) struct Filters {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct Applied {
     pub lists: bool,
-    pub social: bool,
+    pub sites: bool,
 }
 
 impl Filters {
@@ -50,7 +53,7 @@ impl Filters {
         Self {
             store: UserContentFilterStore::new(&dir.to_string_lossy()),
             lists: RefCell::default(),
-            social: RefCell::default(),
+            sites: RefCell::default(),
             settled: Cell::new(false),
             waiting: RefCell::default(),
         }
@@ -94,9 +97,9 @@ pub fn when_ready(f: impl FnOnce() + 'static) {
     });
 }
 
-/// Starts loading the filters: the social one now, the lists' once they're read.
-pub(crate) fn start(e: &Rc<Engine>) {
-    load_social(e);
+/// Starts loading the filters: the site blocker's now, the lists' once they're read.
+pub(crate) fn start() {
+    sites_changed();
     glib::timeout_add_local(Duration::from_millis(50), || {
         let Some(e) = engine() else { return glib::ControlFlow::Break };
         match e.privacy.poll() {
@@ -196,24 +199,44 @@ fn forget_others(current: &str) {
     }
 }
 
-fn load_social(e: &Rc<Engine>) {
-    let id = content::social_identifier();
+/// The site blocker's filter for wadbrowser.conf's sites as they are now:
+/// loaded (or compiled), then put into every view. The one it replaces goes
+/// from the store.
+pub(crate) fn sites_changed() {
+    let Some(e) = engine() else { return };
+    let blocked = e.prefs.borrow().blocked_sites.clone();
+    let id = content::sites_identifier(&blocked);
+    if e.filters.sites.borrow().as_ref().is_some_and(|(have, _)| *have == id) {
+        return;
+    }
     let store = e.filters.store.clone();
+    let wanted = id.clone();
     e.filters.store.load(&id.clone(), None::<&gio::Cancellable>, move |res| match res {
-        Ok(f) => social_in(f),
+        Ok(f) => sites_in(&wanted, f),
         Err(_) => {
-            let bytes = glib::Bytes::from_owned(content::social_rules().into_bytes());
-            store.save(&id, &bytes, None::<&gio::Cancellable>, |res| match res {
-                Ok(f) => social_in(f),
-                Err(err) => warn!("WebKit didn't compile the social blocker: {err}"),
+            let bytes = glib::Bytes::from_owned(content::site_rules(&blocked).into_bytes());
+            let saved = id.clone();
+            store.save(&id, &bytes, None::<&gio::Cancellable>, move |res| match res {
+                Ok(f) => sites_in(&saved, f),
+                Err(err) => warn!("WebKit didn't compile the site blocker: {err}"),
             });
         }
     });
 }
 
-fn social_in(f: UserContentFilter) {
+fn sites_in(id: &str, f: UserContentFilter) {
     let Some(e) = engine() else { return };
-    *e.filters.social.borrow_mut() = Some(f);
+    // Only the sites as they are now (another change may have come since).
+    if content::sites_identifier(&e.prefs.borrow().blocked_sites) != id {
+        return;
+    }
+    let old = e.filters.sites.replace(Some((id.to_string(), f)));
+    if let Some((old, _)) = old
+        && old != id
+    {
+        e.filters.store.remove(&old, None::<&gio::Cancellable>, |_| {});
+    }
+    testlog::line("sites-filter", &[id]);
     reapply_all();
 }
 
@@ -222,7 +245,7 @@ fn wanted(e: &Engine, uri: &str) -> Applied {
     let web = uri.starts_with("http://") || uri.starts_with("https://");
     let allowed = e.privacy.allowlist().contains_url(uri);
     let on = web && !allowed && e.privacy.is_enabled();
-    Applied { lists: on, social: web && !allowed && e.prefs.borrow().block_social }
+    Applied { lists: on, sites: web && !e.prefs.borrow().blocked_sites.is_empty() }
 }
 
 /// Puts `view`'s filters right for `uri` (its top-level page, or the one it's going to).
@@ -232,9 +255,10 @@ pub(crate) fn apply(view: &WebView, st: &ViewState, uri: &str) {
     let have = st.applied.get();
     let ucm = &st.ucm;
     let lists = e.filters.lists.borrow();
-    let social = e.filters.social.borrow();
+    let sites = e.filters.sites.borrow();
+    let sites = sites.as_ref().map(|(_, f)| f);
     // What's in the UCM is what was added while the filter was there.
-    let now = Applied { lists: want.lists && lists.is_some(), social: want.social && social.is_some() };
+    let now = Applied { lists: want.lists && lists.is_some(), sites: want.sites && sites.is_some() };
     if now == have {
         return;
     }
@@ -243,16 +267,16 @@ pub(crate) fn apply(view: &WebView, st: &ViewState, uri: &str) {
     {
         if now.lists { ucm.add_filter(f) } else { ucm.remove_filter(f) }
     }
-    if let Some(f) = social.as_ref()
-        && have.social != now.social
+    if let Some(f) = sites
+        && have.sites != now.sites
     {
-        if now.social { ucm.add_filter(f) } else { ucm.remove_filter(f) }
+        if now.sites { ucm.add_filter(f) } else { ucm.remove_filter(f) }
     }
     st.applied.set(now);
     let _ = view;
 }
 
-/// Every view's filters again (a filter came in, a toggle flipped).
+/// Every view's filters again (a filter came in, a setting changed).
 pub(crate) fn reapply_all() {
     for v in view::live_views() {
         if let Some(st) = view::state(&v) {

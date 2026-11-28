@@ -198,7 +198,7 @@ check_unlock() {
     step_time
 }
 
-# The desktop keeps below the bar (its reserve, 78 px: docs/decisions/0001)
+# The desktop keeps below the bar (its reserve, 78 px)
 # once it's unlocked: where its icon is drawn, found as what changes when
 # it's selected.
 check_desktop_below_bar() {

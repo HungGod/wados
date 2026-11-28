@@ -1,5 +1,5 @@
 #!/bin/bash
-# Phase 0's probes as checks (docs/decisions/0001-labwc.md), against the
+# Phase 0's probes as checks, against the
 # patched labwc (tools/build-labwc.sh) in a headless session. Each prints
 # ok or FAIL; the script exits 1 if any failed.
 #

@@ -1,7 +1,7 @@
 # WadOS's host image: the machine's own OS. Fedora 44 bootc, which boots
 # through greetd straight into labwc (ours, patched) and the WadSpaces shell,
 # locked first; wadd runs the wadspaces with root's podman; tailscaled and
-# cloudflared are its ways in from outside (docs/decisions/0003-host-image.md).
+# cloudflared are its ways in from outside.
 #
 # The open graphics drivers (Intel, AMD, nouveau/NVK) and their firmware: the
 # installer stick, a new machine and the Surface run this. A machine with an
@@ -17,7 +17,7 @@
 
 # ------------------------------------------------------------ labwc
 # labwc 0.9.6 from Fedora's own source package, with WadOS's patches
-# (host/labwc/*.patch, docs/decisions/0001-labwc.md), built against Fedora
+# (host/labwc/*.patch), built against Fedora
 # 44's wlroots0.19 as tools/build-labwc.sh does for a laptop. It's an RPM, so
 # dnf brings what it needs to run and rpm knows it's ours (release .wados1);
 # Fedora's unpatched labwc is never installed. Its one Requires dropped:
@@ -77,11 +77,30 @@ RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
       librsvg2 shared-mime-info hicolor-icon-theme adwaita-icon-theme adwaita-cursor-theme \
       foot gvfs dbus-tools wlr-randr \
       mesa-dri-drivers mesa-vulkan-drivers libva-intel-media-driver libva-utils \
-      gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav gstreamer1-plugin-openh264 \
+      gstreamer1-plugins-good gstreamer1-plugins-bad-free gstreamer1-plugin-libav \
       google-noto-sans-vf-fonts google-noto-serif-vf-fonts google-noto-sans-mono-vf-fonts google-noto-color-emoji-fonts \
     && dnf clean all && rm -rf /tmp/labwc \
     && rpm -q --qf '%{RELEASE}\n' labwc | grep -q '\.wados1$' \
     && ! rpm -q xdg-desktop-portal xdg-desktop-portal-wlr > /dev/null
+
+# Video in WadBrowser (WebKit plays it through GStreamer), from Fedora's own
+# packages only: the image is published, so nothing patent-encumbered goes
+# in it (no RPM Fusion ffmpeg, no H.264 or HEVC) and nothing whose licence
+# covers only its own maker's copies (Cisco's OpenH264, from its repo, which
+# Fedora's libavcodec-free pulls in: Fedora's noopenh264 stub in its place).
+# Sites serve those browsers VP9 or AV1 (YouTube does) with Opus; dav1d decodes AV1
+# fast enough to keep up. Checked: the free decoders are there, and neither
+# repo's packages are.
+RUN dnf -y install --setopt=install_weak_deps=False --setopt=tsflags=nodocs --disablerepo=fedora-cisco-openh264 \
+      gstreamer1-plugin-dav1d \
+    && if rpm -q openh264 > /dev/null; then \
+         dnf -y --disablerepo=fedora-cisco-openh264 swap openh264 noopenh264; fi \
+    && for e in dav1ddec vp8dec vp9dec avdec_vp9 opusdec vorbisdec avdec_aac; do \
+         gst-inspect-1.0 "$e" > /dev/null || { echo "no $e"; exit 1; }; done \
+    && for p in openh264 gstreamer1-plugin-openh264 ffmpeg; do \
+         ! rpm -q "$p" > /dev/null || { echo "has $p"; exit 1; }; done \
+    && ! rpm -qa --qf '%{VENDOR} %{NAME}\n' | grep -i rpmfusion \
+    && rm -rf /root/.cache/gstreamer-1.0 && dnf clean all
 
 # Sound: PipeWire, its PulseAudio socket (the session's, which wadd binds
 # into each wadspace on the screen: PULSE_SERVER) and WirePlumber, as the
@@ -250,7 +269,7 @@ RUN systemctl enable greetd.service podman.socket wadd.socket wadd.service wados
 # Checks: every binary loads (all its libraries and symbols are here), the
 # tools are there, the firmware is there, and greetd's config is made right
 # for a machine with its person and one without. And no firebase.toml: the
-# image is public, and the account's web app is the stick's to give (0013).
+# image is public, and the account's web app is the stick's to give.
 RUN set -e; \
     for b in /usr/bin/wadd /usr/bin/wados-shell /usr/bin/wadsctl /usr/libexec/wados/wadspaces-clipboard \
              /usr/bin/wadbrowser /usr/bin/wados-settings /usr/bin/wados-files /usr/bin/wados-installer /usr/bin/wados-agents /usr/bin/labwc /usr/bin/greetd /usr/bin/foot; do \

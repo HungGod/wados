@@ -65,16 +65,51 @@ button.side-pill:disabled label { color: var(--fg); }
 .side-img { border-radius: 4px; }
 
 /* Suggestions: dashed, in the add-ons' colour, why beside them. */
-.side-suggested button.side-pill {
-  border-style: dashed;
-  border-color: color-mix(in srgb, var(--c-ext) 55%, transparent);
-}
 .side-why { font-size: 11px; color: var(--faint); }
 
 .side-none { font-size: 12px; color: var(--faint); }
 .side-err { font-size: 12px; color: var(--danger); }
 
 /* The command line's own commands, under its tools. */
+/* A blocker group: one pill, its name (on or off) and its pencil (its sites, in a popup). */
+.side-blocks {
+  min-height: 26px;
+  border: 1px solid var(--line-strong);
+  border-radius: 99px;
+}
+.side-blocks.in {
+  border-color: color-mix(in srgb, var(--c-ext) 70%, transparent);
+  background: color-mix(in srgb, var(--c-ext) 14%, transparent);
+}
+.side-blocks button {
+  min-height: 24px;
+  border: 0;
+  border-radius: 99px;
+  background: transparent;
+  box-shadow: none;
+  outline: none;
+  color: var(--fg);
+  font-weight: 500;
+  font-size: 12px;
+}
+.side-blocks button:hover { background: rgb(255 255 255 / 0.06); }
+.side-blocks button.side-blocks-name { padding: 0 6px 0 7px; }
+.side-blocks button.side-blocks-edit { padding: 0 8px; color: var(--muted); }
+.side-blocks button.side-blocks-edit.in { color: var(--fg); background: rgb(255 255 255 / 0.08); }
+.side-blocks button:disabled { opacity: 0.6; }
+/* A group's popup: Delete, in red, opposite Save. */
+button.side-remove {
+  min-height: 30px;
+  padding: 0 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 55%, transparent);
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
+  box-shadow: none;
+  color: var(--danger);
+  font-weight: 600;
+}
+button.side-remove:hover { background: color-mix(in srgb, var(--danger) 26%, transparent); }
+
 .side-commands {
   padding-top: 10px;
   border-top: 1px solid var(--line);

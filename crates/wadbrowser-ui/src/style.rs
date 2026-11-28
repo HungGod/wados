@@ -1,5 +1,5 @@
 //! WadBrowser's styles, on wad-gtk's tokens: the v2 widgets'
-//! ([`WIDGETS_CSS`]: menus, the shield, the profile chip, the dialogs) and
+//! ([`WIDGETS_CSS`]: menus, the shield, the dialogs) and
 //! the window's ([`WINDOW_CSS`]: the tab bar, the header bar).
 
 use gtk::gdk;
@@ -26,20 +26,6 @@ button.wb-hb:disabled { opacity: 0.32; filter: none; }
 button.wb-shield > box > wad-icon { color: var(--accent); }
 button.wb-shield.off > box > wad-icon { color: var(--warn); }
 .wb-shield-count { font-size: 12px; font-weight: 400; color: var(--muted); font-feature-settings: "tnum"; }
-
-/* The profile chip (its colour: chip.rs adds a class per colour). */
-button.wb-chip {
-  min-height: 26px;
-  padding: 0 11px 0 9px;
-  border-radius: 999px;
-  border: 1px solid alpha(#c6ff1f, 0.45);
-  background-color: alpha(#c6ff1f, 0.14);
-  box-shadow: none;
-  color: var(--fg);
-  font-size: 12px;
-  font-weight: 400;
-}
-.wb-chip-dot { min-width: 9px; min-height: 9px; border-radius: 999px; background-color: #c6ff1f; }
 
 /* ------------------------------------------------------------ menus */
 
@@ -246,40 +232,6 @@ entry.wb-field > text > selection { background-color: var(--accent-soft); color:
 .has-error entry.wb-field { border-color: var(--danger); }
 .wb-field-error { font-size: 12px; color: var(--danger); }
 
-/* A choice (Create app's profile), as the spike's select. */
-dropdown.wb-select > button {
-  min-height: 40px;
-  padding: 0 12px;
-  border-radius: 12px;
-  border: 1px solid var(--line-strong);
-  background-color: var(--bg-2);
-  background-image: none;
-  box-shadow: none;
-  color: var(--fg);
-  font-weight: 400;
-}
-dropdown.wb-select > button:focus-visible { border-color: var(--accent); }
-dropdown.wb-select popover > contents {
-  padding: 6px;
-  border-radius: 14px;
-  border: 1px solid var(--line-strong);
-  background-color: var(--surface-2);
-  color: var(--fg);
-}
-
-/* New profile's colours. */
-button.wb-swatch {
-  min-width: 24px;
-  min-height: 24px;
-  padding: 0;
-  border-radius: 999px;
-  border: 2px solid transparent;
-  box-shadow: inset 0 0 0 2px var(--surface);
-  background-image: none;
-}
-button.wb-swatch.used { opacity: 0.55; }
-button.wb-swatch.on { border-color: var(--fg); opacity: 1; }
-
 /* Saved sign-ins: a key and its sites. */
 .wb-key {
   padding: 10px 12px;
@@ -473,7 +425,6 @@ windowcontrols > button:hover { background-color: var(--surface-3); color: var(-
 pub fn install(display: &gdk::Display) {
     wad_gtk::theme::install(display);
     wad_gtk::theme::add_css(display, WIDGETS_CSS);
-    wad_gtk::theme::add_css(display, &crate::dialogs::new_profile::css());
 }
 
 thread_local! {

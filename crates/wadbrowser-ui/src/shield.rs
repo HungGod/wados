@@ -1,7 +1,9 @@
 //! The shield (the spike's `PrivacyPopover.svelte` and the header button it
 //! hangs from): the button shows how many ads and trackers were blocked in
-//! all; its popover, how many on this page, the blockers on or off for this
-//! site, "Block all social media", and the privacy dashboard.
+//! all; its popover, how many on this page, the blocker on or off for this
+//! site, and the privacy dashboard. Whether it's on at all is
+//! wadbrowser.conf's (the Builder's add-ons, Settings ▸ Browser): it only
+//! says so.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -22,8 +24,8 @@ pub struct ShieldInfo {
     pub total: u64,
     /// The blockers are off for this site.
     pub allowed: bool,
-    /// "Block all social media" is on.
-    pub social: bool,
+    /// The ad and tracker blocker is on at all.
+    pub enabled: bool,
 }
 
 /// What it does.
@@ -31,15 +33,13 @@ pub struct ShieldInfo {
 pub struct ShieldActions {
     /// The blockers on (true) or off for this page's site.
     pub set_blockers: Rc<dyn Fn(bool)>,
-    /// "Block all social media", on or off.
-    pub set_social: Rc<dyn Fn(bool)>,
     /// "Privacy dashboard": wadbrowser://privacy.
     pub open_dashboard: Run,
 }
 
 impl Default for ShieldActions {
     fn default() -> Self {
-        Self { set_blockers: Rc::new(|_| {}), set_social: Rc::new(|_| {}), open_dashboard: Rc::new(|| {}) }
+        Self { set_blockers: Rc::new(|_| {}), open_dashboard: Rc::new(|| {}) }
     }
 }
 
@@ -57,7 +57,6 @@ pub struct Shield {
     total: gtk::Label,
     site_row: gtk::Box,
     site_switch: gtk::Switch,
-    social_switch: gtk::Switch,
     info: RefCell<ShieldInfo>,
     /// Set while [`Shield::update`] moves the switches (they don't ask then).
     quiet: Cell<bool>,
@@ -127,7 +126,6 @@ impl Shield {
             (row, s)
         };
         let (site_row, site_switch) = switch_row("Blockers on for this site");
-        let (_, social_switch) = switch_row("Block all social media");
 
         let dash_inner = gtk::Box::builder().spacing(8).build();
         dash_inner.append(&wad_gtk::Icon::new("gauge", 15));
@@ -158,7 +156,6 @@ impl Shield {
             total,
             site_row,
             site_switch,
-            social_switch,
             info: RefCell::default(),
             quiet: Cell::new(false),
         });
@@ -179,15 +176,6 @@ impl Shield {
             let info = ShieldInfo { allowed: !on, ..s.info.borrow().clone() };
             s.update(&info);
             set(on);
-        });
-        let (w, set) = (Rc::downgrade(&me), actions.set_social.clone());
-        me.social_switch.connect_active_notify(move |sw| {
-            let Some(s) = w.upgrade() else { return };
-            if s.quiet.get() {
-                return;
-            }
-            s.info.borrow_mut().social = sw.is_active();
-            set(sw.is_active());
         });
         let (pop, open) = (me.popover.downgrade(), actions.open_dashboard.clone());
         dash.connect_clicked(move |_| {
@@ -222,7 +210,7 @@ impl Shield {
     pub fn update(&self, info: &ShieldInfo) {
         *self.info.borrow_mut() = info.clone();
         let web = info.site.is_some();
-        let off = web && info.allowed;
+        let off = web && (info.allowed || !info.enabled);
         let shield = if off { "shield-off" } else { "shield-check" };
         self.icon.set(shield);
         self.badge_icon.set(shield);
@@ -237,6 +225,8 @@ impl Shield {
         self.title.set_label(info.site.as_deref().unwrap_or("WadBrowser"));
         self.note.set_label(if !web {
             "A page of the browser’s own"
+        } else if !info.enabled {
+            "The ad blocker is off in this browser’s settings"
         } else if off {
             "The blockers are off here"
         } else {
@@ -244,10 +234,9 @@ impl Shield {
         });
         self.here.set_label(&thousands(info.here as u64));
         self.total.set_label(&thousands(info.total));
-        self.site_row.set_visible(web);
+        self.site_row.set_visible(web && info.enabled);
         self.quiet.set(true);
         self.site_switch.set_active(!info.allowed);
-        self.social_switch.set_active(info.social);
         self.quiet.set(false);
     }
 }

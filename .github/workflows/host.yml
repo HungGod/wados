@@ -4,10 +4,11 @@
 # container lint` (its Containerfile lints as its last step too; this lints
 # the image as it would be pushed).
 #
-# Nothing is pushed. The build computer pushes the host image
-# (host/build.sh push), and the NVIDIA variant's modules are signed with a
-# MOK key that never comes to CI: only the open-drivers variant is built
-# here, which needs no secret at all.
+# The build computer pushes the host image (host/build.sh push). The NVIDIA
+# variant is built and pushed here (the nvidia job), only when it's asked
+# for (Run workflow, on main): its modules are signed with the MOK key,
+# from the repo's secrets (MOK_PRIV, MOK_DER_B64), which reach that job's
+# build alone, as host/build.sh's build secrets, and are deleted after.
 name: host
 
 on:
@@ -75,3 +76,59 @@ jobs:
         run: host/build.sh image
       - name: bootc container lint
         run: podman run --rm localhost/wados-host:latest bootc container lint
+
+  # NVIDIA's host image, on main when asked for (Run workflow): the same
+  # build with the MOK key from the repo's secrets, then pushed to
+  # ghcr.io/hunggod/wados-host-nvidia (:latest and :<date>-<commit>), where
+  # a machine's Updates follow it.
+  nvidia:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    permissions:
+      contents: read
+      packages: write
+    container:
+      image: quay.io/podman/stable:v5.8.7@sha256:2fb39ca923dd9e0ee33f9e319c3a107a2bfde022a6a31560cbd56a862821e7d3
+      options: --privileged
+      volumes:
+        - /mnt/wados-containers:/var/lib/containers
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Tools
+        run: dnf -y -q install git-core skopeo tar gawk openssl
+      - name: Storage
+        run: sed -i -e '/^mount_program/d' -e '/^mountopt/d' /etc/containers/storage.conf
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Only into host/secrets (gitignored, never in the image's context):
+      # host/build.sh hands them to the signing step as build secrets.
+      - name: The MOK key
+        env:
+          MOK_PRIV: ${{ secrets.MOK_PRIV }}
+          MOK_DER_B64: ${{ secrets.MOK_DER_B64 }}
+        run: |
+          [[ -n "${MOK_PRIV}" && -n "${MOK_DER_B64}" ]] || { echo "MOK_PRIV and MOK_DER_B64 aren't set" >&2; exit 1; }
+          umask 077
+          mkdir -p host/secrets/mok
+          printf '%s\n' "${MOK_PRIV}" > host/secrets/mok/wadspaces.priv
+          printf '%s' "${MOK_DER_B64}" | base64 -d > host/secrets/mok/wadspaces.der
+          openssl x509 -inform der -in host/secrets/mok/wadspaces.der -noout -subject
+      - name: The host and NVIDIA images (host/build.sh image --variant host,nvidia)
+        env:
+          JOBS: "4"
+        run: host/build.sh image --variant host,nvidia
+      - name: The key gone
+        if: always()
+        run: rm -rf host/secrets/mok
+      - name: bootc container lint
+        run: podman run --rm localhost/wados-host-nvidia:latest bootc container lint
+      - name: Push (host/build.sh push --variant nvidia)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          printf '%s' "${GH_TOKEN}" | podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          host/build.sh push --variant nvidia

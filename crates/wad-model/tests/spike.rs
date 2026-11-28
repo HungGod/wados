@@ -1209,3 +1209,53 @@ mod web_apps {
         assert_eq!(op, Op::RemoveWebApp { id: s("calendar") });
     }
 }
+
+/// Blocker groups: the machine's, made, changed and removed (with every
+/// wadspace's that had it on).
+mod block_groups {
+    use super::*;
+    use wad_model::browser::{BlockGroup, SOCIAL_MEDIA};
+
+    #[test]
+    fn a_group_is_made_changed_and_removed() {
+        let mut lib = library();
+        assert!(lib.block_groups.iter().any(|g| g.id == SOCIAL_MEDIA), "social media's at first");
+        let group = BlockGroup {
+            id: s(""),
+            name: s(" Distractions "),
+            sites: vec![s("https://www.News.com/x"), s("news.com")],
+        };
+        let id = act(&mut lib, Op::SaveBlockGroup { group }).created.expect("an id");
+        assert_eq!(id, "distractions");
+        let g = lib.block_groups.iter().find(|g| g.id == id).unwrap().clone();
+        assert_eq!((g.name.as_str(), g.sites.clone()), ("Distractions", vec![s("news.com")]));
+        // Changed in place: the same id.
+        act(&mut lib, Op::SaveBlockGroup { group: BlockGroup { sites: vec![s("bbc.com")], ..g } });
+        assert_eq!(lib.block_groups.iter().filter(|g| g.id == id).count(), 1);
+        assert_eq!(lib.block_groups.iter().find(|g| g.id == id).unwrap().sites, vec![s("bbc.com")]);
+        // On in a wadspace, then removed: off there too.
+        let x = ws(&lib, "vanua-academy").clone();
+        let mut prefs = x.browser.clone();
+        prefs.groups = vec![id.clone(), s(SOCIAL_MEDIA)];
+        act(&mut lib, Op::SetBrowser { ws: x.id.clone(), prefs });
+        let out = act(&mut lib, Op::RemoveBlockGroup { id: id.clone() });
+        assert_eq!(out.toast.as_deref(), Some("Removed Distractions"));
+        assert_eq!(ws(&lib, "vanua-academy").browser.groups, vec![s(SOCIAL_MEDIA)]);
+        assert!(!lib.block_groups.iter().any(|g| g.id == id));
+        // A group with no name isn't one.
+        let was = lib.clone();
+        let r = apply(
+            &mut lib,
+            Op::SaveBlockGroup { group: BlockGroup { id: s(""), name: s("  "), sites: vec![] } },
+            &ctx(),
+        );
+        assert!(r.is_err());
+        assert_eq!(lib, was);
+    }
+
+    #[test]
+    fn they_read_as_ops() {
+        let op: Op = serde_json::from_str(r#"{"op": "browser.removeGroup", "id": "social-media"}"#).expect("an op");
+        assert_eq!(op, Op::RemoveBlockGroup { id: s("social-media") });
+    }
+}
