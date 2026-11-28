@@ -169,10 +169,15 @@ impl Rig {
     }
 
     /// The compositor restarts: a new socket at the same path.
+    /// A new compositor's socket at the same path. Made beside the old one,
+    /// then moved over it: deleted first, the new one could get the old
+    /// one's inode number back (as CI's filesystem did), and an inode is how
+    /// wadd tells a restarted compositor.
     pub fn restart_compositor(&mut self) {
-        self.listener = None;
-        std::fs::remove_file(&self.compositor).unwrap();
-        self.listener = Some(UnixListener::bind(&self.compositor).unwrap());
+        let next = self.compositor.with_extension("next");
+        let listener = UnixListener::bind(&next).unwrap();
+        std::fs::rename(&next, &self.compositor).unwrap();
+        self.listener = Some(listener);
     }
 
     pub fn screen_dir(&self, id: &str) -> PathBuf {
