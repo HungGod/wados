@@ -21,7 +21,7 @@ use anyhow::Result;
 use gtk::glib;
 use gtk::prelude::*;
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -149,7 +149,7 @@ fn conf_files(paths: &wadbrowser_core::AppPaths) -> Vec<PathBuf> {
 }
 
 fn read_conf(paths: &wadbrowser_core::AppPaths) -> Conf {
-    Conf::load(&conf_files(paths))
+    Conf::load(&conf_files(paths), Path::new(conf::GROUPS))
 }
 
 thread_local! {
@@ -157,12 +157,13 @@ thread_local! {
     static MONITORS: RefCell<Vec<gio::FileMonitor>> = const { RefCell::new(Vec::new()) };
 }
 
-/// Each of wadbrowser.conf's files watched (one that isn't there yet too: a
+/// Each of wadbrowser.conf's files watched, and the blocker groups' (one that isn't there yet too: a
 /// user's is made when they first change a setting). A change is read a
 /// moment later, once the writer's done, and put into the browser.
 fn follow_conf(state: &Rc<AppState>) {
     let pending = Rc::new(Cell::new(false));
-    for f in conf_files(&state.paths) {
+    // And the machine's blocker groups: a group changed counts at once too.
+    for f in conf_files(&state.paths).into_iter().chain([PathBuf::from(conf::GROUPS)]) {
         let file = gio::File::for_path(&f);
         let monitor = match file.monitor_file(gio::FileMonitorFlags::WATCH_MOVES, None::<&gio::Cancellable>) {
             Ok(m) => m,

@@ -83,7 +83,7 @@ fn main() {
     }
     let extra = extras::dir(&state_dir, &ws.id);
     fs::create_dir_all(&extra).expect("the extra folder");
-    for (name, text) in extras::files(&ws, &lib.keys, &mounts) {
+    for (name, text) in extras::files(&ws, &lib.keys, &lib.block_groups, &mounts) {
         if let Some(text) = text {
             fs::write(format!("{extra}/{name}"), text).expect("an extra file");
         }

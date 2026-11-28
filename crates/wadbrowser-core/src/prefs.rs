@@ -90,14 +90,10 @@ impl Preferences {
 
     /// wadbrowser.conf's settings (the wadspace's design, or Settings ▸
     /// Browser's), which the browser has no page for: they're never this file's.
+    /// It searches with DuckDuckGo, always: there's no choosing another.
     pub fn take_conf(&mut self, c: &crate::conf::BrowserPrefs) {
-        use crate::conf::Search;
         self.block_ads_trackers = c.ad_blocker;
-        self.search_engine = match c.search {
-            Search::DuckDuckGo => SearchEngine::DuckDuckGo,
-            Search::Startpage => SearchEngine::Startpage,
-            Search::Wikipedia => SearchEngine::Wikipedia,
-        };
+        self.search_engine = SearchEngine::DuckDuckGo;
         self.blocked_sites = c.blocked.clone();
     }
 
@@ -152,15 +148,11 @@ mod tests {
 
     #[test]
     fn the_confs_settings_are_taken_and_never_kept() {
-        let mut p = Preferences::default();
-        let c = crate::conf::BrowserPrefs {
-            ad_blocker: false,
-            search: crate::conf::Search::Wikipedia,
-            blocked: vec!["x.com".into()],
-        };
+        let mut p = Preferences { search_engine: SearchEngine::Wikipedia, ..Preferences::default() };
+        let c = crate::conf::BrowserPrefs { ad_blocker: false, blocked: vec!["x.com".into()], ..Default::default() };
         p.take_conf(&c);
         assert!(!p.block_ads_trackers);
-        assert!(p.search_url("a").starts_with("https://en.wikipedia.org/"));
+        assert!(p.search_url("a").starts_with("https://duckduckgo.com/"), "DuckDuckGo, always");
         assert_eq!(p.blocked_sites, vec!["x.com"]);
         assert!(!toml::to_string(&p).unwrap().contains("x.com"));
         // An old prefs.toml's keys that are gone are skipped.

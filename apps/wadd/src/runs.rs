@@ -1093,9 +1093,10 @@ impl Runs {
         std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| format!("{}: {e}", dir.display()))?;
-        let keys = self.docs.snapshot().keys;
+        let lib = self.docs.snapshot();
+        let keys = &lib.keys;
         let mut files: Vec<(String, Option<String>)> =
-            extras::files(ws, &keys, mounts).into_iter().map(|(n, t)| (n.to_string(), t)).collect();
+            extras::files(ws, keys, &lib.block_groups, mounts).into_iter().map(|(n, t)| (n.to_string(), t)).collect();
         // Where its desktop draws (svc-de), and on how many displays (a stream is one).
         // The shell says how many there are; until it does, one.
         let (display, screens) = match streamed {
@@ -1296,17 +1297,20 @@ impl Runs {
     }
 
     /// Keeps each running wadspace's wadbrowser.conf as its design says,
-    /// for as long as wadd runs: the Builder's browser add-ons count at
-    /// once (WadBrowser reads the file again when it changes), not only from
-    /// its next start.
+    /// and the machine's blocker groups file as the Library has them, for as
+    /// long as wadd runs: the Builder's browser add-ons and a group changed
+    /// count at once (WadBrowser reads the files again when they change),
+    /// not only from its next start.
     pub async fn follow_browser_settings(self: Arc<Self>) {
         let (_, mut rx) = self.bus.subscribe();
+        write_machine_groups(&self.docs.snapshot().block_groups);
         loop {
             match rx.recv().await {
                 Ok(Event::Library(lib)) => {
+                    write_machine_groups(&lib.block_groups);
                     for ws in &lib.wadspaces {
                         if self.state(&ws.id).state.phase == Phase::Ready {
-                            self.write_browser_conf(ws);
+                            self.write_browser_conf(ws, &lib.block_groups);
                         }
                     }
                 }
@@ -1317,13 +1321,13 @@ impl Runs {
     }
 
     /// Its wadbrowser.conf, if its extra folder's there (written as it started).
-    fn write_browser_conf(&self, ws: &Wadspace) {
+    fn write_browser_conf(&self, ws: &Wadspace, groups: &[wad_model::browser::BlockGroup]) {
         let dir = PathBuf::from(extras::dir(&self.settings.state_dir.to_string_lossy(), &ws.id));
         if !dir.is_dir() {
             return;
         }
         let path = dir.join(extras::WADBROWSER_CONF);
-        let done = match extras::wadbrowser_conf(ws) {
+        let done = match extras::wadbrowser_conf(ws, groups) {
             Some(t) => put(&path, t.as_bytes()),
             None => remove(&path),
         };
@@ -1530,6 +1534,19 @@ fn file_name(path: &str) -> Option<String> {
     let n = path.trim_end_matches('/').rsplit('/').next()?;
     (!n.is_empty() && n != "." && n != ".." && n != "~" && !n.starts_with('.') && !n.contains(':') && !n.contains('\0'))
         .then(|| n.to_string())
+}
+
+/// The machine's blocker groups, for its own browser (wad-model's
+/// `MACHINE_GROUPS`), when its folder's there: wadd.service's
+/// RuntimeDirectory, so not on a laptop's wadd nor in tests.
+fn write_machine_groups(groups: &[wad_model::browser::BlockGroup]) {
+    let path = Path::new(wad_model::browser::MACHINE_GROUPS);
+    if !path.parent().is_some_and(Path::is_dir) {
+        return;
+    }
+    if let Err(e) = put(path, wad_model::browser::groups_text(groups).as_bytes()) {
+        tracing::warn!("the browser's blocker groups: {e}");
+    }
 }
 
 /// Writes a file whole, readable inside.

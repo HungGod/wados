@@ -10,17 +10,14 @@
 //! Steam's games and Dolphin's need Steam's sign-in and your GitHub
 //! packages (phase 10): they're listed, off, saying so.
 
+use wad_model::browser::BlockGroup;
 use wad_model::catalog::{WEB_APPS, extensions, tools};
 use wad_model::edit::{Library, Op, Payload};
 use wad_model::games::game_of;
-use wad_model::suggest::{Suggestion, suggestions};
 use wad_model::{AppId, DiscImage, Ext, NewVariant, Section, Wadspace};
 
 use crate::builder::side::keys::{Act, Choice, Pick};
 use crate::dnd::Held;
-
-/// How many suggestions per app.
-pub const SUGGESTED: usize = 4;
 
 /// An add-on's icon.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -290,23 +287,70 @@ pub fn block_typed(x: &Wadspace, text: &str) -> Result<Op, String> {
     }))
 }
 
-/// The sites shown to block: the suggested ones (social media), then its
-/// own; each with whether it's blocked.
-pub fn block_pills(x: &Wadspace) -> Vec<(String, bool)> {
-    let blocked = &x.browser.blocked;
-    let mut out: Vec<(String, bool)> =
-        wad_model::browser::SUGGESTED_BLOCKS.iter().map(|s| (s.to_string(), blocked.iter().any(|b| b == s))).collect();
-    for b in blocked {
-        if !out.iter().any(|(s, _)| s == b) {
-            out.push((b.clone(), true));
-        }
-    }
+/// The machine's blocker groups, each with whether it's on in `x`.
+pub fn group_pills(lib: &Library, x: &Wadspace) -> Vec<(BlockGroup, bool)> {
+    lib.block_groups.iter().map(|g| (g.clone(), x.browser.groups.contains(&g.id))).collect()
+}
+
+/// The blocker group `id` on in `x`, or off.
+pub fn group_toggle(x: &Wadspace, id: &str) -> Op {
+    browser_op(x, |p| {
+        p.toggle_group(id);
+    })
+}
+
+/// A blocker group's pill, right-clicked: change it, or remove it (from the
+/// machine, and every wadspace that has it on).
+pub fn group_menu(lib: &Library, g: &BlockGroup) -> Vec<Choice> {
+    let on: Vec<&str> = lib
+        .wadspaces
+        .iter()
+        .filter(|x| !x.is_trashed() && x.browser.groups.contains(&g.id))
+        .map(|x| x.name.as_str())
+        .collect();
+    let mut out = vec![Choice::Heading(match on.len() {
+        0 => format!("{} sites, on in no wadspace", g.sites.len()),
+        n => format!("{} sites, on in {n} wadspace{}", g.sites.len(), if n == 1 { "" } else { "s" }),
+    })];
+    out.push(Choice::Item(Pick {
+        id: format!("group-edit:{}", g.id),
+        label: "Edit group".into(),
+        icon: "pencil",
+        checked: false,
+        off: None,
+        act: Act::Ops(vec![]),
+    }));
+    out.push(Choice::Item(Pick {
+        id: format!("group-remove:{}", g.id),
+        label: "Remove group".into(),
+        icon: "trash",
+        checked: false,
+        off: None,
+        act: Act::Ops(vec![Op::RemoveBlockGroup { id: g.id.clone() }]),
+    }));
     out
 }
 
-/// What's suggested for it (none for one that can't be changed here).
-pub fn suggested(x: &Wadspace, editable: bool) -> Vec<Suggestion> {
-    if editable { suggestions(x, SUGGESTED) } else { vec![] }
+/// A group as its form says (`sites`: typed, a space, comma or line
+/// between): its op, or why it can't be. `id` empty: a new one.
+pub fn group_from(id: &str, name: &str, sites: &str) -> Result<Op, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Give the group a name".into());
+    }
+    let mut out: Vec<String> = vec![];
+    for t in sites.split([' ', ',', '\n', '\t']).filter(|t| !t.trim().is_empty()) {
+        let Some(site) = wad_model::browser::site(t) else {
+            return Err(format!("{} isn’t a website: type them like example.com", t.trim()));
+        };
+        if !out.contains(&site) {
+            out.push(site);
+        }
+    }
+    if out.is_empty() {
+        return Err("Type the sites it blocks: example.com news.com".into());
+    }
+    Ok(Op::SaveBlockGroup { group: BlockGroup { id: id.into(), name: name.into(), sites: out } })
 }
 
 fn piece(item: String) -> Option<Held> {
@@ -663,13 +707,9 @@ mod tests {
     }
 
     #[test]
-    fn suggested_first_for_its_apps_and_none_where_it_cant_change() {
+    fn an_addon_is_added_by_its_op() {
         let lib = sample();
         let x = lib.wadspace("wadspaces").unwrap();
-        let s = suggested(x, true);
-        assert!(s.iter().any(|s| s.item == "vscode:eamodio.gitlens"));
-        assert!(!s.iter().any(|s| s.item == "vscode:anthropic.claude-code"));
-        assert!(suggested(x, false).is_empty());
         assert_eq!(
             add_addon(x, "vscode:eamodio.gitlens"),
             Some(Op::NewVariant {
@@ -720,9 +760,33 @@ mod tests {
         let Ok(Op::SetBrowser { prefs, .. }) = block_typed(&x, "https://www.Example.org/x") else { panic!("an op") };
         assert_eq!(prefs.blocked, vec!["tiktok.com", "example.org"]);
         x.browser = prefs;
-        let pills = block_pills(&x);
-        assert_eq!(pills.len(), wad_model::browser::SUGGESTED_BLOCKS.len() + 1, "its own after the suggested");
-        assert!(pills.contains(&("tiktok.com".into(), true)) && pills.contains(&("x.com".into(), false)));
-        assert_eq!(pills.last(), Some(&("example.org".into(), true)));
+        // Groups: the machine's, a tap each.
+        let lib = sample();
+        let pills = group_pills(&lib, &x);
+        assert_eq!(pills[0].0.id, wad_model::browser::SOCIAL_MEDIA);
+        assert!(!pills[0].1);
+        let Op::SetBrowser { prefs, .. } = group_toggle(&x, wad_model::browser::SOCIAL_MEDIA) else { panic!("an op") };
+        assert_eq!(prefs.groups, vec![wad_model::browser::SOCIAL_MEDIA]);
+        assert_eq!(prefs.blocked, vec!["tiktok.com", "example.org"], "its own stay");
+    }
+
+    #[test]
+    fn a_group_is_made_from_its_form() {
+        let Ok(Op::SaveBlockGroup { group }) = group_from("", " News ", "bbc.co.uk, https://www.cnn.com/x\nbbc.co.uk")
+        else {
+            panic!("an op")
+        };
+        assert_eq!((group.id.as_str(), group.name.as_str()), ("", "News"));
+        assert_eq!(group.sites, vec!["bbc.co.uk", "cnn.com"]);
+        assert!(group_from("", "", "x.com").is_err());
+        assert!(group_from("", "N", "  ").is_err());
+        assert_eq!(group_from("", "N", "x.com nope"), Err("nope isn’t a website: type them like example.com".into()));
+        let lib = sample();
+        let g = lib.block_groups[0].clone();
+        let menu = group_menu(&lib, &g);
+        let Choice::Item(edit) = &menu[1] else { panic!("{menu:?}") };
+        assert_eq!(edit.id, format!("group-edit:{}", g.id));
+        let Choice::Item(rm) = &menu[2] else { panic!("{menu:?}") };
+        assert_eq!(rm.act, Act::Ops(vec![Op::RemoveBlockGroup { id: g.id.clone() }]));
     }
 }

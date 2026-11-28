@@ -509,7 +509,7 @@ fn no_unit_or_extra_file_has_a_secret_in_it() {
     for w in &lib.wadspaces {
         let run = Run { image: BASE_IMAGE, mounts: &Mounts::new(), wallpaper: None };
         let mut text: String = units::units(w, &run, &m, Some(&s)).into_iter().map(|(_, t)| t).collect();
-        for (_, f) in extras::files(w, &lib.keys, &Mounts::new()) {
+        for (_, f) in extras::files(w, &lib.keys, &lib.block_groups, &Mounts::new()) {
             text.push_str(&f.unwrap_or_default());
         }
         let lower = text.to_lowercase();
@@ -553,14 +553,26 @@ fn its_extra_folder() {
     assert_eq!(extras::webapps_json(ws(&lib, "desk-lab")), "[]\n");
 
     // What links open in: Focus in IntelligenceQuest; none without WadBrowser.
-    assert!(extras::wadbrowser_conf(ws(&lib, "intelligencequest")).is_some_and(|c| c.contains("\ndefault = focus\n")));
+    let groups = &lib.block_groups;
     assert!(
-        extras::wadbrowser_conf(ws(&lib, "travel"))
+        extras::wadbrowser_conf(ws(&lib, "intelligencequest"), groups)
+            .is_some_and(|c| c.contains("\ndefault = focus\n"))
+    );
+    assert!(
+        extras::wadbrowser_conf(ws(&lib, "travel"), groups)
             .is_some_and(|c| c.contains("\ndefault = full\n") && c.contains("\nblocker = on\n"))
     );
-    assert_eq!(extras::wadbrowser_conf(ws(&lib, "desk-lab")), None);
+    assert_eq!(extras::wadbrowser_conf(ws(&lib, "desk-lab"), groups), None);
+    // A blocker group on: its sites are written in with its own, by name.
+    let mut travel = ws(&lib, "travel").clone();
+    travel.browser.groups = vec![wad_model::browser::SOCIAL_MEDIA.into()];
+    travel.browser.blocked = vec!["example.com".into()];
+    let c = extras::wadbrowser_conf(&travel, groups).unwrap();
+    let block = c.lines().find(|l| l.starts_with("block = ")).unwrap();
+    assert!(block.contains("reddit.com") && block.ends_with(" example.com"), "{block}");
+    assert!(c.contains("\ngroups = \n"), "the groups already counted in: {c}");
 
-    let files = extras::files(ws(&lib, "desk-lab"), &lib.keys, &Mounts::new());
+    let files = extras::files(ws(&lib, "desk-lab"), &lib.keys, &lib.block_groups, &Mounts::new());
     let names: Vec<(&str, bool)> = files.iter().map(|(n, f)| (*n, f.is_some())).collect();
     assert_eq!(
         names,

@@ -1,22 +1,26 @@
 //! Settings ▸ Browser: WadBrowser's settings on this machine, which the
 //! browser has no page for. Its address bar, its ad and tracker blocker,
-//! what it searches with, the sites it blocks (social media a tap each, or
-//! one typed), and the machine's web apps (made from pages: Remove).
+//! what it blocks (the machine's blocker groups, each on or off here, made
+//! and changed here or in the Builder; and sites of its own, typed), and the
+//! machine's web apps (made from pages: Remove). It searches with
+//! DuckDuckGo: that isn't a setting.
 //!
 //! They're the user's `~/.config/wadbrowser/wadbrowser.conf` (wad-model's
-//! `browser` format), which the browser watches: a change counts in its
-//! open windows at once. A wadspace's browser has its own, from its design
-//! (the Builder's add-ons).
+//! `browser` format: the groups on by id), which the browser watches: a
+//! change counts in its open windows at once. The groups themselves are the
+//! Library's (wadd's), which the browser reads from the file wadd keeps. A
+//! wadspace's browser has its own settings, from its design (the Builder's
+//! add-ons).
 
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
 use gtk::prelude::*;
-use wad_gtk::form::{Choice, TextField, Toggle, opt};
+use wad_gtk::form::{TextField, Toggle};
 use wad_gtk::kit::{self, Group, Row, Tone, Variant};
 use wad_model::BrowserApp;
-use wad_model::browser::{self, BrowserPrefs, ConfText, SUGGESTED_BLOCKS, Search};
+use wad_model::browser::{self, BlockGroup, BrowserPrefs, ConfText};
 use wad_proto::Event;
 
 use crate::panel::{Ctx, Panel};
@@ -43,6 +47,12 @@ button.br-site.on {
   background-color: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 .br-add { margin-top: 4px; }
+.br-edit {
+  margin-top: 6px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line-strong);
+}
 "#;
 
 /// The settings as the browser reads them here: the address bar, and the rest.
@@ -100,14 +110,21 @@ fn store(c: &Conf) -> std::io::Result<()> {
 }
 
 pub fn make(_: &Ctx) -> Rc<dyn Panel> {
-    Rc::new_cyclic(|me| BrowserPanel { me: me.clone(), ui: RefCell::default(), apps: RefCell::default() })
+    Rc::new_cyclic(|me| BrowserPanel {
+        me: me.clone(),
+        ui: RefCell::default(),
+        apps: RefCell::default(),
+        groups: RefCell::default(),
+    })
 }
 
 struct Ui {
     address: Toggle,
     blocker: Toggle,
-    search: Choice<Search>,
-    social: Vec<(&'static str, gtk::Button)>,
+    groups: gtk::Box,
+    groups_note: gtk::Label,
+    /// The group being made or changed (its form), under the list.
+    edit: GroupForm,
     own: gtk::Box,
     own_note: gtk::Label,
     field: TextField,
@@ -116,11 +133,24 @@ struct Ui {
     note: gtk::Label,
 }
 
+/// New group, or a group changed: its name and sites.
+struct GroupForm {
+    root: gtk::Box,
+    title: gtk::Label,
+    name: TextField,
+    sites: TextField,
+    remove: gtk::Button,
+    /// The group's id ("": a new one).
+    id: RefCell<String>,
+}
+
 pub struct BrowserPanel {
     me: Weak<BrowserPanel>,
     ui: RefCell<Option<Ui>>,
     /// The machine's web apps, as wadd last said.
     apps: RefCell<Vec<BrowserApp>>,
+    /// The machine's blocker groups, as wadd last said.
+    groups: RefCell<Vec<BlockGroup>>,
 }
 
 impl BrowserPanel {
@@ -171,25 +201,11 @@ impl BrowserPanel {
         let Some(ui) = &*self.ui.borrow() else { return };
         ui.address.set(c.address_bar);
         ui.blocker.set(c.prefs.ad_blocker);
-        ui.search.set(c.prefs.search);
-        for (site, b) in &ui.social {
-            let on = c.prefs.blocked.iter().any(|x| x == site);
-            if on {
-                b.add_css_class("on");
-            } else {
-                b.remove_css_class("on");
-            }
-            b.set_tooltip_text(Some(&if on {
-                format!("{site} is blocked: click to unblock it")
-            } else {
-                format!("Block {site}")
-            }));
-        }
+        self.paint_groups(c);
         while let Some(c) = ui.own.first_child() {
             ui.own.remove(&c);
         }
-        let own: Vec<&String> = c.prefs.blocked.iter().filter(|s| !SUGGESTED_BLOCKS.contains(&s.as_str())).collect();
-        for site in &own {
+        for site in &c.prefs.blocked {
             let row = Row::new(Some("ban"), Tone::Plain, site, "And its subdomains").named(&format!("blocked-{site}"));
             let b = kit::button("Unblock", Variant::Secondary, None, true);
             b.set_widget_name(&format!("unblock-{site}"));
@@ -205,8 +221,143 @@ impl BrowserPanel {
             row.ctl.append(&b);
             ui.own.append(&row.root);
         }
-        ui.own_note.set_visible(own.is_empty());
-        ui.own.set_visible(!own.is_empty());
+        ui.own_note.set_visible(c.prefs.blocked.is_empty());
+        ui.own.set_visible(!c.prefs.blocked.is_empty());
+    }
+
+    /// The machine's groups, each on here or not (`c`), with Edit.
+    fn paint_groups(&self, c: &Conf) {
+        let Some(ui) = &*self.ui.borrow() else { return };
+        while let Some(w) = ui.groups.first_child() {
+            ui.groups.remove(&w);
+        }
+        let groups = self.groups.borrow().clone();
+        for g in &groups {
+            let row =
+                Row::new(Some("layers"), Tone::Plain, &g.name, &group_summary(g)).named(&format!("group-{}", g.id));
+            let edit = kit::button("Edit", Variant::Secondary, None, true);
+            edit.set_widget_name(&format!("edit-group-{}", g.id));
+            let (w, gc) = (self.me.clone(), g.clone());
+            edit.connect_clicked(move |_| {
+                if let Some(me) = w.upgrade() {
+                    me.open_form(Some(&gc));
+                }
+            });
+            row.ctl.append(&edit);
+            let (w, id) = (self.me.clone(), g.id.clone());
+            let on = Toggle::new(c.prefs.groups.contains(&g.id), move |on| {
+                if let Some(me) = w.upgrade() {
+                    let id = id.clone();
+                    me.change(move |c| {
+                        if c.prefs.groups.contains(&id) != on {
+                            c.prefs.toggle_group(&id);
+                        }
+                    });
+                }
+            })
+            .named(&format!("group-on-{}", g.id));
+            row.ctl.append(&on.root);
+            ui.groups.append(&row.root);
+        }
+        ui.groups_note.set_visible(groups.is_empty());
+        ui.groups.set_visible(!groups.is_empty());
+    }
+
+    /// The group form, for `g` (None: a new group).
+    fn open_form(&self, g: Option<&BlockGroup>) {
+        let Some(ui) = &*self.ui.borrow() else { return };
+        let f = &ui.edit;
+        *f.id.borrow_mut() = g.map(|g| g.id.clone()).unwrap_or_default();
+        f.title.set_label(if g.is_some() { "EDIT GROUP" } else { "NEW GROUP" });
+        f.name.text.set_text(g.map(|g| g.name.as_str()).unwrap_or(""));
+        f.sites.text.set_text(&g.map(|g| g.sites.join(" ")).unwrap_or_default());
+        f.name.set_error(None);
+        f.sites.set_error(None);
+        f.remove.set_visible(g.is_some());
+        f.root.set_visible(true);
+        f.name.text.grab_focus();
+    }
+
+    fn close_form(&self) {
+        if let Some(ui) = &*self.ui.borrow() {
+            ui.edit.root.set_visible(false);
+        }
+    }
+
+    /// The form's group saved (a new one is on here at once).
+    fn save_group(&self) {
+        let Some(ctx) = CTX.with_borrow(|c| c.clone()) else { return };
+        let (id, name, sites) = {
+            let Some(ui) = &*self.ui.borrow() else { return };
+            let f = &ui.edit;
+            (f.id.borrow().clone(), f.name.text.text().to_string(), f.sites.text.text().to_string())
+        };
+        let group = match group_from(&id, &name, &sites) {
+            Ok(g) => g,
+            Err((on_name, why)) => {
+                if let Some(ui) = &*self.ui.borrow() {
+                    let (bad, ok) =
+                        if on_name { (&ui.edit.name, &ui.edit.sites) } else { (&ui.edit.sites, &ui.edit.name) };
+                    bad.set_error(Some(&why));
+                    ok.set_error(None);
+                }
+                return;
+            }
+        };
+        let w = self.me.clone();
+        let new = id.is_empty();
+        ctx.link.call(
+            move |wadd| async move { wadd.op(wad_model::Op::SaveBlockGroup { group }).await },
+            move |r| {
+                let Some(me) = w.upgrade() else { return };
+                match r {
+                    Ok(out) => {
+                        me.close_form();
+                        if new && let Some(id) = out.created {
+                            me.change(move |c| {
+                                if !c.prefs.groups.contains(&id) {
+                                    c.prefs.groups.push(id);
+                                }
+                            });
+                        }
+                    }
+                    Err(e) => me.say(&format!("The group wasn’t saved: {}", e.message)),
+                }
+            },
+        );
+    }
+
+    fn remove_group(&self) {
+        let Some(ctx) = CTX.with_borrow(|c| c.clone()) else { return };
+        let id = match &*self.ui.borrow() {
+            Some(ui) => ui.edit.id.borrow().clone(),
+            None => return,
+        };
+        if id.is_empty() {
+            return;
+        }
+        let w = self.me.clone();
+        let gone = id.clone();
+        ctx.link.call(
+            move |wadd| async move { wadd.op(wad_model::Op::RemoveBlockGroup { id }).await },
+            move |r| {
+                let Some(me) = w.upgrade() else { return };
+                match r {
+                    Ok(_) => {
+                        me.close_form();
+                        me.change(move |c| c.prefs.groups.retain(|g| g != &gone));
+                    }
+                    Err(e) => me.say(&format!("The group wasn’t removed: {}", e.message)),
+                }
+            },
+        );
+    }
+
+    fn say(&self, text: &str) {
+        if let Some(ui) = &*self.ui.borrow() {
+            ui.note.set_label(text);
+            ui.note.set_visible(true);
+        }
     }
 
     /// The machine's web apps, as wadd last said.
@@ -291,54 +442,38 @@ impl Panel for BrowserPanel {
         let row = Row::new(Some("shield-check"), Tone::Plain, "Ad and Tracker Blocker", "EasyList and EasyPrivacy");
         row.ctl.append(&blocker.root);
         main.add(&row.root);
-        let w = self.me.clone();
-        let search = Choice::new(Search::ALL.map(|s| opt(s, s.name())), c.prefs.search, move |s: &Search| {
-            let s = *s;
-            if let Some(me) = w.upgrade() {
-                me.change(|c| c.prefs.search = s);
-            }
-        })
-        .named("browser-search");
-        let row =
-            Row::new(Some("search"), Tone::Plain, "Search Engine", "What the address bar and new tabs search with");
-        row.ctl.append(&search.root);
-        main.add(&row.root);
         let note = parts::note("", "set-err");
         main.root.append(&note);
         page.add(&main.root);
 
-        let blocked = Group::new("Blocked Sites", "They don’t open in WadBrowser, nor do their subdomains.");
+        let groups = Group::new(
+            "Blocker Groups",
+            "Sites blocked together: one switch for them all. The machine’s, so they’re in the Builder too.",
+        );
+        groups.list.set_visible(false);
+        let group_list = gtk::Box::builder().orientation(gtk::Orientation::Vertical).css_classes(["kit-list"]).build();
+        groups.root.append(&group_list);
+        let groups_note = parts::note("None yet: make one below.", "set-note");
+        groups.root.append(&groups_note);
+        let edit = group_form(&self.me);
+        groups.root.append(&edit.root);
+        let new = kit::button("New group", Variant::Secondary, Some("plus"), true);
+        new.set_widget_name("browser-new-group");
+        new.set_halign(gtk::Align::Start);
+        let w = self.me.clone();
+        new.connect_clicked(move |_| {
+            if let Some(me) = w.upgrade() {
+                me.open_form(None);
+            }
+        });
+        groups.root.append(&new);
+        page.add(&groups.root);
+
+        let blocked = Group::new("Your Own Sites", "Blocked too, with their subdomains.");
         blocked.list.set_visible(false);
-        blocked.root.append(&kit::label("SOCIAL MEDIA", &["br-h4"]));
-        let grid = gtk::FlowBox::builder()
-            .selection_mode(gtk::SelectionMode::None)
-            .column_spacing(8)
-            .row_spacing(8)
-            .min_children_per_line(3)
-            .max_children_per_line(6)
-            .build();
-        let mut social = vec![];
-        for site in SUGGESTED_BLOCKS {
-            let b = gtk::Button::builder().label(site).css_classes(["br-site"]).build();
-            b.set_widget_name(&format!("block-{site}"));
-            let w = self.me.clone();
-            b.connect_clicked(move |_| {
-                if let Some(me) = w.upgrade() {
-                    me.change(|c| {
-                        if !c.prefs.unblock(site) {
-                            c.prefs.block(site);
-                        }
-                    });
-                }
-            });
-            grid.insert(&b, -1);
-            social.push((site, b));
-        }
-        blocked.root.append(&grid);
-        blocked.root.append(&kit::label("YOUR OWN", &["br-h4"]));
         let own = gtk::Box::builder().orientation(gtk::Orientation::Vertical).css_classes(["kit-list"]).build();
         blocked.root.append(&own);
-        let own_note = parts::note("None of your own yet: type one below.", "set-note");
+        let own_note = parts::note("None yet: type one below.", "set-note");
         blocked.root.append(&own_note);
         let add = gtk::Box::builder().spacing(8).css_classes(["br-add"]).build();
         let field = TextField::new("", "A website to block: example.com").named("browser-block-site");
@@ -372,8 +507,19 @@ impl Panel for BrowserPanel {
         web.root.append(&apps_note);
         page.add(&web.root);
 
-        *self.ui.borrow_mut() =
-            Some(Ui { address, blocker, search, social, own, own_note, field, apps, apps_note, note });
+        *self.ui.borrow_mut() = Some(Ui {
+            address,
+            blocker,
+            groups: group_list,
+            groups_note,
+            edit,
+            own,
+            own_note,
+            field,
+            apps,
+            apps_note,
+            note,
+        });
         self.paint(&c);
         self.paint_apps();
         page.root.upcast()
@@ -381,11 +527,14 @@ impl Panel for BrowserPanel {
 
     fn on_event(&self, _: &Ctx, i: &Incoming) {
         if let Incoming::Event(Event::Library(lib)) = i {
-            if *self.apps.borrow() == lib.web_apps {
-                return;
+            if *self.groups.borrow() != *lib.block_groups {
+                *self.groups.borrow_mut() = lib.block_groups.to_vec();
+                self.paint_groups(&load());
             }
-            *self.apps.borrow_mut() = lib.web_apps.clone();
-            self.paint_apps();
+            if *self.apps.borrow() != lib.web_apps {
+                *self.apps.borrow_mut() = lib.web_apps.clone();
+                self.paint_apps();
+            }
         }
     }
 
@@ -393,6 +542,90 @@ impl Panel for BrowserPanel {
         // Read again: it may have changed since (by hand, or another Settings).
         self.paint(&load());
     }
+}
+
+/// A group's line under its name: how many sites, and the first few.
+fn group_summary(g: &BlockGroup) -> String {
+    let shown: Vec<&str> = g.sites.iter().take(3).map(String::as_str).collect();
+    let more = g.sites.len().saturating_sub(shown.len());
+    let sites = if more > 0 { format!("{} and {more} more", shown.join(", ")) } else { shown.join(", ") };
+    match g.sites.len() {
+        0 => "No sites".into(),
+        1 => sites,
+        n => format!("{n} sites: {sites}"),
+    }
+}
+
+/// The group a form says, or what's wrong (true: with its name).
+fn group_from(id: &str, name: &str, sites: &str) -> Result<BlockGroup, (bool, String)> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err((true, "Give the group a name".into()));
+    }
+    let mut out: Vec<String> = vec![];
+    for t in sites.split([' ', ',', '\n', '\t']).filter(|t| !t.trim().is_empty()) {
+        let Some(site) = browser::site(t) else {
+            return Err((false, format!("{} isn’t a website: type them like example.com", t.trim())));
+        };
+        if !out.contains(&site) {
+            out.push(site);
+        }
+    }
+    if out.is_empty() {
+        return Err((false, "Type the sites it blocks: example.com news.com".into()));
+    }
+    Ok(BlockGroup { id: id.into(), name: name.into(), sites: out })
+}
+
+/// The group form (hidden till New group or Edit).
+fn group_form(me: &Weak<BrowserPanel>) -> GroupForm {
+    let root = gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(10).css_classes(["br-edit"]).build();
+    root.set_visible(false);
+    let title = kit::label("NEW GROUP", &["br-h4"]);
+    root.append(&title);
+    let name = TextField::new("Name", "Distractions").named("browser-group-name");
+    root.append(&name.root);
+    let sites = TextField::new("Sites it blocks", "news.com, example.com").named("browser-group-sites");
+    root.append(&sites.root);
+    let row = gtk::Box::builder().spacing(8).build();
+    let remove = kit::button("Remove group", Variant::Secondary, Some("trash"), true);
+    remove.set_widget_name("browser-group-remove");
+    remove.set_hexpand(true);
+    remove.set_halign(gtk::Align::Start);
+    let cancel = kit::button("Cancel", Variant::Secondary, None, true);
+    let save = kit::button("Save", Variant::Primary, None, true);
+    save.set_widget_name("browser-group-save");
+    row.append(&remove);
+    row.append(&cancel);
+    row.append(&save);
+    root.append(&row);
+    let w = me.clone();
+    save.connect_clicked(move |_| {
+        if let Some(me) = w.upgrade() {
+            me.save_group();
+        }
+    });
+    for t in [&name.text, &sites.text] {
+        let w = me.clone();
+        t.connect_activate(move |_| {
+            if let Some(me) = w.upgrade() {
+                me.save_group();
+            }
+        });
+    }
+    let w = me.clone();
+    cancel.connect_clicked(move |_| {
+        if let Some(me) = w.upgrade() {
+            me.close_form();
+        }
+    });
+    let w = me.clone();
+    remove.connect_clicked(move |_| {
+        if let Some(me) = w.upgrade() {
+            me.remove_group();
+        }
+    });
+    GroupForm { root, title, name, sites, remove, id: RefCell::default() }
 }
 
 #[cfg(test)]
@@ -403,11 +636,24 @@ mod tests {
     fn the_conf_reads_back() {
         let c = Conf {
             address_bar: false,
-            prefs: BrowserPrefs { ad_blocker: false, search: Search::Wikipedia, blocked: vec!["x.com".into()] },
+            prefs: BrowserPrefs {
+                ad_blocker: false,
+                groups: vec!["social-media".into()],
+                blocked: vec!["x.com".into()],
+            },
         };
         assert_eq!(Conf::parse(&c.text()), c);
         assert_eq!(Conf::parse(""), Conf::default());
         assert!(Conf::default().address_bar && Conf::default().prefs.ad_blocker);
+    }
+
+    #[test]
+    fn a_group_is_read_from_its_form() {
+        let g = group_from("", " News ", "bbc.co.uk, https://www.cnn.com/x bbc.co.uk").unwrap();
+        assert_eq!((g.name.as_str(), g.sites.clone()), ("News", vec!["bbc.co.uk".to_string(), "cnn.com".into()]));
+        assert!(group_from("", "", "x.com").unwrap_err().0, "the name is what's wrong");
+        assert!(!group_from("", "N", "x.com nope").unwrap_err().0, "a site is");
+        assert_eq!(group_summary(&g), "2 sites: bbc.co.uk, cnn.com");
     }
 
     #[test]

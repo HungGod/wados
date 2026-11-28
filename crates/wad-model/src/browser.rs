@@ -11,13 +11,27 @@
 //! ```text
 //! default = full          # full (an address bar) or focus (none)
 //! blocker = on            # the ad and tracker blocker
-//! search = duckduckgo     # duckduckgo, startpage or wikipedia
-//! block = x.com reddit.com  # sites that don't open
+//! groups = social-media   # blocker groups: their sites don't open
+//! block = x.com reddit.com  # sites of its own that don't open
 //! ```
+//!
+//! **Blocker groups** are the machine's (the Library's `block_groups`): a
+//! name and its sites, one tap to block them all in a wadspace or in
+//! Settings. Social media's is made at first. A wadspace's file has them
+//! counted in already (wad-gen: `block` is every site); the machine's
+//! browser reads `groups` against [`MACHINE_GROUPS`], which wadd keeps as the
+//! groups are (a group changed counts at once, in every open window).
 
 use serde::{Deserialize, Serialize};
 
-/// Sites offered in the site blocker, a tap each: social media.
+/// The machine's blocker groups, for its own browser (wadd writes them as
+/// the Library has them: `id = site site …`).
+pub const MACHINE_GROUPS: &str = "/run/wados/browser/groups.conf";
+
+/// Social media's group, made at first: its id.
+pub const SOCIAL_MEDIA: &str = "social-media";
+
+/// Social media's sites (its group's at first).
 pub const SUGGESTED_BLOCKS: [&str; 12] = [
     "facebook.com",
     "instagram.com",
@@ -33,55 +47,101 @@ pub const SUGGESTED_BLOCKS: [&str; 12] = [
     "bsky.app",
 ];
 
-/// The search engines the address bar can use.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Search {
-    #[default]
-    DuckDuckGo,
-    Startpage,
-    Wikipedia,
+/// A blocker group: sites blocked together, a tap for them all.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockGroup {
+    pub id: String,
+    pub name: String,
+    /// As [`site`] keeps them.
+    #[serde(default)]
+    pub sites: Vec<String>,
 }
 
-impl Search {
-    pub const ALL: [Search; 3] = [Search::DuckDuckGo, Search::Startpage, Search::Wikipedia];
-
-    pub fn id(self) -> &'static str {
-        match self {
-            Search::DuckDuckGo => "duckduckgo",
-            Search::Startpage => "startpage",
-            Search::Wikipedia => "wikipedia",
-        }
+impl BlockGroup {
+    /// Its sites as [`site`] keeps them, once each.
+    pub fn tidied(mut self) -> Self {
+        self.sites = tidy(std::mem::take(&mut self.sites));
+        self.name = self.name.trim().to_string();
+        self
     }
+}
 
-    pub fn name(self) -> &'static str {
-        match self {
-            Search::DuckDuckGo => "DuckDuckGo",
-            Search::Startpage => "Startpage",
-            Search::Wikipedia => "Wikipedia",
-        }
-    }
+/// The groups a machine starts with: social media's.
+pub fn default_groups() -> Vec<BlockGroup> {
+    vec![BlockGroup {
+        id: SOCIAL_MEDIA.into(),
+        name: "Social media".into(),
+        sites: SUGGESTED_BLOCKS.iter().map(|s| s.to_string()).collect(),
+    }]
+}
 
-    pub fn from_id(id: &str) -> Option<Search> {
-        Search::ALL.into_iter().find(|s| s.id() == id)
+/// The machine's blocker groups: social media's at first (a Library with
+/// none written down yet), and whatever's been made, changed or removed since.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct BlockGroups(pub Vec<BlockGroup>);
+
+impl Default for BlockGroups {
+    fn default() -> Self {
+        BlockGroups(default_groups())
     }
+}
+
+impl std::ops::Deref for BlockGroups {
+    type Target = Vec<BlockGroup>;
+    fn deref(&self) -> &Vec<BlockGroup> {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for BlockGroups {
+    fn deref_mut(&mut self) -> &mut Vec<BlockGroup> {
+        &mut self.0
+    }
+}
+
+/// A new group's id, from its name (`My Distractions` → `my-distractions`),
+/// not one of `taken`.
+pub fn group_id(name: &str, taken: &[String]) -> String {
+    let mut base: String = name
+        .trim()
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect::<String>()
+        .split('-')
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    if base.is_empty() {
+        base = "group".into();
+    }
+    let mut id = base.clone();
+    let mut n = 2;
+    while taken.contains(&id) {
+        id = format!("{base}-{n}");
+        n += 1;
+    }
+    id
 }
 
 /// A browser's settings (a wadspace's, or the machine's).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct BrowserPrefs {
-    /// The ad and tracker blocker.
+    /// The ad and tracker blocker. (It searches with DuckDuckGo: that's
+    /// not a setting; a `search` an older file has is skipped.)
     pub ad_blocker: bool,
-    /// What the address bar searches with.
-    pub search: Search,
-    /// Sites that don't open (each with its subdomains), as [`site`] keeps them.
+    /// The blocker groups on (their ids): their sites don't open.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
+    /// Its own sites that don't open (each with its subdomains), as [`site`] keeps them.
     pub blocked: Vec<String>,
 }
 
 impl Default for BrowserPrefs {
     fn default() -> Self {
-        BrowserPrefs { ad_blocker: true, search: Search::default(), blocked: vec![] }
+        BrowserPrefs { ad_blocker: true, groups: vec![], blocked: vec![] }
     }
 }
 
@@ -108,19 +168,82 @@ impl BrowserPrefs {
         self.blocked.len() != before
     }
 
-    /// Every blocked site as a [`site`], once each, in order.
+    /// Every blocked site as a [`site`], once each, in order; each group once.
     pub fn tidied(mut self) -> Self {
-        let mut seen = vec![];
-        for s in std::mem::take(&mut self.blocked) {
-            if let Some(s) = site(&s)
-                && !seen.contains(&s)
-            {
-                seen.push(s);
+        self.blocked = tidy(std::mem::take(&mut self.blocked));
+        let mut groups: Vec<String> = vec![];
+        for g in std::mem::take(&mut self.groups) {
+            let g = g.trim().to_string();
+            if !g.is_empty() && !groups.contains(&g) {
+                groups.push(g);
             }
         }
-        self.blocked = seen;
+        self.groups = groups;
         self
     }
+
+    /// The group `id` on, or off: whether it's on now.
+    pub fn toggle_group(&mut self, id: &str) -> bool {
+        if let Some(i) = self.groups.iter().position(|g| g == id) {
+            self.groups.remove(i);
+            false
+        } else {
+            self.groups.push(id.to_string());
+            true
+        }
+    }
+
+    /// Every site that doesn't open: its groups' (those of `groups` it has
+    /// on), then its own; once each.
+    pub fn sites(&self, groups: &[BlockGroup]) -> Vec<String> {
+        let mut out: Vec<String> = vec![];
+        let from_groups = groups.iter().filter(|g| self.groups.contains(&g.id)).flat_map(|g| g.sites.iter());
+        for s in from_groups.chain(self.blocked.iter()) {
+            if !out.contains(s) {
+                out.push(s.clone());
+            }
+        }
+        out
+    }
+}
+
+/// `sites` as [`site`] keeps them, once each, in order.
+fn tidy(sites: Vec<String>) -> Vec<String> {
+    let mut seen = vec![];
+    for s in sites {
+        if let Some(s) = site(&s)
+            && !seen.contains(&s)
+        {
+            seen.push(s);
+        }
+    }
+    seen
+}
+
+/// The machine's groups file ([`MACHINE_GROUPS`]): `id = site site …` a line.
+pub fn groups_text(groups: &[BlockGroup]) -> String {
+    let mut out = String::from("# WadBrowser's blocker groups on this machine (wadd's, as the Library has them).\n");
+    for g in groups {
+        out.push_str(&format!("# {}\n{} = {}\n", g.name.replace('\n', " "), g.id, g.sites.join(" ")));
+    }
+    out
+}
+
+/// What a groups file says: each group's id and sites (names aren't kept).
+pub fn parse_groups(text: &str) -> Vec<BlockGroup> {
+    let mut out: Vec<BlockGroup> = vec![];
+    for line in text.lines() {
+        let line = line.split_once('#').map_or(line, |(l, _)| l).trim();
+        let Some((id, sites)) = line.split_once('=') else { continue };
+        let id = id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        let sites: Vec<String> = sites.split([' ', ',', '\t']).filter(|s| !s.is_empty()).map(String::from).collect();
+        out.retain(|g| g.id != id);
+        out.push(BlockGroup { id: id.into(), name: id.into(), sites: tidy(sites) });
+    }
+    out
 }
 
 /// What someone typed as a site to block, as the blocker keeps it: its host,
@@ -159,7 +282,7 @@ pub struct ConfText {
     /// `default`: the address bar (true) or not (focus).
     pub address_bar: Option<bool>,
     pub ad_blocker: Option<bool>,
-    pub search: Option<Search>,
+    pub groups: Option<Vec<String>>,
     pub blocked: Option<Vec<String>>,
 }
 
@@ -181,10 +304,9 @@ impl ConfText {
                     "off" | "false" | "no" => c.ad_blocker = Some(false),
                     _ => {}
                 },
-                "search" => {
-                    if let Some(s) = Search::from_id(value) {
-                        c.search = Some(s);
-                    }
+                "groups" => {
+                    c.groups =
+                        Some(value.split([' ', ',', '\t']).filter(|s| !s.is_empty()).map(String::from).collect());
                 }
                 "block" => {
                     let mut p = BrowserPrefs { blocked: vec![], ..Default::default() };
@@ -207,8 +329,8 @@ impl ConfText {
         if let Some(b) = self.ad_blocker {
             prefs.ad_blocker = b;
         }
-        if let Some(s) = self.search {
-            prefs.search = s;
+        if let Some(g) = &self.groups {
+            prefs.groups = g.clone();
         }
         if let Some(b) = &self.blocked {
             prefs.blocked = b.clone();
@@ -228,9 +350,9 @@ pub fn conf(about: &str, address_bar: bool, prefs: &BrowserPrefs) -> String {
     out.push_str(&format!("default = {}\n", if address_bar { "full" } else { "focus" }));
     out.push_str("# The ad and tracker blocker.\n");
     out.push_str(&format!("blocker = {}\n", if prefs.ad_blocker { "on" } else { "off" }));
-    out.push_str("# What the address bar searches with: duckduckgo, startpage or wikipedia.\n");
-    out.push_str(&format!("search = {}\n", prefs.search.id()));
-    out.push_str("# Sites that don't open (and their subdomains).\n");
+    out.push_str("# Blocker groups on (their sites don't open): the machine's, by id.\n");
+    out.push_str(&format!("groups = {}\n", prefs.groups.join(" ")));
+    out.push_str("# Sites of its own that don't open (and their subdomains).\n");
     out.push_str(&format!("block = {}\n", prefs.blocked.join(" ")));
     out
 }
@@ -273,7 +395,7 @@ mod tests {
     fn a_conf_reads_back_what_was_written() {
         let prefs = BrowserPrefs {
             ad_blocker: false,
-            search: Search::Startpage,
+            groups: vec![SOCIAL_MEDIA.into(), "mine".into()],
             blocked: vec!["x.com".into(), "reddit.com".into()],
         };
         let text = conf("WadBrowser's settings\n\nfor tests", false, &prefs);
@@ -291,8 +413,7 @@ mod tests {
         let mut bar = true;
         ConfText::parse("blocker = off\nblock = x.com, tiktok.com\n").over(&mut p, &mut bar);
         ConfText::parse("default = focus # mine\nsearch = wikipedia\nnonsense\n").over(&mut p, &mut bar);
-        assert!(!p.ad_blocker && !bar);
-        assert_eq!(p.search, Search::Wikipedia);
+        assert!(!p.ad_blocker && !bar, "an older file's search is skipped");
         assert_eq!(p.blocked, vec!["x.com", "tiktok.com"]);
         // An empty `block =` unblocks everything.
         ConfText::parse("block =\n").over(&mut p, &mut bar);
@@ -305,5 +426,50 @@ mod tests {
         let p: BrowserPrefs = serde_json::from_str(r#"{"blocked":["https://www.X.com/", "x.com", "nope"]}"#).unwrap();
         assert!(p.ad_blocker);
         assert_eq!(p.tidied().blocked, vec!["x.com"]);
+    }
+
+    #[test]
+    fn a_groups_sites_count_while_its_on() {
+        let groups = default_groups();
+        assert_eq!(groups[0].id, SOCIAL_MEDIA);
+        assert!(groups[0].sites.iter().any(|s| s == "reddit.com"));
+        let mut p = BrowserPrefs { blocked: vec!["example.com".into(), "x.com".into()], ..Default::default() };
+        assert_eq!(p.sites(&groups), vec!["example.com", "x.com"]);
+        assert!(p.toggle_group(SOCIAL_MEDIA));
+        let all = p.sites(&groups);
+        assert_eq!(all.len(), SUGGESTED_BLOCKS.len() + 1, "x.com once: {all:?}");
+        assert!(all.contains(&"example.com".to_string()));
+        assert!(!p.toggle_group(SOCIAL_MEDIA));
+        // A group that's gone counts for nothing.
+        p.groups = vec!["gone".into()];
+        assert_eq!(p.sites(&groups), vec!["example.com", "x.com"]);
+    }
+
+    #[test]
+    fn the_groups_file_reads_back() {
+        let groups = vec![
+            default_groups().remove(0),
+            BlockGroup { id: "news".into(), name: "News # and = more".into(), sites: vec!["bbc.co.uk".into()] },
+        ];
+        let back = parse_groups(&groups_text(&groups));
+        assert_eq!(
+            back.iter().map(|g| (&g.id, &g.sites)).collect::<Vec<_>>(),
+            groups.iter().map(|g| (&g.id, &g.sites)).collect::<Vec<_>>()
+        );
+        assert!(parse_groups("# nothing\n= x.com\nbad\n").is_empty());
+    }
+
+    #[test]
+    fn a_new_groups_id_is_its_name() {
+        assert_eq!(group_id("My Distractions!", &[]), "my-distractions");
+        assert_eq!(group_id("Social media", &[SOCIAL_MEDIA.into()]), "social-media-2");
+        assert_eq!(group_id("  ", &[]), "group");
+    }
+
+    #[test]
+    fn a_library_without_groups_has_social_medias() {
+        let groups: BlockGroups = serde_json::from_str("[]").unwrap();
+        assert!(groups.is_empty(), "removed ones stay removed");
+        assert_eq!(BlockGroups::default().len(), 1);
     }
 }

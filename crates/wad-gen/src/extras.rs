@@ -20,6 +20,7 @@
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use wad_model::browser::{BlockGroup, BrowserPrefs};
 use wad_model::{AppId, DiscImage, KeyRef, ProjectKind, Secret, SecretKind, Wadspace, Wallpaper, catalog, look};
 
 use crate::recipes::{self, Recipe};
@@ -45,14 +46,20 @@ pub fn dir(state_dir: &str, id: &str) -> String {
 }
 
 /// Its files as they are now: (name, contents), or none for one that goes
-/// (no WadBrowser, no keys). wadd writes them before it starts.
-pub fn files(ws: &Wadspace, keys: &[Secret], mounts: &Mounts) -> Vec<(&'static str, Option<String>)> {
+/// (no WadBrowser, no keys). wadd writes them before it starts. `groups`:
+/// the machine's blocker groups (the Library's).
+pub fn files(
+    ws: &Wadspace,
+    keys: &[Secret],
+    groups: &[BlockGroup],
+    mounts: &Mounts,
+) -> Vec<(&'static str, Option<String>)> {
     vec![
         (WEBAPPS, Some(webapps_json(ws))),
         (LAYOUT, Some(layout_json(ws))),
         (PROJECTS, Some(projects_json(ws, mounts))),
         (SIGNINS, signins_json(ws, keys)),
-        (WADBROWSER_CONF, wadbrowser_conf(ws)),
+        (WADBROWSER_CONF, wadbrowser_conf(ws, groups)),
     ]
 }
 
@@ -209,16 +216,19 @@ pub fn games_json<'a>(ws: &Wadspace, discs: impl IntoIterator<Item = &'a DiscIma
 
 /// wadbrowser.conf, with WadBrowser: its address bar (none with the Focus
 /// add-on), its blocker, search engine and blocked sites (the Builder's
-/// add-ons: `Wadspace::browser`).
-pub fn wadbrowser_conf(ws: &Wadspace) -> Option<String> {
+/// add-ons: `Wadspace::browser`). Its blocker groups' sites (those of
+/// `groups` it has on) are written in with its own: the browser in a
+/// wadspace needs nothing else, and wadd writes it again when they change.
+pub fn wadbrowser_conf(ws: &Wadspace, groups: &[BlockGroup]) -> Option<String> {
     if !ws.has_app(AppId::Wadbrowser) {
         return None;
     }
     let focus = ws.ext(AppId::Wadbrowser, "focus").is_some_and(|e| e.url.is_none());
+    let prefs = BrowserPrefs { groups: vec![], blocked: ws.browser.sites(groups), ..ws.browser.clone() };
     Some(wad_model::browser::conf(
         "WadBrowser's settings for this wadspace, from its design (the\nBuilder's add-ons). The browser has none of its own.",
         !focus,
-        &ws.browser,
+        &prefs,
     ))
 }
 

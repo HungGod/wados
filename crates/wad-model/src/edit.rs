@@ -46,6 +46,10 @@ pub struct Library {
     /// Web apps the machine's browser keeps ("Create app from this page").
     #[serde(default)]
     pub web_apps: Vec<BrowserApp>,
+    /// Blocker groups: sites blocked together, a tap for them all, in a
+    /// wadspace's browser or the machine's (social media's at first).
+    #[serde(default)]
+    pub block_groups: crate::browser::BlockGroups,
     /// Steam accounts signed in on this machine (by their key's id): what each owns, and what's downloaded.
     #[serde(default)]
     pub steam: IndexMap<String, SteamLibrary>,
@@ -454,6 +458,13 @@ pub enum Op {
     /// A web app of your own taken off the machine's browser (its new tab, Settings). Wadspaces it was dropped on keep their own copies.
     #[serde(rename = "assets.removeWebApp")]
     RemoveWebApp { id: String },
+    /// A blocker group made (an empty id: a new one, its id from its name)
+    /// or changed. Made: its id.
+    #[serde(rename = "browser.saveGroup")]
+    SaveBlockGroup { group: crate::browser::BlockGroup },
+    /// A blocker group gone, and off in every wadspace that had it on.
+    #[serde(rename = "browser.removeGroup")]
+    RemoveBlockGroup { id: String },
 }
 
 /// Make one edit. On an error nothing changed.
@@ -895,6 +906,42 @@ impl Tx<'_> {
             Op::RemoveWebApp { id } => {
                 let i = self.lib.web_apps.iter().position(|a| a.id == id).ok_or_else(|| not_found("web app", &id))?;
                 let gone = self.lib.web_apps.remove(i);
+                self.out.toast = Some(format!("Removed {}", gone.name));
+                Ok(())
+            }
+            Op::SaveBlockGroup { group } => {
+                let mut g = group.tidied();
+                if g.name.is_empty() {
+                    return Err(EditError::Refused("A blocker group needs a name".into()));
+                }
+                g.name = check::name(&g.name)?;
+                let groups = &mut self.lib.block_groups;
+                match groups.iter_mut().find(|x| !g.id.is_empty() && x.id == g.id) {
+                    Some(x) => *x = g.clone(),
+                    None => {
+                        let taken: Vec<String> = groups.iter().map(|x| x.id.clone()).collect();
+                        g.id = crate::browser::group_id(&g.name, &taken);
+                        groups.push(g.clone());
+                        self.out.created = Some(g.id.clone());
+                    }
+                }
+                Ok(())
+            }
+            Op::RemoveBlockGroup { id } => {
+                let groups = &mut self.lib.block_groups;
+                let i = groups.iter().position(|g| g.id == id).ok_or_else(|| not_found("blocker group", &id))?;
+                let gone = groups.remove(i);
+                let had: Vec<String> = self
+                    .lib
+                    .wadspaces
+                    .iter()
+                    .filter(|w| w.browser.groups.contains(&id))
+                    .map(|w| w.id.clone())
+                    .collect();
+                for ws in had {
+                    self.ws(&ws)?.browser.groups.retain(|g| g != &id);
+                    self.touched(&ws);
+                }
                 self.out.toast = Some(format!("Removed {}", gone.name));
                 Ok(())
             }
