@@ -987,14 +987,14 @@ fn browser_part(me: &Weak<Panel>) -> BrowserPart {
     editor.append(&form);
     let err = gtk::Label::builder().xalign(0.0).wrap(true).visible(false).css_classes(["side-err"]).build();
     editor.append(&err);
-    // Remove (red: the group goes from the machine) at the left, Done at the right.
+    // Delete (red: the group goes from the machine) at the left, Done at the right.
     let buttons = gtk::Box::builder().spacing(8).build();
     let remove = gtk::Button::builder()
-        .label("Remove")
+        .label("Delete")
         .css_classes(["side-remove"])
         .hexpand(true)
         .halign(gtk::Align::Start)
-        .tooltip_text("Remove the group: from this machine and every wadspace with it on")
+        .tooltip_text("Delete the group: from this machine and every wadspace with it on")
         .build();
     let done = gtk::Button::builder().label("Done").css_classes(["side-ask-ok"]).build();
     buttons.append(&remove);

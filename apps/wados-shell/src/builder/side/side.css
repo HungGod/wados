@@ -97,7 +97,7 @@ button.side-pill:disabled label { color: var(--fg); }
 .side-blocks button.side-blocks-edit { padding: 0 8px; color: var(--muted); }
 .side-blocks button.side-blocks-edit.in { color: var(--fg); background: rgb(255 255 255 / 0.08); }
 .side-blocks button:disabled { opacity: 0.6; }
-/* A group's popup: Remove, in red, opposite Done. */
+/* A group's popup: Delete, in red, opposite Done. */
 button.side-remove {
   min-height: 30px;
   padding: 0 14px;
